@@ -160,6 +160,16 @@ class RagTransport:
             return result
         except httpx.HTTPError as error:
             status_code, detail = _http_error_detail(error)
+            if status_code == 404 and (endpoint, detail) in {
+                ("/query/unit", "Structural unit was not found"),
+                ("/query/review-unit", "Review structural unit was not found"),
+            }:
+                logger.info("Optional structural unit not found: endpoint=%s unit_id=%s", endpoint, payload.get("unit_id"))
+                return {
+                    **empty_result, "status": "not_found", "status_code": 404,
+                    "unit": None, "sourceEvidence": False, "requestedUnitId": payload.get("unit_id"),
+                    "message": detail + ". Use an exact returned unit ID or read source directly; this lookup does not establish that code is absent.",
+                }
             logger.debug(
                 "Structural repository query failed: endpoint=%s status=%s "
                 "detail=%s",
@@ -315,5 +325,4 @@ class RagTransport:
         except Exception as e:
             logger.warning(f"RAG health check failed: {e}")
             return False
-
 

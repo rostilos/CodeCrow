@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -197,9 +198,9 @@ public class PullRequestAnalysisProcessor {
                     request.getPullRequestId());
 
             // Get the most recent analysis for incremental diff calculation
-            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty()
-                    ? Optional.empty()
-                    : Optional.of(allPrAnalyses.get(0));
+            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.stream()
+                    .filter(analysis -> analysis.getStatus() != AnalysisStatus.PARTIAL)
+                    .findFirst();
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
             List<AiAnalysisRequest> aiRequests = aiClientService.buildAiAnalysisRequests(
@@ -434,12 +435,16 @@ public class PullRequestAnalysisProcessor {
 
             // === DAG: Mark PR commits as ANALYZED ===
             requireConfirmedLease(lockLease);
-            markPrCommitsAnalyzed(project, request, newAnalysis);
+            boolean partial = newAnalysis.getStatus() == AnalysisStatus.PARTIAL;
+            if (!partial) {
+                markPrCommitsAnalyzed(project, request, newAnalysis);
+            }
 
             // Publish successful completion event
             requireConfirmedLease(lockLease);
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
-                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, newAnalysis.getTotalIssues(),
+                    partial ? AnalysisCompletedEvent.CompletionStatus.PARTIAL_SUCCESS : AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                    newAnalysis.getTotalIssues(),
                     allChangedFiles != null ? allChangedFiles.size() : 0, null, newAnalysis.getId());
 
             return aiResponse;

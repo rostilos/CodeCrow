@@ -46,6 +46,18 @@ class TestSearchFileContent:
 
 
 class TestVerificationResult:
+    def test_valid_provider_verdict_keeps_canonical_evidence_checks(self):
+        result = va_module._parse_verification_result('''{"assessments": [
+            {"issue_id": "issue_0", "verdict": "valid", "reason": "Observed changed behavior",
+             "supporting_evidence": [{"file_path": "a.py", "snippet": "return value"}]},
+            {"issue_id": "issue_1", "verdict": "unknown", "reason": "Caller unavailable"}]}''')
+        assert result.incomplete_reason == ''
+        assert [a.verdict for a in result.assessments] == ['supported', 'unknown']
+        assessment = result.assessments[0]
+        assert va_module._validated_assessment(assessment, {'a.py': 'return value'})['verdict'] == 'supported'
+        assert va_module._validated_assessment(assessment, {})['verdict'] == 'unknown'
+        assert result.issue_ids_to_drop == []
+
     def test_malformed_sibling_preserves_complete_assessment(self):
         result = va_module._parse_verification_result('''{"assessments": [
             {"issue_id": "issue_0", "verdict": "unknown", "reason": "Caller unavailable"},

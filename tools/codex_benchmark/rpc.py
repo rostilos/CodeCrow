@@ -26,10 +26,27 @@ CONFIG = {
 }
 
 
+class NativeProviderError(RuntimeError):
+    """Keep the native provider status across the Chat Completions facade."""
+
+    def __init__(self, payload: dict):
+        super().__init__(json.dumps(payload, ensure_ascii=False))
+        error = payload.get("error") or payload
+        info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+        self.status_code = 503 if info == "serverOverloaded" else 502
+        if isinstance(info, dict):
+            for details in info.values():
+                status = details.get("httpStatusCode") if isinstance(details, dict) else None
+                if isinstance(status, int) and 400 <= status <= 599:
+                    self.status_code = status
+                    break
+
+
 class AppServer:
     def __init__(self, workspace: Path, *, executable: str = "codex"):
         self.workspace = workspace
         self.executable = executable
+        self.provider = CONFIG["model_provider"]
         self.pending: dict[int, asyncio.Future] = {}
         self.events: dict[str, asyncio.Queue] = {}
         self.usage: dict[str, dict] = {}
@@ -200,7 +217,7 @@ class AppServer:
         if effort not in supported:
             raise ValueError(f"Unsupported {MODEL} reasoning effort: {effort}")
         response = await self.request("thread/start", {
-            "model": MODEL, "modelProvider": "openai", "allowProviderModelFallback": False,
+            "model": MODEL, "modelProvider": self.provider, "allowProviderModelFallback": False,
             "cwd": str(self.workspace), "approvalPolicy": "never", "sandbox": "read-only",
             "ephemeral": True, "experimentalRawEvents": True,
             "personality": "none", "baseInstructions": instructions,
@@ -208,7 +225,7 @@ class AppServer:
             "dynamicTools": tools, "serviceTier": "default",
             "config": {"model_reasoning_effort": effort},
         })
-        if response["model"] != MODEL or response["modelProvider"] != "openai":
+        if response["model"] != MODEL or response["modelProvider"] != self.provider:
             raise RuntimeError("Codex selected a different model or provider")
         if response.get("instructionSources"):
             raise RuntimeError("Unexpected repository instructions in benchmark model session")

@@ -55,7 +55,6 @@ DEFAULT_STAGE_INVOCATION_CAPS = {
     "specialist_passes": {"small": 1, "medium": 2, "large": 2},
     "stage_1_total": {"small": 4, "medium": 12, "large": 24},
     "stage_1_per_unit": {"small": 1, "medium": 2, "large": 3},
-    "stage_2_packets": {"small": 1, "medium": 2, "large": 4},
     "stage_3_children": {"small": 1, "medium": 2, "large": 4},
 }
 
@@ -137,7 +136,7 @@ def adapt_review_inference_profile(
     if reasons - set(profile.allocation_reasons):
         # Core Stage 1 admission is unchanged. Add at most one packet per
         # adaptation phase, bounded by existing large-review ceilings.
-        for stage in ("stage_2_packets", "stage_3_children", "specialist_passes"):
+        for stage in ("stage_3_children", "specialist_passes"):
             if any(name in os.environ for name in _stage_cap_env_names(stage, profile.size_class)):
                 continue  # Explicit operator caps remain ceilings.
             limit = max(DEFAULT_STAGE_INVOCATION_CAPS[stage].values())

@@ -45,6 +45,97 @@ selected plugin contributes syntax, the existing generic splitter remains the
 fallback. If selected syntax cannot yield an AST chunk, fallback text splitting
 does not apply the generic host's language-specific regex metadata.
 
+The Python pnpm graph/index plugin reads default and named dependency catalogs
+from each detected `pnpm-workspace.yaml` root. It emits `configures-module` facts
+with the exact package, version expression, source line and YAML pointer, without
+claiming installation or ownership of member-package dependencies. Malformed YAML
+is an observable recoverable plugin failure; unsupported entries contribute no
+facts. Its parser uses the existing PyYAML dependency.
+
+Babel has a Python graph/index contributor for literal configured plugin/preset
+references in JavaScript and TypeScript. A root or nested package manifest naming
+`@babel/core` or `@vitejs/plugin-react` activates it across the selected source
+root, so a sibling package can use a workspace dependency. Each call still needs
+source-proven loader bindings. It recognizes direct transform options and React's
+`babel` options through static imports or awaited literal dynamic imports,
+including immutable local paths from Node's imported `createRequire().resolve()`.
+Type assertions supply no runtime provenance, and ambiguous, mutated or out-of-scope
+bindings are excluded. `configures-module` preserves the configured string and source line;
+it does not resolve installed packages, normalize Babel shorthand, or evaluate
+dynamic configurations. Parser feature names are excluded. It contributes no
+Babel review rules or validation verdicts.
+
+The Python `wrangler` domain plugin reads explicit `assets.directory` declarations
+from `wrangler.json`, `wrangler.jsonc`, and `wrangler.toml`, at the repository root
+or in nested packages. It records each top-level or named-environment declaration
+as an unresolved `declares-directory` fact, with configuration-file provenance,
+a configuration pointer, the literal spelling, and its configuration-relative
+normalized path. The file-level origin is line 1, not an inferred field location.
+The existing JSONC decoder is shared with the TypeScript configuration plugin.
+
+Directory declarations do not prove that generated files exist. They do not bind
+to a same-named source file, select an active environment, apply CLI overrides,
+follow generated-configuration redirects, or run a build. Invalid configuration
+produces a recoverable diagnostic; source analysis remains available. Ordinary
+index creation includes the declarations; existing sealed generations are not
+rewritten. This is structural context support, not a measured quality claim.
+See [Cloudflare assets configuration](https://developers.cloudflare.com/workers/static-assets/binding/).
+
+The Python `dockerfile` domain plugin records literal `FROM` base-image declarations
+in `Dockerfile`, `Dockerfile.*` and `*.Dockerfile` files at any depth, excluding
+`.dockerignore` files. Each `configures-module` fact retains its image spelling
+(including a tag or digest) and the first instruction line. Images remain unresolved
+module references with `targetResolutionProven=false`, even if a local file has
+the same name. Repeated declarations retain their separate source locations.
+
+The extractor respects platform flags, case-insensitive instructions and stage
+references, escape directives, continued instructions and RUN/COPY/ADD heredoc
+bodies. Earlier named stages, `scratch` and dynamic image expressions contribute
+no external-image fact. It does not evaluate ARG defaults, resolve named build
+contexts, inspect COPY/RUN image references, contact registries or execute builds.
+Unterminated continuations/heredocs and unsupported FROM syntax produce a recoverable
+plugin diagnostic; other analysis remains available. New indexes include these
+facts; existing sealed generations are not rewritten. This is structural support,
+not a measured quality improvement. See the [Dockerfile reference](https://docs.docker.com/reference/dockerfile/).
+
+The Python `github-actions` domain plugin reads external repository action and
+reusable-workflow references in root `.github/workflows/*.yml` and `*.yaml` files.
+It is independent of the repository language. Job-level `uses`, action-step
+`uses`, literal job/service container images and `docker://` action images
+contribute `configures-module` facts. Container declarations retain the exact
+image name, tag or digest without resolving a registry. The original
+`targetSpecifier`, declaration kind, source line and YAML pointer remain available;
+repository actions also retain `gitRef`. `targetResolutionProven=false` prevents
+a same-named local unit from being treated as external code. No repository or
+image is fetched, and no ref, installation or runtime behavior is verified.
+Local/self references, expressions, empty images and unrelated keys are omitted. Malformed, duplicate or merged YAML mappings
+produce a recoverable plugin diagnostic; other analysis remains available. These
+facts enter newly built indexes and do not rewrite existing generations. No model
+calls or review verdicts are added. Reference syntax follows the
+[GitHub workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+
+The Python `localization` graph/index plugin recognizes `lingui.config.*` and
+`lunaria.config.*` in JavaScript projects, including TypeScript configuration files.
+It records literal catalog `include`/`exclude`, Lingui `path`, and Lunaria `pattern`
+declarations as `declares-file-pattern` facts with source lines and the original
+`targetSpecifier`. Static ESM object exports, a local const used only by its export,
+and an imported `defineConfig` wrapper are supported. The default Lingui
+`<rootDir>` token is anchored to the configuration directory; explicit rootDir,
+process-CWD-relative paths, locale placeholders and Lunaria parameters remain
+unresolved. No glob is expanded and no generated file or translation is inferred.
+Dynamic, ambiguous, spread or CommonJS configuration forms contribute no pattern
+facts; malformed syntax emits a recoverable plugin diagnostic. Existing indexes
+are not rewritten. The facts appear when the configuration is normally parsed by
+an index build. This adds no model calls, review rules or validation verdicts.
+
+Astro has a Python-only graph/index plugin for component-script imports. It
+retains exact module identifiers and source lines for static imports, re-exports,
+and literal dynamic imports. Interpolated dynamic-import templates are retained
+separately as exact `imports-pattern` facts without evaluating their substitutions.
+It does not declare syntax/chunking, resolve package members or parse the template
+body; those paths retain generic source fallback.
+Malformed scripts produce recoverable diagnostics. No new model calls are made.
+
 Repository analysis is available to every selected analysis plugin.
 JavaScript uses it to snapshot imports, component prop declarations, and JSX
 usage, then resolves only unique relative module targets into exact
@@ -54,6 +145,19 @@ contradicted absence claims, and requires an exact defect fact for positive type
 approval. This behavior lives entirely under `languages/javascript`; generic RAG
 and inference hosts only consume neutral snapshots, packets, and validation
 results.
+
+JavaScript repository snapshots also retain package manifests and file inventory
+for unconditional `exports` aliases. Exact and wildcard aliases point only to
+present files, preserve exclusions and declaration evidence, and do not assert
+runtime module resolution. TypeScript records leading triple-slash `types`
+references as source-bound type dependencies. Hosts consume these neutral facts;
+language-specific extraction stays in the plugins. Supported export wildcards also
+retain exact `declares-file-pattern` declarations, separately from file inventory
+and concrete aliases. The TypeScript contributor reads local `compilerOptions.types`
+from `tsconfig.json` and `tsconfig.*.json` as `configures-module` facts, using JSONC
+comments/trailing commas and exact JSON pointers. It does not resolve inherited
+configuration or installed packages; malformed configuration is an observable,
+recoverable enrichment failure.
 
 Repository implementation responsibilities are separated behind the existing
 neutral contracts. The runtime capability gateway delegates per-file graph
@@ -138,14 +242,15 @@ an exact unit or file through its repository tools. This keeps source and graph
 records separate without moving concrete plugin interpretation into the index or
 inference hosts.
 
-The neutral runtime admits at most 160 framework facts per file, 200 facts for a
-neutral/non-framework per-file contribution, and 200 facts in the final per-file
-artifact. One fact scalar is limited to 4,096 characters and one serialized
-graph artifact to 262,144 bytes. Review contributions retain at most 80 owned
-paths per plugin, 40 rules, and 80 evidence requests. Omitted items emit bounded,
-recoverable diagnostics and are not negative evidence. The structural index
-stores retained facts and their resolved edges in the immutable target-head
-generation.
+The neutral graph composer preserves every distinct emitted fact and complete
+fact strings, merging semantic duplicates and contributor provenance. The
+structural index stores these facts and their resolved edges in the immutable
+target-head generation. Each selected review contributor receives all owned paths
+in the requested scope; the runtime retains all distinct rules, evidence requests
+and path groups. Plugin prompt rendering groups repeated evidence descriptions
+without a separate character cutoff. Stage-level prompt sizing and packing still
+apply, and exact-evidence visibility controls typed claims. Contributor failures
+remain observable optional diagnostics while source review continues.
 
 The `data-contracts` domain plugin activates only when a repository contains an
 explicit contract path (`contract/`, `contracts/`, `schema/`, `schemas/`) or a

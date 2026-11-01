@@ -23,9 +23,6 @@ from .scope import plugin_root_for_path, relative_to_root
 class PluginRuntime:
     """Host-side composition. Implementations return data; the host owns policy."""
 
-    MAX_REVIEW_PATHS_PER_PLUGIN = 80
-    MAX_RULES = 40
-    MAX_EVIDENCE_REQUESTS = 80
     MAX_REPOSITORY_SYMBOLS = 250_000
     MAX_ARCHITECTURE_PACKETS = 100_000
 
@@ -227,19 +224,8 @@ class PluginRuntime:
             contributor = getattr(implementation, "review", None)
             if contributor is None:
                 continue
-            review_paths = owned_paths[: self.MAX_REVIEW_PATHS_PER_PLUGIN]
-            if len(owned_paths) > len(review_paths):
-                diagnostics.append(PluginDiagnostic(
-                    code="plugin-review-input-limit",
-                    message=(
-                        f"review contribution admitted {len(review_paths)} of "
-                        f"{len(owned_paths)} owned paths"
-                    ),
-                    plugin_id=plugin_id,
-                    recoverable=True,
-                ))
             try:
-                outcome = contributor(review_paths)
+                outcome = contributor(owned_paths)
             except Exception as exception:
                 diagnostics.append(
                     PluginDiagnostic(
@@ -255,57 +241,14 @@ class PluginRuntime:
                 rules.update(outcome.value.rules)
                 requests.update(outcome.value.evidence_requests)
                 groups.update(outcome.value.group_paths)
-        selected_rules = tuple(sorted(rules)[: self.MAX_RULES])
-        selected_requests = self._balanced_evidence_requests(
-            tuple(requests),
-            self.MAX_EVIDENCE_REQUESTS,
-        )
-        omitted_rules = len(rules) - len(selected_rules)
-        omitted_requests = len(requests) - len(selected_requests)
-        if omitted_rules or omitted_requests:
-            diagnostics.append(PluginDiagnostic(
-                code="plugin-review-output-limit",
-                message=(
-                    f"review contribution omitted {omitted_rules} rule(s) and "
-                    f"{omitted_requests} evidence request(s) beyond the "
-                    "aggregate admission"
-                ),
-                recoverable=True,
-            ))
         return (
             ReviewContribution(
-                rules=selected_rules,
-                evidence_requests=selected_requests,
+                rules=tuple(sorted(rules)),
+                evidence_requests=tuple(sorted(requests)),
                 group_paths=tuple(sorted(groups)),
             ),
             tuple(diagnostics),
         )
-
-    @staticmethod
-    def _balanced_evidence_requests(
-        requests: tuple,
-        limit: int,
-    ) -> tuple:
-        """Bound exact requests without allowing one kind to starve another."""
-        by_kind: dict[str, list] = {}
-        for request in sorted(set(requests)):
-            by_kind.setdefault(request.kind, []).append(request)
-        selected = []
-        offset = 0
-        kinds = tuple(sorted(by_kind))
-        while len(selected) < limit:
-            added = False
-            for kind in kinds:
-                values = by_kind[kind]
-                if offset < len(values):
-                    selected.append(values[offset])
-                    added = True
-                    if len(selected) == limit:
-                        break
-            if not added:
-                break
-            offset += 1
-        return tuple(sorted(selected))
 
     def validate(
         self,

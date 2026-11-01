@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, ValidationInfo
 
 from service.rag.rag_client import RagClient
 from service.rag.bindings import normalize_detail_level
@@ -15,6 +16,25 @@ from service.rag.bindings import normalize_detail_level
 GraphDetailLevel = Annotated[
     Literal["minimal", "standard"], BeforeValidator(normalize_detail_level)
 ]
+
+
+def _bounded_graph_budget(value: Any, info: ValidationInfo) -> Any:
+    bounds = {'maxSourceWindows': (1, 20), 'maxSourceCharacters': (1000, 60_000),
+              'tokenBudget': (512, 16_000)}
+    minimum, maximum = bounds[info.field_name]
+    normalized = value
+    if info.field_name != 'tokenBudget' and info.data.get('includeSource') is False and value == 0:
+        normalized = minimum
+    elif isinstance(value, (int, float)) and value > maximum:
+        normalized = maximum
+    if normalized != value:
+        logging.getLogger(__name__).info('Normalizing graph %s=%s to %s', info.field_name, value, normalized)
+    return normalized
+
+
+SourceWindows = Annotated[int, Field(ge=1, le=20), BeforeValidator(_bounded_graph_budget)]
+SourceCharacters = Annotated[int, Field(ge=1000, le=60_000), BeforeValidator(_bounded_graph_budget)]
+GraphTokenBudget = Annotated[int, Field(ge=512, le=16_000), BeforeValidator(_bounded_graph_budget)]
 
 
 server = FastMCP(
@@ -125,9 +145,9 @@ async def explore_review_context(
     focusPaths: list[str],
     focusSymbols: list[str] | None = None,
     maxRelations: Annotated[int, Field(ge=1, le=200)] = 32,
-    maxSourceWindows: Annotated[int, Field(ge=1, le=20)] = 6,
-    maxSourceCharacters: Annotated[int, Field(ge=1000, le=60_000)] = 12_000,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 8000,
+    maxSourceWindows: SourceWindows = 6,
+    maxSourceCharacters: SourceCharacters = 12_000,
+    tokenBudget: GraphTokenBudget = 8000,
 ) -> dict[str, Any]:
     """Delegate to the proposed-tree service with host-bound identity.
 
@@ -169,9 +189,9 @@ async def get_minimal_review_context(
     maxRelations: Annotated[int, Field(ge=1, le=200)] = 25,
     detailLevel: GraphDetailLevel = "minimal",
     includeSource: bool = True,
-    maxSourceWindows: Annotated[int, Field(ge=1, le=20)] = 4,
-    maxSourceCharacters: Annotated[int, Field(ge=1000, le=60_000)] = 8_000,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 4000,
+    maxSourceWindows: SourceWindows = 4,
+    maxSourceCharacters: SourceCharacters = 8_000,
+    tokenBudget: GraphTokenBudget = 4000,
 ) -> dict[str, Any]:
     client = RagClient()
     try:
@@ -207,9 +227,9 @@ async def get_impact_radius(
     maxResults: Annotated[int, Field(ge=1, le=500)] = 100,
     detailLevel: GraphDetailLevel = "standard",
     includeSource: bool = True,
-    maxSourceWindows: Annotated[int, Field(ge=1, le=20)] = 6,
-    maxSourceCharacters: Annotated[int, Field(ge=1000, le=60_000)] = 12_000,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 4000,
+    maxSourceWindows: SourceWindows = 6,
+    maxSourceCharacters: SourceCharacters = 12_000,
+    tokenBudget: GraphTokenBudget = 4000,
 ) -> dict[str, Any]:
     client = RagClient()
     try:
@@ -246,11 +266,11 @@ async def traverse_code_graph(
     relationKinds: list[Annotated[str, Field(max_length=128)]] | None = None,
     maxDepth: Annotated[int, Field(ge=0, le=6)] = 3,
     maxResults: Annotated[int, Field(ge=1, le=500)] = 100,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 2_000,
+    tokenBudget: GraphTokenBudget = 2_000,
     detailLevel: GraphDetailLevel = "standard",
     includeSource: bool = True,
-    maxSourceWindows: Annotated[int, Field(ge=1, le=20)] = 6,
-    maxSourceCharacters: Annotated[int, Field(ge=1000, le=60_000)] = 12_000,
+    maxSourceWindows: SourceWindows = 6,
+    maxSourceCharacters: SourceCharacters = 12_000,
 ) -> dict[str, Any]:
     client = RagClient()
     try:
@@ -307,7 +327,9 @@ async def get_structural_relations(
         "children_of, tests_for, inheritors_of, triggers_of, triggered_by, "
         "publishers_of, listeners_of, handlers_of, endpoints_for, "
         "consumers_of, relations_of, "
-        "framework_relations, symbol_search, or file_summary. Use a precise "
+        "framework_relations, symbol_search, file_search, or file_summary. "
+        "file_search finds indexed paths with an exact case-sensitive suffix; "
+        "follow nextCursor to check all candidates before choosing a path. Use a precise "
         "target; bounded absence is not proof that code is absent. If the "
         "response is ambiguous, inspect candidateCount, follow nextCursor only "
         "when another candidate page is needed, then retry with an exact "
@@ -326,9 +348,9 @@ async def query_code_graph(
     cursor: Annotated[int, Field(ge=0)] = 0,
     detailLevel: GraphDetailLevel = "standard",
     includeSource: bool = True,
-    maxSourceWindows: Annotated[int, Field(ge=1, le=20)] = 6,
-    maxSourceCharacters: Annotated[int, Field(ge=1000, le=60_000)] = 12_000,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 4000,
+    maxSourceWindows: SourceWindows = 6,
+    maxSourceCharacters: SourceCharacters = 12_000,
+    tokenBudget: GraphTokenBudget = 4000,
     evidenceId: str | None = None,
     field: Literal["source", "target", "attributes"] = "target",
     offset: Annotated[int, Field(ge=0)] = 0,
@@ -361,7 +383,9 @@ async def query_code_graph(
     name="getStructuralUnit",
     description=(
         "Open one structural unit by a unit ID returned by a proposed-tree graph "
-        "operation. The unit includes exact proposed-tree source when represented "
+        "operation. Copy the returned ID, or unit: plus its first 32 hexadecimal "
+        "characters; do not reconstruct the hash tail. A prefix must identify "
+        "exactly one unit in the bound generation. The unit includes exact proposed-tree source when represented "
         "and reports sourceEvidence accordingly. Use getReviewFileContent only "
         "for unrepresented code, needed whole-file bytes, or a missing range."
     ),
@@ -372,7 +396,7 @@ async def get_structural_unit(
     focusPaths: list[str],
     offset: Annotated[int, Field(ge=0)] = 0,
     maxCharacters: Annotated[int, Field(ge=1, le=60_000)] = 12_000,
-    tokenBudget: Annotated[int, Field(ge=512, le=16_000)] = 4000,
+    tokenBudget: GraphTokenBudget = 4000,
 ) -> dict[str, Any]:
     client = RagClient()
     try:

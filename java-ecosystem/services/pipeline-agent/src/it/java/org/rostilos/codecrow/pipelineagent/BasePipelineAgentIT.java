@@ -10,10 +10,12 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
+import org.rostilos.codecrow.pipelineagent.qadoc.QaDocRecoveryScheduler;
 import org.rostilos.codecrow.testsupport.base.IntegrationTest;
 import org.rostilos.codecrow.testsupport.cleanup.DatabaseCleaner;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 
@@ -42,6 +44,10 @@ import static io.restassured.RestAssured.given;
 )
 @Import(DatabaseCleaner.class)
 abstract class BasePipelineAgentIT {
+
+    // Cached HTTP test contexts must not consume another fixture's persisted QA intent.
+    @MockBean
+    private QaDocRecoveryScheduler qaDocRecoveryScheduler;
 
     @LocalServerPort
     protected int port;

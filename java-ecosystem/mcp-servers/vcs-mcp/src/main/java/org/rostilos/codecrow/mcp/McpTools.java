@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp;
 
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -545,19 +546,16 @@ public class McpTools {
         String[] lines = content.split("\\R", -1);
         int totalLines = lines.length;
         int startLine = Math.max(1, requestedStartLine);
-        if (startLine > totalLines) {
-            return Map.of(
-                    "error", "Requested source line is outside the file",
-                    "totalLines", totalLines
-            );
-        }
         int requestedEnd = requestedEndLine != null && requestedEndLine >= startLine
                 ? requestedEndLine
                 : startLine;
-        int endLine = Math.min(
-                totalLines,
-                Math.min(requestedEnd, startLine + MAX_SOURCE_WINDOW_LINES - 1)
-        );
+        int windowLines = (int) Math.min(MAX_SOURCE_WINDOW_LINES, (long) requestedEnd - startLine + 1);
+        boolean beyondEof = startLine > totalLines;
+        if (beyondEof) {
+            // Preserve useful exact source when an exploratory anchor overshoots EOF.
+            startLine = Math.max(1, totalLines - windowLines + 1);
+        }
+        int endLine = (int) Math.min(totalLines, (long) startLine + windowLines - 1);
         String fileContent = String.join(
                 "\n",
                 java.util.Arrays.copyOfRange(lines, startLine - 1, endLine)
@@ -568,6 +566,11 @@ public class McpTools {
         response.put("endLine", endLine);
         response.put("totalLines", totalLines);
         response.put("completeFile", startLine == 1 && endLine == totalLines);
+        if (beyondEof) {
+            response.put("requestedStartLine", requestedStartLine);
+            response.put("requestedEndLine", requestedEndLine);
+            response.put("rangeAdjustment", "requested_start_beyond_eof");
+        }
         return response;
     }
 
@@ -602,9 +605,33 @@ public class McpTools {
     public Map<String,Object> getDirectoryByPath(String workspace, String projectKey, String branch, String dirPath) {
         try {
             requireRequestRepository(workspace, projectKey);
-            String directoryContent = getVcsClient(true).getDirectoryByPath(
-                    workspace, projectKey, branch, dirPath);
-            return Map.of("directoryContent", directoryContent);
+            VcsMcpClient client = getVcsClient(true);
+            boolean reviewBound = client instanceof LocalRepoClient local && local.hasReviewOverlay();
+            String effectiveRef = branch;
+            Map<String, Object> response = new LinkedHashMap<>();
+            if (reviewBound) {
+                // Proposed-tree discovery must not switch snapshots on a model-supplied ref.
+                effectiveRef = System.getProperty(LOCAL_REPO_REVISION_PROPERTY);
+                if (effectiveRef == null || effectiveRef.isBlank()) {
+                    effectiveRef = System.getProperty(LOCAL_REPO_TARGET_BRANCH_PROPERTY);
+                }
+                response.put("source", "proposed-tree");
+                response.put("requestedRef", branch);
+                response.put("resolvedBaseRef", effectiveRef);
+            }
+            try {
+                response.put("directoryContent", client.getDirectoryByPath(
+                        workspace, projectKey, effectiveRef, dirPath));
+            } catch (NoSuchFileException absentFromInventory) {
+                if (!reviewBound) {
+                    throw absentFromInventory;
+                }
+                response.put("directoryContent", "");
+                response.put("status", "not_found");
+                response.put("exists", false);
+                response.put("reason", "No directory in the pinned target inventory or review overlay");
+            }
+            return response;
         } catch (IOException e) {
             return Map.of("error", "Failed to get branch directory content: " + e.getMessage());
         }

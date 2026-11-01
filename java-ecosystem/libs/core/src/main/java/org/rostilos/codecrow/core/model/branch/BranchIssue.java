@@ -196,9 +196,18 @@ public class BranchIssue implements ReconcilableIssue {
     @Column(name = "code_snippet", columnDefinition = "TEXT")
     private String codeSnippet;
 
-    /** Current line number on the branch (may drift from original detection line). */
+    /** Current line on the branch; zero means the current anchor could not be verified. */
     @Column(name = "current_line_number")
     private Integer currentLineNumber;
+
+    public void invalidateCurrentAnchor() {
+        currentLineNumber = 0;
+        currentEndLineNumber = 0;
+        currentScopeStartLine = 0;
+        currentLineHash = null;
+        lastVerifiedCommit = null;
+        trackingConfidence = TrackingConfidence.NONE;
+    }
 
     /** Current end line number on the branch (may drift from original). */
     @Column(name = "current_end_line_number")

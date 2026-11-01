@@ -331,14 +331,14 @@ class TestBranchAnalysis:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_returns_result_from_agent(self):
         """Branch analysis returns parsed result from RecursiveMCPAgent."""
-        from model.output_schemas import CodeReviewOutput
+        from model.output_schemas import ReconciliationOutput
         mock_llm = MagicMock()
         mock_client = MagicMock()
 
         with patch("service.agent.agent_execution_service.RecursiveMCPAgent") as MockAgent:
             agent_instance = MagicMock()
-            # Simulate streaming that yields a CodeReviewOutput directly
-            output = CodeReviewOutput(issues=[], comment="No issues found.")
+            # Simulate streaming that yields a ReconciliationOutput directly
+            output = ReconciliationOutput(issues=[], comment="No issues found.")
 
             async def fake_stream(*args, **kwargs):
                 yield output

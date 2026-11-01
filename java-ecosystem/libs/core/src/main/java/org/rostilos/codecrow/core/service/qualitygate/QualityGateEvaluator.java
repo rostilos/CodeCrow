@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.qualitygate.QualityGateMetric;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -71,6 +72,9 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
      * @return QualityGateResult containing pass/fail status and details
      */
     public QualityGateResult evaluate(CodeAnalysis analysis, QualityGate qualityGate) {
+        if (analysis.getStatus() == AnalysisStatus.PARTIAL) {
+            return QualityGateResult.skipped();
+        }
         if (qualityGate == null || !qualityGate.isActive()) {
             log.debug("No active quality gate configured, skipping evaluation");
             return QualityGateResult.skipped();

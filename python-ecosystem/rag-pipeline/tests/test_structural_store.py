@@ -1,5 +1,7 @@
 import os
 import json
+import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -77,6 +79,66 @@ def _pending_store(tmp_path):
     pending = store.pending_paths("generation-target")
     connection = store.initialize(pending)
     return store, pending, connection, StructuralGraphWriter(connection)
+
+
+def test_unit_lookup_recovers_unique_hash_prefix_without_changing_source(tmp_path):
+    _, _, connection, writer = _pending_store(tmp_path)
+    unit_id = writer.add_unit(_node("a.py", "a.Foo", "def Foo(): return 7"))
+    reader = _reader(connection)
+    prefix = unit_id[:37]  # unit: plus 32 hexadecimal characters.
+    mistyped = prefix + ("0" if unit_id[37] != "0" else "1") * 32
+    exact = reader.get_unit(unit_id)
+    assert "unitIdResolution" not in exact
+    for reference in (prefix, mistyped):
+        recovered = reader.get_unit(reference)
+        assert recovered["unit"] == exact["unit"]
+        assert recovered["snapshot"] == exact["snapshot"]
+        assert recovered["unitIdResolution"] == {
+            "requestedUnitId": reference, "resolvedUnitId": unit_id,
+            "method": "unique_prefix", "prefixHexCharacters": 32,
+        }
+        assert reader._resolve_units(reference)[0]["unit_id"] == unit_id
+    assert reader.get_unit(prefix[:-1]) is None
+    assert reader.get_unit("unit:" + "f" * 64) is None
+    _, _, other_connection, _ = _pending_store(tmp_path / "other-generation")
+    assert _reader(other_connection).get_unit(mistyped) is None
+    other_connection.close()
+
+    # Even an artificial prefix collision cannot choose the wrong declaration.
+    other_id = writer.add_unit(_node("b.py", "b.Bar"))
+    columns = [row["name"] for row in connection.execute("PRAGMA table_info(units)")
+               if row["name"] != "unit_id"]
+    names = ", ".join(columns)
+    connection.execute(f"INSERT INTO units (unit_id, {names}) SELECT ?, {names} FROM units WHERE unit_id = ?",
+                       (mistyped, other_id))
+    assert reader.get_unit(prefix) is None
+    assert reader.get_unit(unit_id)["unit"] == exact["unit"]
+    assert reader.get_unit(mistyped)["unit"]["path"] == "b.py"
+    connection.close()
+
+
+def test_file_search_matches_literal_path_suffix_and_paginates_all_candidates(tmp_path):
+    _, _, connection, writer = _pending_store(tmp_path)
+    paths = ['api/a_%/[id].ts', 'one/api/a_%/[id].ts', 'two/api/a_%/[id].ts',
+             'one/notapi/a_%/[id].ts', 'one/api/axy/[id].ts', 'one/API/a_%/[id].ts']
+    for index, path in enumerate(paths):
+        writer.add_unit(_node(path, f'item{index}'))
+    reader = _reader(connection)
+    selected, cursor = [], 0
+    while True:
+        page = reader.query_graph('file_search', 'api/a_%/[id].ts', max_results=1, cursor=cursor)
+        assert page['snapshot'] == reader.snapshot()
+        selected.extend(unit['path'] for unit in page['results'])
+        cursor = page['nextCursor']
+        if cursor is None:
+            break
+    assert selected == paths[:3]
+    assert reader.query_graph('file_search', 'missing/email.ts')['results'] == []
+    from rag_pipeline.core.review_graph.api import query_review_graph
+    proposed = query_review_graph(reader, pattern='file_search', target='api/a_%/[id].ts',
+                                  max_results=1, detail_level='minimal')
+    assert proposed['results'][0]['path'] == paths[0] and proposed['nextCursor'] == 1
+    connection.close()
 
 
 def test_small_relation_delta_does_not_scan_unrelated_repository_rows(tmp_path):
@@ -274,6 +336,7 @@ def test_named_graph_query_requires_unit_id_when_symbol_is_ambiguous(tmp_path):
     precise = reader.query_graph("relations_of", first_id)
 
     assert ambiguous["status"] == "ambiguous"
+    assert "error" not in ambiguous and "multiple structural units" in ambiguous["message"]
     assert ambiguous["results"] == []
     assert ambiguous["candidateCount"] == 2
     assert ambiguous["candidateResultCount"] == 2
@@ -464,6 +527,35 @@ def test_file_summary_cursor_pages_every_structural_unit(tmp_path):
     ]
     assert paged_ids == sorted(unit_ids)
     assert len(paged_ids) == len(set(paged_ids))
+    connection.close()
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_empty_and_excluded_files_have_sealed_coverage_without_invented_units(tmp_path, legacy):
+    from rag_pipeline.core.index_manager.repository_enrichment import write_repository_state
+    from rag_pipeline.core.review_graph.api import query_review_graph
+    _, _, connection, writer = _pending_store(tmp_path)
+    content = write_repository_state(writer, commit='revision', repository_facts=None,
+        repository_files=[Path('go.sum'), Path('missing.py')], project_type=None, source_root=None,
+        source_file_sha256={'go.sum': hashlib.sha256(b'').hexdigest(), 'missing.py': 'b' * 64},
+        include_patterns=[], exclude_patterns=['*.lock'])
+    if legacy:
+        facts = json.loads(content)
+        facts.pop('indexSelection')
+        content = json.dumps(facts)
+        connection.execute("UPDATE units SET content=?, content_sha256=? WHERE record_type='repository_state'",
+                           (content, hashlib.sha256(content.encode()).hexdigest()))
+    connection.commit()
+    reader = _reader(connection)
+    reader.receipt['repository_facts_sha256'] = hashlib.sha256(content.encode()).hexdigest()
+    for path, expected in [('go.sum', 'empty'), ('missing.py', 'unknown'),
+                           ('Cargo.lock', 'unknown' if legacy else 'excluded')]:
+        base = reader.query_graph('file_summary', path)
+        proposed = query_review_graph(reader, pattern='file_summary', target=path)
+        assert base['results'] == proposed['results'] == []
+        assert base['fileCoverage']['state'] == proposed['fileCoverage']['state'] == expected
+    reader.receipt['repository_facts_sha256'] = 'c' * 64
+    assert reader.query_graph('file_summary', 'go.sum')['fileCoverage']['state'] == 'unknown'
     connection.close()
 
 
@@ -1599,6 +1691,21 @@ def test_php_method_graph_fact_projects_exact_method_endpoints(tmp_path):
     connection.close()
 
 
+@pytest.mark.parametrize('marker', [False, 'false', 'FALSE', True, None])
+def test_unproven_target_marker_prevents_same_named_local_unit_binding(tmp_path, marker):
+    _, _, connection, writer = _pending_store(tmp_path)
+    target = 'vendor/tool'
+    target_id = writer.add_unit(TextNode('local file', dict(path=target, start_line=1, end_line=1,
+        primary_name=target, symbol_qualified_name=target, language='text')))
+    relation_id = writer.add_relation(kind='configured-reference', source='config.yml',
+        relation='configures-module', target=target, path='config.yml', line=1, origin='plugin',
+        attributes={'targetResolutionProven': marker})
+    writer.resolve_relations()
+    row = connection.execute('SELECT target_unit_id FROM relations WHERE relation_id = ?', (relation_id,)).fetchone()
+    assert row['target_unit_id'] == (None if str(marker).casefold() == 'false' else target_id)
+    connection.close()
+
+
 def test_graph_fact_preserves_all_contributing_plugins_on_one_relation(tmp_path):
     _, _, connection, writer = _pending_store(tmp_path)
     relation_id = writer.add_graph_fact(
@@ -1952,6 +2059,30 @@ def test_bound_generation_backup_finishes_before_destination_wal_is_enabled(
         connection.close()
         store.release_pending_ownership(ownership)
         store.remove_pending(pending)
+
+
+def test_bound_generation_clone_accepts_instrumented_connections(tmp_path, monkeypatch):
+    original_connect = structural_store_module.sqlite3.connect
+
+    class ConnectionWrapper:
+        def __init__(self, connection):
+            object.__setattr__(self, "_connection", connection)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __setattr__(self, name, value):
+            setattr(self._connection, name, value)
+
+    monkeypatch.setattr(
+        structural_store_module.sqlite3, "connect",
+        lambda *args, **kwargs: ConnectionWrapper(original_connect(*args, **kwargs)),
+    )
+    # APM proxies delegate backup() to SQLite, which requires a native target.
+    test_bound_generation_clone_is_private_unsealed_and_can_be_resealed(tmp_path)
+    test_bound_generation_backup_finishes_before_destination_wal_is_enabled(
+        tmp_path / "wal", monkeypatch,
+    )
 
 
 def test_remove_paths_expands_non_packet_dependencies_and_cleans_fts(tmp_path):

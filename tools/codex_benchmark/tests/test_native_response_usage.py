@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.codex_benchmark.bridge import Conversation, SubscriptionBridge
-from tools.codex_benchmark.rpc import AppServer, MODEL
+from tools.codex_benchmark.rpc import AppServer, CONFIG, MODEL
 
 
 def usage(i=100, o=10, cached=30, reasoning=4):
@@ -36,7 +36,9 @@ def ledger(path):
 
 
 @pytest.mark.asyncio
-async def test_native_thread_start_preserves_task_tools_and_requests_raw_events(tmp_path):
+@pytest.mark.parametrize("provider", ["openai", "codecrow-codex-http"])
+async def test_native_thread_start_preserves_task_tools_and_requests_raw_events(tmp_path, monkeypatch, provider):
+    monkeypatch.setitem(CONFIG, "model_provider", provider)
     tool = {"type": "function", "name": "read", "description": "exact source",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}
     rpc = AppServer(tmp_path)
@@ -45,7 +47,7 @@ async def test_native_thread_start_preserves_task_tools_and_requests_raw_events(
 
     async def request(method, params):
         calls.append((method, copy.deepcopy(params)))
-        return {"thread": {"id": "thread"}, "model": MODEL, "modelProvider": "openai"}
+        return {"thread": {"id": "thread"}, "model": MODEL, "modelProvider": provider}
 
     rpc.request = request
     assert await rpc.start_thread("Exact instructions.\nNo additions.", [tool], "low") == "thread"
@@ -53,13 +55,27 @@ async def test_native_thread_start_preserves_task_tools_and_requests_raw_events(
     method, params = calls[0]
     assert method == "thread/start"
     assert params == {
-        "model": MODEL, "modelProvider": "openai", "allowProviderModelFallback": False,
+        "model": MODEL, "modelProvider": provider, "allowProviderModelFallback": False,
         "cwd": str(tmp_path), "approvalPolicy": "never", "sandbox": "read-only",
         "ephemeral": True, "experimentalRawEvents": True, "personality": "none",
         "baseInstructions": "Exact instructions.\nNo additions.",
         "developerInstructions": "Use only the supplied benchmark task and dynamic tools. Do not access local files, run commands, browse, or delegate. Return the task's requested output without progress commentary.",
         "dynamicTools": [tool], "serviceTier": "default", "config": {"model_reasoning_effort": "low"},
     }
+
+
+@pytest.mark.asyncio
+async def test_native_thread_rejects_provider_fallback(tmp_path, monkeypatch):
+    monkeypatch.setitem(CONFIG, "model_provider", "codecrow-codex-http")
+    rpc = AppServer(tmp_path)
+    rpc.model = {"supportedReasoningEfforts": [{"reasoningEffort": "high"}]}
+
+    async def request(method, params):
+        return {"thread": {"id": "thread"}, "model": MODEL, "modelProvider": "openai"}
+
+    rpc.request = request
+    with pytest.raises(RuntimeError, match="different model or provider"):
+        await rpc.start_thread("Exact instructions", [], "high")
 
 
 @pytest.mark.asyncio

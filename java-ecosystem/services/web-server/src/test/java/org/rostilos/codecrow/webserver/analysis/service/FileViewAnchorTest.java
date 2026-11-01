@@ -57,10 +57,26 @@ class FileViewAnchorTest {
         when(branches.findByProjectIdAndBranchName(1L,"main")).thenReturn(Optional.of(branch));
         var base = BranchIssue.fromCodeAnalysisIssue(issue(IssueAnchorSide.BASE),branch);
         var head = BranchIssue.fromCodeAnalysisIssue(issue(IssueAnchorSide.HEAD),branch);
+        head.setCodeSnippet("current first line");
         when(branchIssues.findByBranchIdAndFilePath(5L,path)).thenReturn(List.of(base,head));
         when(snapshots.getFileContentForBranch(1L,"main",path)).thenReturn(Optional.of(headSource));
         headOnly(service.getBranchFileView(1L,"main",path).orElseThrow().issues());
         headOnly(service.getBranchFileSnippet(1L,"main",path,1,2).orElseThrow().issues());
         headOnly(service.getBranchFileSnippetByRange(1L,"main",path,1,2).orElseThrow().issues());
+    }
+
+    @Test void staleBranchAnchorIsNotDisplayedOnABlankLineOrRestoredFromOriginalLine() {
+        var branch = mock(Branch.class); when(branch.getId()).thenReturn(5L);
+        when(branches.findByProjectIdAndBranchName(1L,"main")).thenReturn(Optional.of(branch));
+        var stale = BranchIssue.fromCodeAnalysisIssue(issue(IssueAnchorSide.HEAD),branch);
+        stale.setCurrentLineNumber(2);
+        when(branchIssues.findByBranchIdAndFilePath(5L,path)).thenReturn(List.of(stale));
+        when(snapshots.getFileContentForBranch(1L,"main",path)).thenReturn(Optional.of("current first line\n\nchanged();\n"));
+        assertThat(service.getBranchFileView(1L,"main",path).orElseThrow().issues().get(0).lineNumber()).isZero();
+        assertThat(service.getBranchFileSnippet(1L,"main",path,2,10).orElseThrow().issues()).isEmpty();
+        assertThat(service.getBranchFileSnippetByRange(1L,"main",path,1,3).orElseThrow().issues()).isEmpty();
+        stale.setCodeSnippet("current first line");
+        stale.invalidateCurrentAnchor();
+        assertThat(service.getBranchFileView(1L,"main",path).orElseThrow().issues().get(0).lineNumber()).isZero();
     }
 }

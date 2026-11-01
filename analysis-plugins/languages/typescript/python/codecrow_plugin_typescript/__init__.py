@@ -23,6 +23,7 @@ from .repository import (
     parse_import_record,
     resolve_import,
 )
+from .configuration import configuration_facts, is_typescript_config
 
 
 _SNAPSHOT_KIND = "typescript-import-graph"
@@ -101,18 +102,23 @@ class TypescriptPlugin:
         ))
 
     def index_file(self, artifact: FileArtifact):
+        is_config = is_typescript_config(artifact.path)
         if (
             artifact.deleted
-            or not artifact.path.casefold().endswith(TYPESCRIPT_EXTENSIONS)
+            or not is_config and not artifact.path.casefold().endswith(TYPESCRIPT_EXTENSIONS)
         ):
             return PluginOutcome.abstained()
         try:
+            if is_config:
+                return PluginOutcome.handled(configuration_facts(artifact))
             analyzed = analyze_typescript_artifact(artifact)
         except Exception as exception:
             return PluginOutcome.failed(PluginDiagnostic(
                 "typescript-parse-failed",
                 f"{type(exception).__name__}: {exception}",
                 self.descriptor.id,
+                path=artifact.path if is_config else None,
+                recoverable=is_config,
             ))
         return PluginOutcome.handled(analyzed[0])
 
@@ -146,11 +152,11 @@ class TypescriptPlugin:
             or not claim.path.casefold().endswith(TYPESCRIPT_EXTENSIONS)
         ):
             return PluginOutcome.abstained()
-        if claim.claim_kind == "typescript-file":
+        if claim.claim_kind in {"typescript-file", "typescript-module-resolution"}:
             return PluginOutcome.handled(ValidationResult(
                 ValidationDecision.INSUFFICIENT_EVIDENCE,
                 "typescript-coarse-evidence-class",
-                "A file-level TypeScript fact cannot prove a concrete relationship claim.",
+                "A TypeScript file or module-path fact cannot establish the presence of an imported member.",
             ))
         if claim.claim_kind not in _RELATION_KINDS:
             return PluginOutcome.handled(ValidationResult(

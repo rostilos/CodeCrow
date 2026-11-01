@@ -15,6 +15,24 @@ def _event(name, arguments, observation):
     )
 
 
+@pytest.mark.parametrize("tool", ["queryCodeGraph", "getImpactRadius", "traverseCodeGraph"])
+@pytest.mark.parametrize("error", [None, "graph store unavailable"])
+def test_graph_disambiguation_is_not_a_tool_failure_but_real_errors_remain_failures(tool, error):
+    observation = {"status": "ambiguous", "message": "Choose an exact candidate unit ID",
+                   "candidates": [{"unitId": "unit:one"}, {"unitId": "unit:two"}],
+                   "results": [], "coverage": {"state": "bounded", "partialReasons": ["ambiguous_target"]}}
+    if error:
+        observation["error"] = error
+    recorder = Stage1AgentTelemetryRecorder(batch_number=1, batch_paths=("src/one.py",), agent_requested=True)
+    started = recorder.begin_agent(None)
+    failures = recorder.record_agent_events((_event(tool, {"target": "shared"}, observation),), started_at=started)
+    recorder.finish(status="completed")
+    result = recorder.payload()
+    assert bool(failures) == result["degraded"] == bool(error)
+    assert result["toolSequence"][0]["status"] == ("failed" if error else "completed")
+    assert result["fallback"]["used"] is False
+
+
 def test_agent_telemetry_records_optional_graph_context_and_exact_source_reads():
     evidence_id = "relation:" + "a" * 64
     recorder = Stage1AgentTelemetryRecorder(

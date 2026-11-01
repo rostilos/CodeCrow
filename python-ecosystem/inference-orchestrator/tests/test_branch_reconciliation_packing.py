@@ -26,6 +26,58 @@ def _json_section(prompt, heading):
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_still_present_decision_preserves_current_anchor_and_explanation():
+    decision = {
+        "issueId": "old-1", "isResolved": False,
+        "resolutionReason": "The order-currency field still receives base currency in the false branch.",
+        "filePath": "src/refund.php", "lineNumber": 2, "endLineNumber": 3,
+        "codeSnippet": "$max = $withTax ? $orderAmount : $baseAmount;\n$result = $max;",
+    }
+    executor = AsyncMock(return_value={"issues": [decision]})
+    result = await packing.execute_packed_branch_reconciliation(
+        llm=object(), request=_request(200_000),
+        pr_metadata=_metadata({"id": "old-1", "file": "src/refund.php"}),
+        file_contents={"src/refund.php": "<?php\n" + decision["codeSnippet"]},
+        raw_diff=None, direct_executor=executor,
+    )
+    assert result["issues"] == [decision]
+    assert result["reconciliationStatus"] == "complete"
+    assert "Never omit an issue" in executor.await_args.args[1]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("failure", [False, True])
+async def test_missing_or_failed_decisions_are_explicitly_unverified(failure):
+    executor = AsyncMock(side_effect=RuntimeError("provider unavailable")) if failure else AsyncMock(return_value={"issues": []})
+    result = await packing.execute_packed_branch_reconciliation(
+        llm=object(), request=_request(200_000),
+        pr_metadata=_metadata({"id": "old-1", "file": "src/a.py"}),
+        file_contents={"src/a.py": "current()"}, raw_diff=None, direct_executor=executor,
+    )
+    assert result["issues"][0]["issueId"] == "old-1"
+    assert result["issues"][0]["isResolved"] is None
+    assert result["reconciliationStatus"] == "degraded"
+    assert result["reconciliationPromptProvenance"]["diagnostics"]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_duplicate_conflicting_decisions_cannot_close_an_issue():
+    executor = AsyncMock(return_value={"issues": [
+        {"issueId": "old-1", "isResolved": True, "resolutionReason": "Fixed"},
+        {"issueId": "old-1", "isResolved": False, "resolutionReason": "Still present"},
+        {"issueId": "another-project", "isResolved": True, "resolutionReason": "Unrequested"},
+    ]})
+    result = await packing.execute_packed_branch_reconciliation(
+        llm=object(), request=_request(200_000),
+        pr_metadata=_metadata({"id": "old-1", "file": "src/a.py"}),
+        file_contents={"src/a.py": "current()"}, raw_diff=None, direct_executor=executor,
+    )
+    assert result["issues"] == [{"issueId": "old-1", "isResolved": None,
+                                  "resolutionReason": "Multiple decisions returned for the same issue"}]
+    assert result["reconciliationStatus"] == "degraded"
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_complete_rendered_prompt_uses_one_call_when_it_fits():
     issue = {
         "id": "old-1",
@@ -155,7 +207,8 @@ async def test_huge_unicode_source_and_diff_are_lossless_with_bounded_packets(
     admitted_diff = "".join(text for _, text in sorted(diff_segments))
     assert admitted_source == source
     assert admitted_diff == raw_diff
-    assert result["issues"] == []
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["isResolved"] is None
     issue_provenance = result["reconciliationPromptProvenance"]["issues"][
         "huge-1"
     ]
@@ -280,7 +333,8 @@ async def test_partial_shard_local_absence_cannot_resolve_issue(monkeypatch):
         direct_executor=execute,
     )
 
-    assert result["issues"] == []
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["isResolved"] is None
     provenance = result["reconciliationPromptProvenance"]["issues"][
         "partial-1"
     ]
@@ -329,7 +383,8 @@ async def test_indivisible_diff_hunk_is_not_sent_or_sliced(monkeypatch):
         packing.estimated_branch_reconciliation_tokens(prompt) <= 2_500
         for prompt in prompts
     )
-    assert result["issues"] == []
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["isResolved"] is None
     provenance = result["reconciliationPromptProvenance"]
     assert any(
         key.endswith("hunk:000000")
@@ -391,5 +446,5 @@ async def test_deleted_base_finding_uses_surviving_related_source_authority(side
         raw_diff="diff --git a/src/caller.py b/src/caller.py\n--- a/src/caller.py\n+++ b/src/caller.py\n@@ -1 +1,2 @@\n+authorize(user)\n perform_operation()\n",
         direct_executor=executor,
     )
-    assert bool(result["issues"]) is accepted
+    assert any(item.get("isResolved") is True for item in result["issues"]) is accepted
     assert result["reconciliationPromptProvenance"]["issues"]["removed-guard"]["resolutionAccepted"] is accepted

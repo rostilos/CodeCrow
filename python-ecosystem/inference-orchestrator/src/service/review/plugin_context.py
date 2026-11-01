@@ -14,7 +14,6 @@ from model.plugins import ProjectCapabilitiesDto
 from service.review.candidate_ledger import CandidateEvidenceLedger
 
 logger = logging.getLogger(__name__)
-PLUGIN_CONTEXT_CHAR_BUDGET = 6_000
 _PLUGIN_DIAGNOSTIC_SINK: ContextVar[
     Optional[Callable[[dict[str, str]], None]]
 ] = ContextVar("codecrow_plugin_diagnostic_sink", default=None)
@@ -59,58 +58,40 @@ def _record_plugin_contribution_diagnostics(
     scope: str,
     diagnostics: tuple[Any, ...],
 ) -> None:
-    """Expose bounded optional-plugin omissions without blocking the review."""
+    """Expose optional-plugin diagnostics without blocking the review."""
     _log_plugin_diagnostics(scope, diagnostics)
-
-
-def _bounded_lines(lines: list[str], max_chars: int) -> str:
-    rendered: list[str] = []
-    used = 0
-    omitted = 0
-    for index, line in enumerate(lines):
-        added = len(line) + (1 if rendered else 0)
-        if used + added > max_chars:
-            omitted = len(lines) - index
-            break
-        rendered.append(line)
-        used += added
-
-    if omitted:
-        summary = f"[{omitted} plugin evidence line(s) omitted by prompt budget]"
-        while rendered and used + 1 + len(summary) > max_chars:
-            removed = rendered.pop()
-            used -= len(removed) + (1 if rendered else 0)
-            omitted += 1
-            summary = (
-                f"[{omitted} plugin evidence line(s) omitted by prompt budget]"
-            )
-        if len(summary) <= max_chars:
-            rendered.append(summary)
-    return "\n".join(rendered)
 
 
 @lru_cache(maxsize=1)
 def _plugin_host():
     try:
-        from codecrow_plugins import PluginRuntime, ProjectSelector
-        from codecrow_plugins.bootstrap import discover_builtin_plugins
-    except ModuleNotFoundError as exception:
-        if exception.name != "codecrow_plugins":
-            raise
-        monorepo_package = (
-            Path(__file__).resolve().parents[5]
-            / "analysis-plugins"
-            / "contracts"
-            / "python"
-        )
-        if not monorepo_package.is_dir():
-            return None
-        sys.path.insert(0, str(monorepo_package))
-        from codecrow_plugins import PluginRuntime, ProjectSelector
-        from codecrow_plugins.bootstrap import discover_builtin_plugins
+        try:
+            from codecrow_plugins import PluginRuntime, ProjectSelector
+            from codecrow_plugins.bootstrap import discover_builtin_plugins
+        except ModuleNotFoundError as exception:
+            if exception.name != "codecrow_plugins":
+                raise
+            monorepo_package = (
+                Path(__file__).resolve().parents[5]
+                / "analysis-plugins"
+                / "contracts"
+                / "python"
+            )
+            if not monorepo_package.is_dir():
+                logger.warning("Optional plugin runtime is not installed; source review continues")
+                return None
+            sys.path.insert(0, str(monorepo_package))
+            from codecrow_plugins import PluginRuntime, ProjectSelector
+            from codecrow_plugins.bootstrap import discover_builtin_plugins
 
-    catalog = discover_builtin_plugins()
-    return catalog, PluginRuntime(catalog), ProjectSelector(catalog.registry)
+        catalog = discover_builtin_plugins()
+        return catalog, PluginRuntime(catalog), ProjectSelector(catalog.registry)
+    except Exception as exception:
+        logger.warning(
+            "Optional plugin runtime unavailable; source review continues: %s",
+            exception,
+        )
+        return None
 
 
 def _request_revision(request: ReviewRequestDto) -> str:
@@ -133,49 +114,61 @@ def _request_revision(request: ReviewRequestDto) -> str:
 
 
 def resolve_project_capabilities(request: ReviewRequestDto):
-    host = _plugin_host()
-    if host is None:
-        return None
-    catalog, _, selector = host
-    payload = getattr(request, "projectCapabilities", None)
-    if isinstance(payload, ProjectCapabilitiesDto):
-        requested = tuple(payload.repositoryPlugins)
-        resolved = tuple(descriptor.id for descriptor in catalog.registry.resolve(requested))
-        if resolved != requested:
-            raise ValueError("project capability plugins are not in dependency-stable order")
-        return selector.project(
-            revision=_request_revision(request),
-            repository_plugins=requested,
-            file_plugins={
-                path: tuple(ids) for path, ids in payload.filePlugins.items()
-            },
-            detection_evidence={
-                plugin_id: tuple(values)
-                for plugin_id, values in payload.detectionEvidence.items()
-            },
-            unavailable_capabilities=tuple(payload.unavailableCapabilities),
+    try:
+        host = _plugin_host()
+        if host is None:
+            return None
+        catalog, _, selector = host
+        payload = getattr(request, "projectCapabilities", None)
+        if isinstance(payload, ProjectCapabilitiesDto):
+            requested = tuple(payload.repositoryPlugins)
+            unavailable = tuple(plugin_id for plugin_id in requested if not catalog.registry.contains(plugin_id))
+            if unavailable:
+                logger.warning("Optional plugins unavailable; source review continues: %s", ", ".join(unavailable))
+            resolved = tuple(descriptor.id for descriptor in catalog.registry.resolve(
+                plugin_id for plugin_id in requested if plugin_id not in unavailable
+            ))
+            return selector.project(
+                revision=_request_revision(request),
+                repository_plugins=resolved,
+                file_plugins={
+                    path: tuple(plugin_id for plugin_id in ids if plugin_id in resolved)
+                    for path, ids in payload.filePlugins.items()
+                },
+                detection_evidence={
+                    plugin_id: tuple(values)
+                    for plugin_id, values in payload.detectionEvidence.items()
+                    if plugin_id in resolved
+                },
+                unavailable_capabilities=tuple(dict.fromkeys((*payload.unavailableCapabilities, *unavailable))),
+            )
+
+        # Transitional fallback: select only from immutable request evidence. It is
+        # intentionally conservative when Java did not supply repository markers.
+        from codecrow_plugins import RepositoryFacts
+
+        paths = {path.lstrip("/") for path in request.changedFiles or []}
+        marker_contents: dict[str, str] = {}
+        enrichment = getattr(request, "enrichmentData", None)
+        for file_content in getattr(enrichment, "fileContents", None) or []:
+            normalized = file_content.path.lstrip("/")
+            paths.add(normalized)
+            if normalized == "composer.json" and file_content.content and not file_content.skipped:
+                marker_contents[normalized] = file_content.content
+        if not paths:
+            return None
+        revision = _request_revision(request)
+        return selector.select(RepositoryFacts(
+            revision=revision,
+            paths=tuple(sorted(paths)),
+            marker_contents=marker_contents,
+        ))
+    except Exception as exception:
+        logger.warning(
+            "Optional plugin capabilities unavailable; source review continues: %s",
+            exception,
         )
-
-    # Transitional fallback: select only from immutable request evidence. It is
-    # intentionally conservative when Java did not supply repository markers.
-    from codecrow_plugins import RepositoryFacts
-
-    paths = {path.lstrip("/") for path in request.changedFiles or []}
-    marker_contents: dict[str, str] = {}
-    enrichment = getattr(request, "enrichmentData", None)
-    for file_content in getattr(enrichment, "fileContents", None) or []:
-        normalized = file_content.path.lstrip("/")
-        paths.add(normalized)
-        if normalized == "composer.json" and file_content.content and not file_content.skipped:
-            marker_contents[normalized] = file_content.content
-    if not paths:
         return None
-    revision = _request_revision(request)
-    return selector.select(RepositoryFacts(
-        revision=revision,
-        paths=tuple(sorted(paths)),
-        marker_contents=marker_contents,
-    ))
 
 
 def apply_effective_project_capabilities(
@@ -269,10 +262,18 @@ def apply_plugin_file_policy(
     _, runtime, _ = host
     newly_skipped = 0
     for diff_file in processed_diff.files:
-        disposition = runtime.file_disposition(
-            diff_file.path.lstrip("/"),
-            capabilities,
-        )
+        try:
+            disposition = runtime.file_disposition(
+                diff_file.path.lstrip("/"),
+                capabilities,
+            )
+        except Exception as exception:
+            logger.warning(
+                "Optional plugin file policy unavailable for %s; retaining source hunks: %s",
+                diff_file.path,
+                exception,
+            )
+            continue
         diff_file.plugin_disposition = disposition.value
         if disposition not in {
             FileDisposition.EXCLUDED,
@@ -427,7 +428,7 @@ def review_plugin_context(
             "no matching exact fact is visible in this bounded prompt; do not "
             "create typed framework claims from plugin rules alone]"
         )
-    return _bounded_lines(lines, PLUGIN_CONTEXT_CHAR_BUDGET)
+    return "\n".join(lines)
 
 
 def _normalized_evidence_identifier(value: Any) -> str:

@@ -910,7 +910,7 @@ def test_traversal_bounds_long_echoed_controls_and_ambiguous_roots():
             if pattern == "relations_of" and target == "Shared.run":
                 return {
                     "status": "ambiguous",
-                    "error": "multiple units",
+                    "message": "multiple units",
                     "candidates": [first, second],
                     "candidateCount": 2,
                     "candidatesTruncated": False,
@@ -928,6 +928,7 @@ def test_traversal_bounds_long_echoed_controls_and_ambiguous_roots():
     impact = review_impact_radius(reader, targets=["Shared.run"])
     for response in (traversal, impact):
         assert response["status"] == "ambiguous"
+        assert "error" not in response
         assert response["candidateCount"] == 2
         assert {candidate["unitId"] for candidate in response["candidates"]} == {
             first["unitId"],
@@ -981,7 +982,7 @@ def test_ambiguous_query_returns_stable_coverage_and_exact_id_retry_candidates()
                 "nextCursor": next_cursor if truncated else None,
                 "results": [],
                 "truncated": truncated,
-                "error": "Target resolves to multiple structural units",
+                "message": "Target resolves to multiple structural units",
                 "candidates": selected,
                 "candidateCount": 2,
                 "candidateResultCount": len(selected),
@@ -1007,6 +1008,7 @@ def test_ambiguous_query_returns_stable_coverage_and_exact_id_retry_candidates()
     )
 
     assert first_page["status"] == second_page["status"] == "ambiguous"
+    assert "error" not in first_page and "multiple structural units" in first_page["message"]
     assert first_page["nextCursor"] == 1
     assert first_page["truncated"] is True
     assert second_page["nextCursor"] is None

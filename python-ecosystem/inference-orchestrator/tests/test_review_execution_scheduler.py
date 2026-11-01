@@ -387,3 +387,49 @@ async def test_restored_mcp_clients_share_source_capacity_separate_from_preparat
         assert await first == "first"
     preparation_slots.release()
     assert source_slots._value == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', [401, 402, 403])
+async def test_account_failure_stops_queued_calls_only_within_its_review(status):
+    class ProviderError(Exception):
+        status_code = status
+    scheduler = FairReviewScheduler(1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    invoked = []
+    async def first():
+        async with review_model_slot('stage_1'):
+            invoked.append('first')
+            entered.set()
+            await release.wait()
+            raise ProviderError('account unavailable')
+    async def queued():
+        async with review_model_slot('stage_2'):
+            invoked.append('queued')
+    with review_execution(scheduler, asyncio.Semaphore(1)):
+        first_task = asyncio.create_task(first())
+        await entered.wait()
+        queued_task = asyncio.create_task(queued())
+        await turn()
+        release.set()
+        results = await asyncio.gather(first_task, queued_task, return_exceptions=True)
+        assert all(isinstance(result, ProviderError) for result in results)
+        assert invoked == ['first']
+    # Another tenant/review with valid credentials keeps its own availability.
+    with review_execution(scheduler, asyncio.Semaphore(1)):
+        async with review_model_slot('stage_1'):
+            invoked.append('other review')
+    assert invoked == ['first', 'other review'] and scheduler._active == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', [429, 500, 502, 503])
+async def test_transient_provider_error_does_not_disable_later_review_calls(status):
+    class ProviderError(Exception):
+        status_code = status
+    with review_execution(FairReviewScheduler(1), asyncio.Semaphore(1)):
+        with pytest.raises(ProviderError):
+            async with review_model_slot('stage_1'):
+                raise ProviderError('temporary')
+        async with review_model_slot('stage_1'):
+            pass

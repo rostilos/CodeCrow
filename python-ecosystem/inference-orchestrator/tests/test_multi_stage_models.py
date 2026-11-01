@@ -60,6 +60,34 @@ def test_stage_1_explicit_null_defaults_match_omitted_defaults():
     assert explicit_null.note == ""
 
 
+def test_stage_1_generation_requires_each_path_without_filling_missing_reviews():
+    paths = ['src/a.py', 'src/nested/b.py']
+    model = FileReviewBatchOutput.for_paths(paths)
+    slots = model.model_json_schema()['properties']['reviews']
+    assert model.__name__ == 'FileReviewBatchOutput'
+    assert slots['type'] == 'object'
+    assert slots['required'] == paths
+    assert set(slots['properties']) == set(paths)
+    assert slots['additionalProperties'] is False
+    assert FileReviewBatchOutput.model_json_schema()['properties']['reviews']['type'] == 'array'
+
+    reviews = {path: _file_review(file=path).model_dump() for path in paths}
+    expected = FileReviewBatchOutput(reviews=list(reviews.values()))
+    assert model.model_validate({'reviews': reviews}).model_dump() == expected.model_dump()
+    assert model.model_validate(expected.model_dump()).model_dump() == expected.model_dump()
+    partial = model.model_validate({'reviews': {paths[0]: reviews[paths[0]]}})
+    assert [review.file for review in partial.reviews] == paths[:1]
+    with pytest.raises(ValidationError, match='match its path key'):
+        model.model_validate({'reviews': {paths[1]: reviews[paths[0]]}})
+
+
+def test_stage_1_keyed_review_requires_actual_analysis_content():
+    with pytest.raises(ValidationError, match='analysis_summary'):
+        FileReviewBatchOutput.model_validate({'reviews': {'a.py': {}}})
+    with pytest.raises(ValidationError):
+        FileReviewBatchOutput.model_validate({'reviews': {'a.py': None}})
+
+
 def test_stage_1_missing_and_null_confidence_use_neutral_default():
     base = {
         "file": "src/example.py",
@@ -158,8 +186,8 @@ def test_saved_provider_response_preserves_pagination_finding_without_retry():
     assert "user_count = 50" in review.issues[0].reason
 
 
-@pytest.mark.parametrize("value", ['[{"file":"a.py"}]', '{}', '[{"file":', 'not json', 'null',
+@pytest.mark.parametrize("value", ['[{"file":"a.py"}]', '[{"file":', 'not json', 'null',
                                     '[]}}', '[]} trailing text', '[]{}', '[] {"reviews":[]}'])
-def test_encoded_reviews_still_require_a_complete_valid_array(value):
+def test_encoded_reviews_still_require_valid_review_content(value):
     with pytest.raises(ValidationError):
         FileReviewBatchOutput.model_validate({"reviews": value})

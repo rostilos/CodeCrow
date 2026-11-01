@@ -247,6 +247,26 @@ class PrTrackingPersistenceIT {
     }
 
     @Test @Transactional
+    void laterBranchReviewCanReplacePartialCoverageWithoutLosingEarlierReports() {
+        String name = UUID.randomUUID().toString();
+        var workspace = new Workspace(name, name, "test"); em.persist(workspace);
+        var project = new Project(); project.setWorkspace(workspace); project.setNamespace(name); em.persist(project);
+        Map<String, Object> partial = Map.of("comment", "Incomplete", "issues", java.util.List.of(),
+                "analysisCompletion", Map.of("status", "partial"));
+        var first = analysisService.createDirectPushAnalysisFromAiResponse(project, partial, "main", "same-head", Map.of());
+        var second = analysisService.createDirectPushAnalysisFromAiResponse(project, partial, "main", "same-head", Map.of());
+        var complete = analysisService.createDirectPushAnalysisFromAiResponse(project,
+                Map.of("comment", "Complete", "issues", java.util.List.of()), "main", "same-head", Map.of());
+        em.flush(); em.clear();
+        assertThat(first.getId()).isNotEqualTo(second.getId()).isNotEqualTo(complete.getId());
+        assertThat(analyses.findById(first.getId()).orElseThrow().getStatus())
+                .isEqualTo(org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL);
+        assertThat(analysisService.createDirectPushAnalysisFromAiResponse(project,
+                Map.of("comment", "unused", "issues", java.util.List.of()), "main", "same-head", Map.of()).getId())
+                .isEqualTo(complete.getId());
+    }
+
+    @Test @Transactional
     void resolutionAndParentCountsSurviveTransactionAndReload() {
         String name = UUID.randomUUID().toString();
         var workspace = new Workspace(name, name, "test"); em.persist(workspace);

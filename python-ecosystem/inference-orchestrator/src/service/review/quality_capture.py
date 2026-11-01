@@ -566,7 +566,8 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
         for state in ("ingested", "planned", "reviewed", "validated")
         if normalized_hunks[state]
     }
-    if active_states:
+    partial = event.get("completionStatus") == "partial"
+    if active_states and not partial:
         raise ValueError(
             "terminal pipeline evidence contains non-terminal hunk states: "
             + ", ".join(
@@ -585,7 +586,9 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
                 f"terminal pipeline evidence has invalid reviewUnits.{field}"
             )
         normalized_units[field] = value
-    if normalized_units["registered"] != normalized_units["completed"]:
+    if normalized_units["completed"] > normalized_units["registered"] or (
+        normalized_units["registered"] != normalized_units["completed"] and not partial
+    ):
         raise ValueError(
             "terminal pipeline evidence contains incomplete review units"
         )
@@ -1006,6 +1009,7 @@ def _terminal_pipeline_evidence(event: Any) -> Optional[dict[str, Any]]:
             )
     return {
         "state": "review_evidence_completed",
+        **({"completionStatus": "partial"} if partial else {}),
         "hunkCoverage": normalized_hunks,
         "reviewUnits": normalized_units,
         "candidates": {
@@ -1320,6 +1324,31 @@ def _stage1_agent_receipt_summary(records: Any) -> dict[str, Any]:
     }
 
 
+def read_quality_capture(path: Path) -> dict[str, Any]:
+    """Read a terminal artifact or recover its durable in-progress events."""
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    journal = path.with_suffix(".jsonl")
+    if artifact.get("status") != "recording" or not journal.exists():
+        return artifact
+    with journal.open("rb") as handle:
+        for line in handle:
+            if not line.endswith(b"\n"):
+                artifact.setdefault("captureGaps", []).append({
+                    "reason": "incomplete_journal_tail",
+                })
+                break
+            event = json.loads(line)
+            call = event.pop("call", None)
+            if call is not None:
+                index = call["sequence"] - 1
+                if index == len(artifact["calls"]):
+                    artifact["calls"].append(call)
+                else:
+                    artifact["calls"][index] = call
+            artifact.update(event)
+    return artifact
+
+
 class ReviewQualityCaptureSession:
     """Crash-safe artifact shared by all bound views of one review model."""
 
@@ -1452,9 +1481,7 @@ class ReviewQualityCaptureSession:
                 else 2 ** 31,
                 str(record.get("batchPaths") or ""),
             ))
-            # Batch events may arrive long before terminal completion. Persist
-            # each compact record in the existing crash-safe artifact.
-            self._write()
+            self._write({"stage1AgentBatches": records})
             return
         try:
             evidence = _terminal_pipeline_evidence(event)
@@ -1494,15 +1521,32 @@ class ReviewQualityCaptureSession:
         logger.warning("Optional review quality capture unavailable: phase=%s error=%s",
                        phase, type(exception).__name__)
 
-    def _write(self) -> None:
+    def _write(self, event: Optional[dict[str, Any]] = None) -> None:
         if self._capture_error is not None:
+            return
+        if event is not None:
+            # Rewriting every earlier prompt blocks live HTTP work on large PRs.
+            try:
+                event = {**event,
+                         "modelBoundaryInvocations": self._artifact["modelBoundaryInvocations"],
+                         "providerCalls": self._artifact["providerCalls"]}
+                descriptor = os.open(self.path.with_suffix(".jsonl"),
+                                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+                    os.fchmod(handle.fileno(), 0o600)
+                    handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True,
+                                            separators=(",", ":")) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception as exception:
+                self._capture_failed("write", exception)
             return
         temporary = self.path.with_suffix(f".{uuid.uuid4().hex}.tmp")
         try:
-            payload = json.dumps(self._artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             with temporary.open("x", encoding="utf-8") as handle:
                 os.chmod(temporary, 0o600)
-                handle.write(payload)
+                json.dump(self._artifact, handle, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":"))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
@@ -1533,6 +1577,7 @@ class ReviewQualityCaptureSession:
                 terminal.append(candidate)
         for stale in terminal[self._max_files:]:
             stale.unlink(missing_ok=True)
+            stale.with_suffix(".jsonl").unlink(missing_ok=True)
 
     def receipt(self) -> dict[str, Any]:
         """Return a source-free receipt for the completed capture artifact."""
@@ -1665,7 +1710,7 @@ class ReviewQualityCaptureSession:
                     "error": None,
                 }
                 self._artifact["calls"].append(record)
-                self._write()
+                self._write({"call": record})
         except Exception as exception:
             self._capture_failed("request", exception)
             return await delegate.ainvoke(input_data, **invoke_kwargs)
@@ -1702,7 +1747,7 @@ class ReviewQualityCaptureSession:
                     )
                     self._artifact["modelBoundaryInvocations"] += 1
                     self._artifact["providerCalls"] += record["providerCallCount"]
-                    self._write()
+                    self._write({"call": record})
             except Exception as capture_exception:
                 self._capture_failed("provider_error", capture_exception)
             raise
@@ -1729,7 +1774,7 @@ class ReviewQualityCaptureSession:
                 )
                 self._artifact["modelBoundaryInvocations"] += 1
                 self._artifact["providerCalls"] += record["providerCallCount"]
-                self._write()
+                self._write({"call": record})
         except Exception as exception:
             self._capture_failed("response", exception)
         return response
@@ -1782,7 +1827,7 @@ class ReviewQualityCaptureSession:
             elif self._pipeline_evidence is None:
                 self._artifact["pipelineEvidenceStatus"] = "missing"
             else:
-                self._artifact["pipelineEvidenceStatus"] = "complete"
+                self._artifact["pipelineEvidenceStatus"] = self._pipeline_evidence.get("completionStatus", "complete")
                 self._artifact["pipelineEvidence"] = self._pipeline_evidence
                 self._artifact["pipelineEvidenceDigest"] = _digest(
                     self._pipeline_evidence
@@ -1792,11 +1837,7 @@ class ReviewQualityCaptureSession:
                     "type": type(error).__name__,
                     "message": self._scrub_known_credentials(str(error)),
                 }
-            digest_payload = dict(self._artifact)
-            digest_payload["captureDigest"] = None
-            self._artifact["captureDigest"] = _digest(digest_payload)
-            self._write()
-            self._prune()
+            await asyncio.to_thread(self._finalize_artifact)
         logger.warning(
             "review_quality_capture_%s artifact=%s provider_calls=%s digest=%s",
             self._artifact["status"],
@@ -1804,6 +1845,18 @@ class ReviewQualityCaptureSession:
             self._artifact["providerCalls"],
             self._artifact["captureDigest"],
         )
+
+    def _finalize_artifact(self) -> None:
+        digest_payload = {**self._artifact, "captureDigest": None}
+        digest = hashlib.sha256()
+        for chunk in json.JSONEncoder(ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).iterencode(digest_payload):
+            digest.update(chunk.encode("utf-8"))
+        self._artifact["captureDigest"] = digest.hexdigest()
+        self._write()
+        if self._capture_error is None:
+            self.path.with_suffix(".jsonl").unlink(missing_ok=True)
+            self._prune()
 
 
 class ReviewQualityCaptureLLM(BaseChatModel):

@@ -52,6 +52,8 @@ class Stage1PreparedContext:
     enrichment_metadata_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
     task_context: str = "No task context available."
     current_source_batch_char_budget: Optional[int] = None
+    change_context: Optional[Dict[str, Any]] = None
+    change_context_minimum_tokens: Optional[int] = None
 
 
 Stage1Batch = List[Dict[str, Any]]
@@ -143,6 +145,7 @@ class Stage1ReviewUnitState:
     units_by_hunk: Dict[str, set[str]] = field(default_factory=dict)
     unit_owner: Dict[str, int] = field(default_factory=dict)
     completed_unit_ids: set[str] = field(default_factory=set)
+    failed_batches: Dict[int, str] = field(default_factory=dict)
     omitted_hunk_ids: set[str] = field(default_factory=set)
     omitted_unit_count: int = 0
     omitted_context_chars: int = 0
@@ -1025,12 +1028,10 @@ def _joint_stage1_units_for_item(
     prepared_context: Stage1PreparedContext,
     is_incremental: bool,
     token_budget: int,
-    max_units: int = 3,
     *,
     runtime: Stage1LocalPackingRuntime,
 ) -> List[Dict[str, Any]]:
     """Pack bounded primary evidence without optional-context call fan-out."""
-    max_units = max(1, max_units)
     item_path = getattr(item.get("file"), "path", "")
     item_diff_file = _find_diff_file_for_path(prepared_context, item_path)
     item = _apply_compacted_stage_1_omission(
@@ -1275,35 +1276,6 @@ def _joint_stage1_units_for_item(
     if current_atoms:
         packed_atom_groups.append(current_atoms)
 
-    omitted_groups = packed_atom_groups[max_units:]
-    packed_atom_groups = packed_atom_groups[:max_units]
-    omitted_hunk_ids = tuple(sorted({
-        hunk_id
-        for group in omitted_groups
-        for atom in group
-        for hunk_id in atom.hunk_ids
-    }))
-    omitted_context_chars = sum(
-        len(atom.text)
-        for group in omitted_groups
-        for atom in group
-        if atom.field != "diff"
-    )
-    if omitted_groups and packed_atom_groups:
-        notice_atom = _Stage1EvidenceAtom(
-            field="source",
-            text=(
-                "[CodeCrow Stage 1 invocation ceiling reached: "
-                f"omitted_units={len(omitted_groups)}, "
-                f"omitted_hunks={len(omitted_hunk_ids)}, "
-                f"omitted_context_chars={omitted_context_chars}. "
-                "Omitted evidence is not negative evidence.]"
-            ),
-            index=1,
-            total=1,
-        )
-        packed_atom_groups[-1] = [*packed_atom_groups[-1], notice_atom]
-
     units = [
         _stage1_unit_from_atoms(
             item,
@@ -1335,26 +1307,13 @@ def _joint_stage1_units_for_item(
         unit["_joint_unit_index"] = unit_index
         unit["_joint_unit_total"] = len(units)
         if unit_index == len(units) and (
-            omitted_groups or inherited_omitted_units or inherited_omitted_hunks
+            inherited_omitted_units or inherited_omitted_hunks
             or inherited_omitted_paths or inherited_omitted_context
         ):
-            unit["_omitted_stage1_unit_count"] = (
-                inherited_omitted_units + len(omitted_groups)
-            )
-            unit["_omitted_hunk_ids"] = tuple(sorted({
-                *inherited_omitted_hunks,
-                *omitted_hunk_ids,
-            }))
+            unit["_omitted_stage1_unit_count"] = inherited_omitted_units
+            unit["_omitted_hunk_ids"] = inherited_omitted_hunks
             unit["_omitted_stage1_paths"] = inherited_omitted_paths
-            unit["_omitted_context_chars"] = (
-                inherited_omitted_context + omitted_context_chars
-            )
-        if omitted_hunk_ids:
-            unit["_hunk_ids"] = tuple(
-                hunk_id
-                for hunk_id in unit.get("_hunk_ids", ())
-                if hunk_id not in omitted_hunk_ids
-            )
+            unit["_omitted_context_chars"] = inherited_omitted_context
         unit_tokens = _batch_prompt_tokens(
             runtime,
             request,
@@ -1382,9 +1341,9 @@ def _joint_stage1_units_for_item(
         len(units),
         len(streams["diff"]),
         len(streams["source"]),
-        len(omitted_groups),
-        len(omitted_hunk_ids),
-        omitted_context_chars,
+        inherited_omitted_units,
+        len(inherited_omitted_hunks),
+        inherited_omitted_context,
     )
     return units
 
@@ -1395,26 +1354,11 @@ def _expand_oversized_stage1_evidence_batches(
     prepared_context: Stage1PreparedContext,
     is_incremental: bool,
     token_budget: int,
-    max_units_per_item: int = 3,
-    max_total_batches: Optional[int] = None,
     *,
     runtime: Stage1LocalPackingRuntime,
 ) -> List[List[Dict[str, Any]]]:
-    """Assign bounded ownership under one review-wide semantic-call budget."""
+    """Assign every acquired primary evidence shard a bounded prompt."""
     expanded: List[List[Dict[str, Any]]] = []
-    total_budget = max(
-        len(batches),
-        max_total_batches if isinstance(max_total_batches, int) else len(batches),
-    )
-    remaining_extra = max(0, total_budget - len(batches))
-    used_by_key: Counter[tuple[str, ...]] = Counter(
-        tuple(sorted({
-            normalize_repository_path(getattr(item.get("file"), "path", ""))
-            for item in batch
-            if getattr(item.get("file"), "path", "")
-        })) or ("<unknown>",)
-        for batch in batches
-    )
     for batch in batches:
         prompt_tokens = _batch_prompt_tokens(
             runtime,
@@ -1429,25 +1373,15 @@ def _expand_oversized_stage1_evidence_batches(
                 for item in batch
             ])
             continue
-        key = tuple(sorted({
-            normalize_repository_path(getattr(item.get("file"), "path", ""))
-            for item in batch
-            if getattr(item.get("file"), "path", "")
-        })) or ("<unknown>",)
-        extra_for_key = max(0, max_units_per_item - used_by_key[key])
         units = _joint_stage1_units_for_item(
             batch[0],
             request,
             prepared_context,
             is_incremental,
             token_budget,
-            max_units=1 + min(remaining_extra, extra_for_key),
             runtime=runtime,
         )
         expanded.extend([unit] for unit in units)
-        admitted_extra = max(0, len(units) - 1)
-        used_by_key[key] += admitted_extra
-        remaining_extra = max(0, remaining_extra - admitted_extra)
     return expanded
 
 
@@ -1475,9 +1409,6 @@ def pack_stage1_local_batches(
     batches: List[List[Dict[str, Any]]],
     packing_input: Stage1LocalPackingInput,
     runtime: Stage1LocalPackingRuntime,
-    *,
-    max_units_per_item: int = 3,
-    max_total_batches: Optional[int] = None,
 ) -> List[List[Dict[str, Any]]]:
     """Expand oversized evidence through the neutral typed packing boundary."""
     return _expand_oversized_stage1_evidence_batches(
@@ -1486,8 +1417,6 @@ def pack_stage1_local_batches(
         packing_input.prepared_context,
         packing_input.is_incremental,
         packing_input.token_budget,
-        max_units_per_item=max_units_per_item,
-        max_total_batches=max_total_batches,
         runtime=runtime,
     )
 

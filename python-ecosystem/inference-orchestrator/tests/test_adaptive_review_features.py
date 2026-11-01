@@ -73,10 +73,10 @@ async def test_attempt_usage_is_request_local_and_missing_fields_are_unknown():
 
 def test_adaptive_risk_budget_preserves_operator_caps_and_core_coverage(monkeypatch):
     request = SimpleNamespace(changedFiles=["a.py"], rawDiff="+return user.name", deltaDiff=None)
-    monkeypatch.setenv("REVIEW_STAGE_2_PACKETS_MAX_INVOCATIONS", "1")
+    monkeypatch.setenv("REVIEW_STAGE_3_CHILDREN_MAX_INVOCATIONS", "1")
     profile = build_review_inference_profile(request, None)
     adapted = adapt_review_inference_profile(profile, issues=[finding(evidenceGaps=["caller input contract"])])
-    assert adapted.invocation_cap("stage_2_packets") == 1
+    assert adapted.invocation_cap("stage_3_children") == 1
     assert adapted.invocation_cap("stage_1_total") == profile.invocation_cap("stage_1_total")
     assert adapted.invocation_cap("specialist_passes") == 2
     assert set(adapted.allocation_reasons) == {"high_severity_candidates", "unresolved_evidence_gaps"}

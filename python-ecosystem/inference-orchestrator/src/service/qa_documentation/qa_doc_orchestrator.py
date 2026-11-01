@@ -47,6 +47,12 @@ logger = logging.getLogger(__name__)
 # Threshold: if total diff is under this many chars, skip multi-stage and do single-pass
 SINGLE_PASS_THRESHOLD = 8_000  # ~2k tokens — small PRs don't need multi-stage
 
+_VCS_REPOSITORY_ARGUMENTS = {
+    "getReviewFileContent": "repoSlug",
+    "getBranchFileContent": "repoSlug",
+    "getDirectoryByPath": "projectKey",
+}
+
 TEST_CASE_SENTINELS = (
     "<!-- codecrow-test-cases:start -->",
     "<!-- codecrow-test-cases:content -->",
@@ -89,6 +95,7 @@ class QaDocOrchestrator(BaseOrchestrator):
     ):
         super().__init__(llm, event_callback)
         self.agent_service = agent_service
+        self._repository_tool_bindings = {}
 
     @staticmethod
     def _messages(system_prompt: str, user_prompt: str) -> List[Dict[str, str]]:
@@ -325,6 +332,10 @@ class QaDocOrchestrator(BaseOrchestrator):
         Returns:
             {"documentation_needed": bool, "documentation": str | None}
         """
+        self._repository_tool_bindings = {
+            name: {"workspace": workspace_slug, argument: repo_slug}
+            for name, argument in _VCS_REPOSITORY_ARGUMENTS.items()
+        } if workspace_slug and repo_slug else {}
         request_token_hint = (
             max_allowed_tokens
             if max_allowed_tokens is not None
@@ -1382,15 +1393,24 @@ class QaDocOrchestrator(BaseOrchestrator):
     async def _invoke_document(self, messages):
         if self.agent_service is not None:
             from langchain_core.messages import AIMessage
+            from service.agent.evidence_acquisition import observation_status
             from service.agent.models import AgentExecutionRequest
             from service.review.orchestrator.stage_1_tool_inventory import (
                 STAGE1_AGENT_TOOL_NAMES,
             )
             tools = self.agent_service.available_tool_names & STAGE1_AGENT_TOOL_NAMES
+            unbound = (tools & _VCS_REPOSITORY_ARGUMENTS.keys()) - self._repository_tool_bindings.keys()
+            if unbound:
+                logger.warning("QA VCS tools lack request repository identity; skipping: %s", sorted(unbound))
+                tools = tools - unbound
             try:
                 result = await self.agent_service.execute(AgentExecutionRequest(
                     prompt="\n\n".join(message["content"] for message in messages),
                     allowed_tool_names=tools, max_steps=8, timeout_seconds=240,
+                    tool_argument_bindings={
+                        name: binding for name, binding in self._repository_tool_bindings.items()
+                        if name in tools
+                    },
                     additional_instructions=(
                         "Generate QA documentation from the saved PR changes, task and issue list. "
                         "Use the available review repository/graph tools for concrete testing gaps. "
@@ -1401,7 +1421,15 @@ class QaDocOrchestrator(BaseOrchestrator):
                     ),
                     metadata={"stage": "qa_documentation"},
                 ))
-                logger.info("QA repository tools completed: calls=%d", len(result.tool_events))
+                unavailable = sum(
+                    observation_status(event.observation) == "unavailable"
+                    for event in result.tool_events
+                )
+                logger.log(
+                    logging.WARNING if unavailable else logging.INFO,
+                    "QA repository tool results: calls=%d unavailable=%d; using available context",
+                    len(result.tool_events), unavailable,
+                )
                 return AIMessage(content=str(result.output))
             except Exception as error:
                 logger.warning("QA repository tools unavailable (%s); generating from saved context", type(error).__name__)

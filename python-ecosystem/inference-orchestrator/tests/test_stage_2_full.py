@@ -256,6 +256,9 @@ class TestExecuteStage2CrossFile:
         request.analysisMode = "FULL"
         request.deltaDiff = None
         request.maxAllowedTokens = 50_000
+        request.prChangeSummary = {
+            "files": [{"path": "src/a.py", "summary": "Summary marker"}],
+        }
         plan = MagicMock(cross_file_concerns=[])
         output = CrossFileAnalysisResult(
             pr_risk_level="LOW",
@@ -284,6 +287,8 @@ class TestExecuteStage2CrossFile:
             ) == output
 
         assert build.call_args.kwargs["token_budget"] == 30_000
+        assert build.call_args.kwargs["architecture_context"] == "No architecture context available (enrichment data not provided)."
+        assert "Summary marker" in build.call_args.kwargs["pr_change_context"]
 
 
 def _stage_2_ledger(evidence):
@@ -319,7 +324,34 @@ def _stage_2_ledger(evidence):
 
 
 class TestStage2SemanticPacking:
-    def test_semantic_packets_have_a_finite_profile_budget(self):
+    @pytest.mark.parametrize("budget", [6_000, 60_000])
+    def test_summary_and_architecture_survive_complete_and_sharded_prompts(self, budget, caplog):
+        relation = MagicMock(sourceFile="src/a.py", targetFile="src/b.py",
+                             relationshipType="CALLS", matchedOn="EXACT_RELATION_MARKER")
+        architecture = _build_architecture_context(
+            MagicMock(relationships=[relation], fileMetadata=[]), [])
+        evidence = [PrLedgerEvidence(
+            ref=f"PRF{index:03d}", scope="full_pr", path=f"src/{index}.py",
+            hunk_id=f"hunk-{index}", line_start=1, line_end=400,
+            excerpt="+changed_source_line\n" * 400, has_removal=False,
+        ) for index in range(8)]
+        prompts = _build_stage_2_prompts(
+            repo_slug="owner/repo", pr_title="Summary and graph", commit_hash="abc",
+            stage_1_findings_json="[]", architecture_context=architecture,
+            pr_change_context="PR-WIDE CHANGE CONTEXT\nSEMANTIC_CHANGE_MARKER",
+            migrations="", cross_file_concerns=[], project_rules="", task_context="",
+            task_history_context="", evidence_ledger=_stage_2_ledger(evidence),
+            token_budget=budget,
+        )
+        assert (len(prompts) > 1) == (budget == 6_000)
+        assert all(_estimated_prompt_tokens(prompt) <= budget for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 0 for prompt in prompts)
+        joined = "\n".join(prompts)
+        assert "EXACT_RELATION_MARKER" in joined
+        assert "SEMANTIC_CHANGE_MARKER" in joined
+        assert "enrichment context was malformed" not in caplog.text
+
+    def test_semantic_packets_preserve_every_dependency_under_prompt_budget(self):
         relationships = []
         metadata = []
         findings = []
@@ -384,10 +416,10 @@ class TestStage2SemanticPacking:
             token_budget=budget,
         )
 
-        assert len(prompts) == 4
+        assert len(prompts) > 4
         assert all(_estimated_prompt_tokens(prompt) <= budget for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 8 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 8 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 0 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 0 for prompt in prompts)
         assert all(prompt.omitted_hunk_count == 0 for prompt in prompts)
         joined = "\n".join(prompts)
         admitted = [
@@ -396,7 +428,7 @@ class TestStage2SemanticPacking:
             if f"RELATION_MARKER_{index:02d}" in joined
         ]
         assert admitted == list(range(len(admitted)))
-        assert 0 < len(admitted) < len(relationships)
+        assert len(admitted) == len(relationships)
         for index in admitted:
             assert joined.count(f"RELATION_MARKER_{index:02d}") >= 1
             assert joined.count(f"IMPORT_MARKER_{index:02d}") == 1
@@ -407,7 +439,7 @@ class TestStage2SemanticPacking:
             assert f"IMPORT_MARKER_{index:02d}" not in joined
             assert f"FINDING_MARKER_{index:02d}" not in joined
             assert f"EVIDENCE_MARKER_{index:02d}" not in joined
-        assert "CodeCrow Stage 2 invocation ceiling reached" in joined
+        assert "CodeCrow Stage 2 invocation ceiling reached" not in joined
 
     def test_connected_dependency_component_stays_together_when_it_fits(self):
         relation = MagicMock()
@@ -501,27 +533,15 @@ class TestStage2SemanticPacking:
             token_budget=6_000,
         )
 
-        assert len(prompts) == 4
+        assert len(prompts) > 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 30 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 31 for prompt in prompts)
-        authority_prompts = [
-            prompt for prompt in prompts
-            if "OVERSIZED_DEPENDENCY_EDGE" in prompt
-        ]
-        assert len(authority_prompts) == 3
-        assert all(
-            '"kind":"relationship"' in prompt
-            for prompt in authority_prompts
-        )
-        assert all(
-            '"kind":"stage_1_finding"' in prompt
-            for prompt in authority_prompts
-        )
-        assert any(
-            '"kind":"pr_evidence"' in prompt
-            for prompt in authority_prompts
-        )
+        assert all(prompt.omitted_packet_count == 0 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 0 for prompt in prompts)
+        evidence_prompts = [p for p in prompts if "OVERSIZED_LINE_" in p]
+        assert len(evidence_prompts) > 3
+        assert all('"kind":"relationship"' in p and '"kind":"stage_1_finding"' in p
+                   and "OVERSIZED_DEPENDENCY_EDGE" in p for p in evidence_prompts)
+        assert any('"kind":"pr_evidence"' in p for p in prompts)
         joined = "\n".join(prompts)
         admitted_lines = [
             index
@@ -529,19 +549,11 @@ class TestStage2SemanticPacking:
             if f"OVERSIZED_LINE_{index:04d}" in joined
         ]
         assert admitted_lines == list(range(len(admitted_lines)))
-        assert 0 < len(admitted_lines) < 900
-        assert "OVERSIZED_LINE_0899" not in joined
-        assert "CodeCrow Stage 2 invocation ceiling reached" in joined
+        assert len(admitted_lines) == 900
+        assert "OVERSIZED_LINE_0899" in joined
+        assert "CodeCrow Stage 2 invocation ceiling reached" not in joined
 
-    def test_multibyte_evidence_uses_a_bounded_utf8_aware_prefix(self, monkeypatch):
-        from service.review.orchestrator import stage_2_semantic_packets as packing
-        render = packing._render_stage_2_packet
-        rendered_units = {}
-        def capture_units(static, packet):
-            text = render(static, packet)
-            rendered_units[text] = {unit.key for unit in packet.units}
-            return text
-        monkeypatch.setattr(packing, "_render_stage_2_packet", capture_units)
+    def test_multibyte_evidence_is_losslessly_split_with_utf8_aware_budgets(self):
         evidence = PrLedgerEvidence(
             ref="PRF001",
             scope="full_pr",
@@ -574,21 +586,11 @@ class TestStage2SemanticPacking:
             token_budget=6_000,
         )
         prompts = _build_stage_2_prompts(**packet_arguments)
-        uncapped_prompts = _build_stage_2_prompts(**packet_arguments, max_packets=1000)
 
-        assert len(prompts) == 4
+        assert len(prompts) > 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        # Schema growth changes the exact partition, but every admitted packet
-        # must carry the same positive omission accounting and respect budget.
-        omissions = {(prompt.omitted_packet_count, prompt.omitted_unit_count) for prompt in prompts}
-        assert len(omissions) == 1
-        omitted_packets, omitted_units = omissions.pop()
-        assert omitted_packets == len(uncapped_prompts) - len(prompts)
-        all_units = set().union(*(rendered_units[str(prompt)] for prompt in uncapped_prompts))
-        admitted_units = set().union(*(rendered_units[str(prompt)] for prompt in prompts))
-        assert omitted_units == len(all_units - admitted_units)
-        assert omitted_units >= omitted_packets > 0
-        assert all(prompt.omitted_packet_count == 0 for prompt in uncapped_prompts)
+        assert all(prompt.omitted_packet_count == 0 and prompt.omitted_unit_count == 0
+                   and prompt.omitted_hunk_count == 0 for prompt in prompts)
         joined = "\n".join(prompts)
         admitted = [
             index
@@ -596,13 +598,13 @@ class TestStage2SemanticPacking:
             if f"界面変更_{index:04d}" in joined
         ]
         assert admitted == list(range(len(admitted)))
-        assert 0 < len(admitted) < 500
+        assert len(admitted) == 500
         assert all(
             joined.count(f"界面変更_{index:04d}") == 1
             for index in admitted
         )
-        assert "界面変更_0499" not in joined
-        assert "CodeCrow Stage 2 invocation ceiling reached" in joined
+        assert "界面変更_0499" in joined
+        assert "CodeCrow Stage 2 invocation ceiling reached" not in joined
 
     def test_optional_enrichment_packets_do_not_share_core_failure_boundary(self):
         relationships = []
@@ -676,17 +678,17 @@ class TestStage2SemanticPacking:
             token_budget=6_000,
         )
 
-        assert len(prompts) == 4
+        assert len(prompts) > 4
         assert all(_estimated_prompt_tokens(prompt) <= 6_000 for prompt in prompts)
-        assert all(prompt.omitted_packet_count == 6 for prompt in prompts)
-        assert all(prompt.omitted_unit_count == 6 for prompt in prompts)
+        assert all(prompt.omitted_packet_count == 0 for prompt in prompts)
+        assert all(prompt.omitted_unit_count == 0 for prompt in prompts)
         joined = "\n".join(prompts)
         admitted = [record for record in records if record in joined]
         assert admitted == records[:len(admitted)]
-        assert 0 < len(admitted) < len(records)
+        assert len(admitted) == len(records)
         assert all(joined.count(record) == 1 for record in admitted)
         assert all(record not in joined for record in records[len(admitted):])
-        assert "CodeCrow Stage 2 invocation ceiling reached" in joined
+        assert "CodeCrow Stage 2 invocation ceiling reached" not in joined
 
     def test_partial_shards_never_advertise_complete_changed_line_evidence(self):
         evidence = PrLedgerEvidence(
@@ -1012,6 +1014,7 @@ class TestMergeStage2SemanticResults:
         provenance = {}
 
         with (
+            patch("service.review.orchestrator.stage_2_cross_file.record_compute_decision") as decision,
             patch(
                 "service.review.orchestrator.stage_2_cross_file."
                 "_build_stage_2_prompts",
@@ -1032,5 +1035,6 @@ class TestMergeStage2SemanticResults:
                     prompt_provenance=provenance,
                 )
 
+        decision.assert_called_once_with("stage_2_result", completed=0, failed=1, optionalFailures=0)
         assert provenance["coreSemanticShardFailures"] == "1"
         assert provenance["completePrEvidenceVisible"] == "false"

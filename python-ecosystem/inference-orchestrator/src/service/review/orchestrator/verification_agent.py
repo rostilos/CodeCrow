@@ -29,12 +29,12 @@ from utils.diff_processor import (
     DiffChangeType,
     DiffFile,
     DiffHunk,
-    DiffProcessor,
+    process_complete_diff,
     HunkDisposition,
     ProcessedDiff,
 )
 from utils.path_identity import normalize_repository_path, repository_paths_match
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,11 @@ class VerificationAssessment(BaseModel):
     contradicting_evidence: List[VerificationCitation] = Field(default_factory=list)
     unresolved_questions: List[str] = Field(default_factory=list)
 
+    @field_validator('verdict', mode='before')
+    @classmethod
+    def canonical_verdict(cls, value: Any) -> Any:
+        return 'supported' if value == 'valid' else value
+
 
 class VerificationResult(BaseModel):
     """Evidence-backed falsification; an unsubstantiated drop vote is unknown."""
@@ -367,7 +372,9 @@ Return ONLY {{"assessments": [{{"issue_id": "issue_0", "verdict": "unknown",
 "supporting_evidence": [{{"file_path": "path", "snippet": "exact observed source"}}],
 "contradicting_evidence": [{{"file_path": "path", "snippet": "exact observed source"}}],
 "unresolved_questions": ["focused missing fact"]}}]}}.
-Use the exact Verification IDs. A disproven verdict requires a concrete contradicting
+Use the exact Verification IDs. Allowed verdict values are exactly "supported",
+"disproven", or "unknown". Use "supported" for a valid finding, never "valid".
+A disproven verdict requires a concrete contradicting
 source citation copied from an observed file. A missing file/tool failure is unknown.
 A passing check disproves only the behavior actually exercised. Preserve candidates
 when evidence is incomplete; unsupported model agreement is never verification.
@@ -536,7 +543,7 @@ def _build_file_evidence(
     if diff_source is None:
         raw_diff = getattr(request, "deltaDiff", None) or getattr(request, "rawDiff", None)
         if raw_diff:
-            diff_source = DiffProcessor().process(raw_diff)
+            diff_source = process_complete_diff(raw_diff)
 
     if diff_source:
         for diff_file in diff_source.get_included_files():
@@ -848,7 +855,7 @@ def _reviewable_hunks(diff_file: DiffFile) -> List[DiffHunk]:
         # Some direct/internal callers construct ProcessedDiff manually. Parse
         # their exact file section instead of treating missing derived hunk
         # objects as proof that the file was unchanged.
-        reparsed = DiffProcessor().process(diff_file.content)
+        reparsed = process_complete_diff(diff_file.content)
         matched = _diff_file_for_path(reparsed, diff_file.path)
         if matched is not None:
             hunks = list(matched.review_hunks)
@@ -1521,7 +1528,7 @@ async def _run_verification_tool_loop(
         acquisition_deadline = deadline - min(20.0, max(0.0, deadline - loop.time()) / 2)
         terminal_instruction = {
             "role": "user",
-            "content": "Tool acquisition has ended and tools are disabled. Return ONLY the requested assessments JSON for every Verification ID, using the exact source and complete observations above. Do not request tools. Preserve completed assessments; use unknown with focused unresolved_questions wherever evidence is incomplete. Missing or omitted tool evidence cannot disprove a finding.",
+            "content": "Tool acquisition has ended and tools are disabled. Return ONLY the requested assessments JSON for every Verification ID, using the exact source and complete observations above. Allowed verdict values are exactly supported, disproven, or unknown; use supported for a valid finding. Do not request tools. Preserve completed assessments; use unknown with focused unresolved_questions wherever evidence is incomplete. Missing or omitted tool evidence cannot disprove a finding.",
         }
         messages: List[Any] = [
             {"role": "system", "content": "You verify code-review findings and return only valid JSON."},
@@ -1896,11 +1903,11 @@ async def run_verification_agent(
     try:
         ids_to_drop: set[str] = set()
         failed_batches = 0
-        verification_deadline = asyncio.get_running_loop().time() + optional_work_budget(optional_timeout_seconds("REVIEW_VERIFICATION_TIMEOUT_SECONDS", 60))
         for batch_index, (batch_records, prompt) in enumerate(
             verification_batches,
             start=1,
         ):
+            verification_deadline = asyncio.get_running_loop().time() + optional_work_budget(optional_timeout_seconds("REVIEW_VERIFICATION_TIMEOUT_SECONDS", 60))
             attempted = False
             try:
                 observations = {}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,103 @@ PLUGINS_ROOT = Path(__file__).resolve().parents[3]
 @pytest.fixture(scope="module")
 def catalog() -> PluginCatalog:
     return PluginCatalog.discover(PLUGINS_ROOT)
+
+
+@pytest.mark.parametrize("path", ["package.json", "demos/simple/package.json"])
+def test_package_manifest_dependencies_are_source_bound_module_references(catalog, path):
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(revision="head", paths=(path,)))
+    assert "javascript" in capabilities.repository_plugins
+    assert capabilities.file_plugins[path] == ("json",)
+    content = json.dumps({
+        "dependencies": {"@emdash-cms/auth-atproto": "workspace:*"},
+        "devDependencies": {"test-tool": "^2"},
+        "optionalDependencies": {"optional-tool": "npm:other@1"},
+        "peerDependencies": {"react": ">=18"},
+        "scripts": {"fake": "@unrelated/package"},
+        "nested": {"dependencies": {"not-a-root-dependency": "*"}},
+    })
+    runtime = PluginRuntime(catalog)
+    facts, diagnostics = runtime.graph_facts(FileArtifact(path, content), capabilities)
+    assert not diagnostics
+    assert len(facts) == 4
+    assert {(fact.target, dict(fact.attributes)["section"]) for fact in facts} == {
+        ("@emdash-cms/auth-atproto", "dependencies"), ("test-tool", "devDependencies"),
+        ("optional-tool", "optionalDependencies"), ("react", "peerDependencies"),
+    }
+    for fact in facts:
+        assert fact.kind == "javascript-package-dependency" and fact.relation == "declares-dependency"
+        assert fact.source == fact.path == path and fact.line == 1 and not fact.related_paths
+        assert fact.contributing_plugin_ids == ("javascript",)
+    actual = next(f for f in facts if f.target == "@emdash-cms/auth-atproto")
+    assert dict(actual.attributes) == {"section": "dependencies", "specifier": "workspace:*",
+        "jsonPointer": "/dependencies/@emdash-cms~1auth-atproto"}
+    assert runtime.graph_facts(FileArtifact(path, content, deleted=True), capabilities) == ((), ())
+    assert runtime.graph_facts(FileArtifact("outside/package.json", content), capabilities) == ((), ())
+    assert catalog.implementation("javascript").index_file(FileArtifact("settings.json", content)).status is OutcomeStatus.ABSTAINED
+
+
+@pytest.mark.parametrize("content", ['{', '[]', '{"dependencies":[]}', '{"dependencies":{"pkg":42}}'])
+def test_malformed_package_manifest_is_an_observable_optional_failure(catalog, content):
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(revision="head", paths=("package.json",)))
+    facts, diagnostics = PluginRuntime(catalog).graph_facts(FileArtifact("package.json", content), capabilities)
+    assert not facts
+    assert any(d.plugin_id == "javascript" and d.code == "javascript-parse-failed" for d in diagnostics)
+
+
+@pytest.mark.parametrize("path", ["pnpm-workspace.yaml", "nested/pnpm-workspace.yaml"])
+def test_pnpm_catalogs_keep_source_lines_and_do_not_own_workspace_dependencies(catalog, path):
+    manifest = str(Path(path).with_name("package.json"))
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(revision="head", paths=tuple(sorted((path, manifest)))))
+    assert "pnpm" in capabilities.repository_plugins
+    runtime = PluginRuntime(catalog)
+    content = '''packages:
+  - i18n
+catalog:
+  "@lingui/cli": ^5.9.4
+catalogs:
+  legacy:
+    react: ^18.0.0
+nested:
+  catalog: {"@lunariajs/core": "fake"}
+'''
+    facts, diagnostics = runtime.graph_facts(FileArtifact(path, content), capabilities)
+    assert not diagnostics and len(facts) == 2
+    assert {(f.target, f.line) for f in facts} == {("@lingui/cli", 4), ("react", 7)}
+    assert all(f.source == "pnpm-workspace.yaml" and f.path == path and f.relation == "configures-module" for f in facts)
+    assert all(f.kind == "pnpm-catalog-entry" and f.contributing_plugin_ids == ("pnpm",) for f in facts)
+    assert dict(next(f for f in facts if f.target == "@lingui/cli").attributes) == {
+        "catalog": "default", "specifier": "^5.9.4", "yamlPointer": "/catalog/@lingui~1cli"}
+    assert dict(next(f for f in facts if f.target == "react").attributes)["yamlPointer"] == "/catalogs/legacy/react"
+    assert runtime.graph_facts(FileArtifact(path, content, deleted=True), capabilities) == ((), ())
+    assert runtime.graph_facts(FileArtifact("outside/pnpm-workspace.yaml", content), capabilities) == ((), ())
+    assert catalog.implementation("pnpm").index_file(FileArtifact("settings.yaml", content)).status is OutcomeStatus.ABSTAINED
+
+
+def test_pnpm_flow_catalogs_and_aliases_preserve_actual_declaration_locations(catalog):
+    source = 'defaults: &versions {"@scope/pkg": "workspace:^"}\ncatalog: *versions\ncatalogs: {"name/~": {"@scope/pkg": "link:./local"}}\n'
+    result = catalog.implementation("pnpm").index_file(FileArtifact("pnpm-workspace.yaml", source))
+    assert result.status is OutcomeStatus.HANDLED
+    assert {(dict(f.attributes)["catalog"], f.line) for f in result.value} == {("default", 1), ("name/~", 3)}
+    assert {dict(f.attributes)["yamlPointer"] for f in result.value} == {
+        "/catalog/@scope~1pkg", "/catalogs/name~1~0/@scope~1pkg"}
+    assert all(not f.related_paths for f in result.value)
+
+
+@pytest.mark.parametrize("source", [
+    '', 'packages: [i18n, "@lunariajs/core"]', 'catalog: []', 'catalogs: []',
+    'catalog: {pkg: 42, invalid: null}', 'catalogs: {broken: []}',
+    'defaults: &v {pkg: "1"}\ncatalog: {<<: *v}',
+])
+def test_unproven_pnpm_entries_do_not_create_module_facts(catalog, source):
+    result = catalog.implementation("pnpm").index_file(FileArtifact("pnpm-workspace.yaml", source))
+    assert result.status is OutcomeStatus.HANDLED and result.value == ()
+
+
+@pytest.mark.parametrize("source", ['catalog: [', '[]'])
+def test_malformed_pnpm_workspace_is_an_observable_optional_failure(catalog, source):
+    result = catalog.implementation("pnpm").index_file(FileArtifact("pnpm-workspace.yaml", source))
+    assert result.status is OutcomeStatus.FAILED
+    assert result.diagnostic.code == "pnpm-workspace-parse-failed" and result.diagnostic.recoverable
 
 
 @pytest.mark.parametrize(

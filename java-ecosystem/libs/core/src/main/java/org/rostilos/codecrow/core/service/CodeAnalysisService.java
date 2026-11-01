@@ -134,7 +134,8 @@ public class CodeAnalysisService {
             Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
                     .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
 
-            if (existingAnalysis.isPresent() && diffFingerprint != null
+            if (existingAnalysis.isPresent() && existingAnalysis.get().getStatus() != AnalysisStatus.PARTIAL
+                    && diffFingerprint != null
                     && diffFingerprint.equals(existingAnalysis.get().getDiffFingerprint())) {
                 log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
                         project.getId(), commitHash, pullRequestId);
@@ -209,7 +210,7 @@ public class CodeAnalysisService {
                     .findByProjectIdAndCommitHashAndAnalysisType(
                             project.getId(), commitHash, AnalysisType.BRANCH_ANALYSIS);
 
-            if (existingAnalysis.isPresent()) {
+            if (existingAnalysis.isPresent() && existingAnalysis.get().getStatus() != AnalysisStatus.PARTIAL) {
                 log.info("Direct push analysis already exists for project={}, commit={}. Returning existing.",
                         project.getId(), commitHash);
                 return existingAnalysis.get();
@@ -258,7 +259,12 @@ public class CodeAnalysisService {
     ) {
         try {
             analysis.setCommitHash(commitHash);
-            analysis.setStatus(AnalysisStatus.ACCEPTED);
+            boolean partial = analysisData.get("analysisCompletion") instanceof Map<?, ?> completion
+                    && "partial".equals(completion.get("status"));
+            analysis.setStatus(partial ? AnalysisStatus.PARTIAL : AnalysisStatus.ACCEPTED);
+            if (partial) {
+                analysis.setAnalysisResult(AnalysisResult.SKIPPED);
+            }
             prChangeSummaryService.attach(analysis, analysisData.get("prChangeSummary"));
 
             // Extract comment from the analysis data
@@ -413,7 +419,8 @@ public class CodeAnalysisService {
     }
 
     public Optional<CodeAnalysis> getCodeAnalysisCache(Long projectId, String commitHash, Long prNumber) {
-        return codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber).stream().findFirst();
+        return codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber)
+                .filter(analysis -> analysis.getStatus() != AnalysisStatus.PARTIAL);
     }
 
     /**
@@ -987,6 +994,10 @@ public class CodeAnalysisService {
 
     public CodeAnalysis saveAnalysis(CodeAnalysis analysis) {
         analysis.updateIssueCounts();
+        if (analysis.getStatus() == AnalysisStatus.PARTIAL) {
+            analysis.setAnalysisResult(AnalysisResult.SKIPPED);
+            return codeAnalysisRepository.save(analysis);
+        }
         try {
             QualityGate gate = getQualityGateForAnalysis(analysis);
             if (gate != null) {

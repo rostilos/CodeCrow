@@ -294,7 +294,7 @@ class RelationResolver:
                     )
                 except (TypeError, ValueError):
                     relation_attributes = {}
-                if relation_attributes.get("targetResolutionProven") is False:
+                if str(relation_attributes.get("targetResolutionProven")).casefold() == "false":
                     target = ""
                 target_is_scoped = (
                     str(row["kind"] or "").upper() == "CONTAINS"

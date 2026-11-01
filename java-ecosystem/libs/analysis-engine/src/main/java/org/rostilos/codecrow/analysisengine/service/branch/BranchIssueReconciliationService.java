@@ -8,7 +8,6 @@ import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine;
 import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
 import org.rostilos.codecrow.astparser.model.ParsedTree;
-import org.rostilos.codecrow.astparser.api.ScopeResolver;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
@@ -22,6 +21,7 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
+import org.rostilos.codecrow.core.util.anchoring.SnippetLocator;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -227,53 +227,36 @@ public class BranchIssueReconciliationService {
             if (contentOpt.isEmpty())
                 continue;
 
-            LineHashSequence lineHashes = LineHashSequence.from(contentOpt.get());
-            if (lineHashes.getLineCount() == 0)
-                continue;
-
             List<BranchIssue> issues = branchIssueRepository
-                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath)
-                    .stream()
-                    .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
-                    .filter(bi -> bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank())
-                    .toList();
-            if (issues.isEmpty())
-                continue;
-
-            // Delegate to shared engine — with AST scope awareness when parseable
-            ParsedTree tree = astScopeEnricher.tryParse(filePath, contentOpt.get());
-            List<SnippetVerificationResult> corrections;
-            try {
-                corrections = reconciliationEngine.verifySnippetAnchors(
-                        issues, lineHashes, tree, astScopeEnricher.getFacade().getScopeResolver());
-            } finally {
-                if (tree != null) tree.close();
-            }
-
-            for (SnippetVerificationResult svr : corrections) {
-                BranchIssue bi = (BranchIssue) svr.issue();
-                log.info("Snippet verification corrected branch issue {} in {}:{} -> {} (snippet: \"{}\")",
-                        bi.getId(), filePath, bi.getLine(), svr.correctedLine(),
-                        bi.getCodeSnippet().length() > 60
-                                ? bi.getCodeSnippet().substring(0, 57) + "..."
-                                : bi.getCodeSnippet());
-                bi.setCurrentLineNumber(svr.correctedLine());
-                bi.setCurrentLineHash(svr.correctedLineHash());
-                bi.setLineHashContext(svr.correctedContextHash());
-                if (svr.correctedScopeStartLine() != null) {
-                    bi.setCurrentScopeStartLine(svr.correctedScopeStartLine());
-                }
-                if (svr.correctedEndLineNumber() != null) {
-                    bi.setCurrentEndLineNumber(svr.correctedEndLineNumber());
-                }
-                branchIssueRepository.save(bi);
-            }
-
-            if (!corrections.isEmpty()) {
-                log.info("Snippet verification corrected {} branch issue line numbers in {} (branch: {})",
-                        corrections.size(), filePath, branch.getBranchName());
+                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
+            for (BranchIssue issue : issues) {
+                if (issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) continue;
+                refreshCurrentAnchor(issue, contentOpt.get());
+                branchIssueRepository.save(issue);
             }
         }
+    }
+
+    private void refreshCurrentAnchor(BranchIssue issue, String content) {
+        var location = SnippetLocator.locateExact(issue.getCodeSnippet(), content,
+                issue.getLine() == null ? 0 : issue.getLine());
+        if (location.line() <= 0) {
+            issue.invalidateCurrentAnchor();
+            return;
+        }
+        applyCurrentAnchor(issue, content, location, null);
+    }
+
+    private void applyCurrentAnchor(BranchIssue issue, String content,
+            SnippetLocator.LocateResult location, String commitHash) {
+        var hashes = LineHashSequence.from(content);
+        issue.setCurrentLineNumber(location.line());
+        issue.setCurrentEndLineNumber(location.endLine());
+        issue.setCurrentScopeStartLine(location.line());
+        issue.setCurrentLineHash(hashes.getHashForLine(location.line()));
+        issue.setLineHashContext(hashes.getRangeHash(location.line(), location.endLine()));
+        issue.setLastVerifiedCommit(commitHash);
+        issue.setTrackingConfidence(TrackingConfidence.EXACT);
     }
 
     // ═══════════════════════ Deterministic sweep (all files) ═════════════════
@@ -477,7 +460,7 @@ public class BranchIssueReconciliationService {
      * <ol>
      * <li><b>Rule-based pre-filter</b> — auto-resolve issues for deleted files</li>
      * <li><b>Deterministic tracking</b> — content-based identity verification</li>
-     * <li><b>AI reconciliation</b> — fallback for ambiguous issues</li>
+     * <li><b>AI reconciliation</b> — semantic decisions for every candidate</li>
      * </ol>
      */
     public record ReconciliationResult(boolean complete, String diagnostic) {}
@@ -501,26 +484,43 @@ public class BranchIssueReconciliationService {
             }
             TrackingResult tracking = performDeterministicTracking(partitioned.needsTracking, project, request,
                     archiveContents, allowVcsContentFallback);
-            for (BranchIssue issue : tracking.resolved) {
-                markResolved(issue, request.getCommitHash(), request.getSourcePrNumber(),
-                        "Issue no longer matches current code (deterministic tracking)", "deterministic-tracking");
-            }
-            List<Map<String, Object>> responses = tracking.needsAi.isEmpty() ? List.of()
-                    : performAiReconciliation(tracking.needsAi, tracking.fetchedFileContents, branch, project,
+            List<String> diagnostics = new ArrayList<>();
+            List<Map<String, Object>> responses = List.of();
+            if (!tracking.needsAi.isEmpty()) {
+                try {
+                    responses = performAiReconciliation(tracking.needsAi, tracking.fetchedFileContents, branch, project,
                             request, consumer, archiveContents, rawDiff,
                             allowVcsContentFallback && !tracking.providerUnavailable);
-            Set<Long> requestedIds = tracking.needsAi.stream()
-                    .map(issue -> issue.getOriginIssue() == null ? issue.getId() : issue.getOriginIssue().getId())
-                    .collect(java.util.stream.Collectors.toSet());
+                } catch (Exception unavailable) {
+                    diagnostics.add("AI reconciliation unavailable: " + unavailable.getMessage());
+                }
+            }
+            if (responses.stream().anyMatch(AiAnalysisClient::isPromptDryRunResult)) {
+                return new ReconciliationResult(false, "Prompt dry run did not reconcile branch issues");
+            }
+            Map<Long, BranchIssue> requested = new LinkedHashMap<>();
+            for (BranchIssue issue : tracking.needsAi) {
+                requested.put(issue.getOriginIssue() == null ? issue.getId() : issue.getOriginIssue().getId(), issue);
+            }
+            List<Map<String, Object>> completedResponses = responses;
             commit.accept(() -> {
+                Set<Long> decided = new HashSet<>();
+                for (var response : completedResponses) {
+                    processAiResponse(response, requested, tracking.fetchedFileContents, request, decided, diagnostics);
+                }
+                for (Long id : requested.keySet()) {
+                    if (!decided.contains(id)) diagnostics.add("Issue " + id + ": no reconciliation decision returned");
+                }
                 // Optimistic versions reject manual edits made while the model was running.
                 branchIssueRepository.saveAll(candidates);
-                for (var response : responses) {
-                    processAiResponse(response, branch, request.getCommitHash(), request.getSourcePrNumber(), requestedIds);
-                }
                 updateBranchCountsAfterReconciliation(branch);
             });
-            return new ReconciliationResult(true, null);
+            String diagnostic = diagnostics.isEmpty() ? null : String.join("; ", diagnostics);
+            if (diagnostic != null) {
+                log.warn("Reconciliation incomplete for branch {}: {}", request.getTargetBranchName(), diagnostic);
+                org.rostilos.codecrow.events.EventNotificationEmitter.emitStatus(consumer, "reconciliation_pending", diagnostic);
+            }
+            return new ReconciliationResult(diagnostic == null, diagnostic);
         } catch (Exception e) {
             String diagnostic = "Branch reconciliation remains pending: " + e.getMessage();
             log.warn("{} (branch={})", diagnostic, request.getTargetBranchName(), e);
@@ -566,63 +566,6 @@ public class BranchIssueReconciliationService {
                 refreshedBranch.getResolvedCount());
     }
 
-    /**
-     * Process a single reconciled issue from the AI response.
-     * Returns {@code true} if the issue was actually resolved.
-     */
-    public boolean processReconciledIssue(Map<String, Object> issueData, Branch branch,
-            String commitHash, Long sourcePrNumber) {
-        Long actualIssueId = extractIssueId(issueData);
-        if (actualIssueId == null)
-            return false;
-
-        boolean resolved = isMarkedResolved(issueData);
-        // Read dedicated resolutionReason field (not 'reason' which is the issue description)
-        String resolvedDescription = issueData.get("resolutionReason") != null
-                ? String.valueOf(issueData.get("resolutionReason"))
-                : null;
-        // Fallback: if AI didn't provide resolutionReason, use 'reason' ONLY if it
-        // differs from the original issue description (i.e. AI actually wrote a fix explanation)
-        if (resolvedDescription == null || resolvedDescription.isBlank()) {
-            resolvedDescription = "Resolved by AI reconciliation";
-        }
-
-        if (!resolved)
-            return false;
-
-        Optional<BranchIssue> branchIssueOpt = branchIssueRepository
-                .findByBranchIdAndOriginIssueId(branch.getId(), actualIssueId);
-        if (branchIssueOpt.isEmpty()) {
-            branchIssueOpt = branchIssueRepository.findById(actualIssueId)
-                    .filter(bi -> bi.getBranch().getId().equals(branch.getId()));
-        }
-
-        if (branchIssueOpt.isPresent()) {
-            BranchIssue bi = branchIssueOpt.get();
-            if (!bi.isResolved()) {
-                java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
-                bi.setResolved(true);
-                bi.setResolvedInPrNumber(sourcePrNumber);
-                bi.setResolvedInCommitHash(commitHash);
-                bi.setResolvedDescription(resolvedDescription);
-                bi.setResolvedAt(now);
-                bi.setResolvedBy("AI-reconciliation");
-                branchIssueRepository.save(bi);
-
-                log.info("Marked branch issue {} (origin CAI: {}) as resolved (commit: {}, PR: {}, description: {})",
-                        bi.getId(), actualIssueId, commitHash, sourcePrNumber,
-                        resolvedDescription != null
-                                ? resolvedDescription.substring(0, Math.min(100, resolvedDescription.length()))
-                                : "none");
-                return true;
-            }
-            return false;
-        }
-        log.debug("No BranchIssue found for origin issue {} in branch {} — may have been created before migration",
-                actualIssueId, branch.getId());
-        return false;
-    }
-
     // ═══════════════════════ Private helpers ═════════════════════════════════
 
     private List<BranchIssue> collectCandidateIssues(Set<String> changedFiles, Branch branch) {
@@ -663,9 +606,7 @@ public class BranchIssueReconciliationService {
     }
 
     /** Result of deterministic tracking pass. */
-    private record TrackingResult(List<BranchIssue> confirmed,
-            List<BranchIssue> resolved,
-            List<BranchIssue> needsAi,
+    private record TrackingResult(List<BranchIssue> needsAi,
             Map<String, String> fetchedFileContents,
             boolean providerUnavailable) {
     }
@@ -692,8 +633,6 @@ public class BranchIssueReconciliationService {
             }
         }
 
-        List<BranchIssue> confirmed = new ArrayList<>();
-        List<BranchIssue> resolved = new ArrayList<>();
         List<BranchIssue> needsAi = new ArrayList<>();
         boolean providerUnavailable = false;
 
@@ -750,6 +689,7 @@ public class BranchIssueReconciliationService {
                 if (currentHashes.getLineCount() == 0) {
                     log.debug("Classify: empty content for {} — routing {} issues to AI",
                             filePath, fileIssues.size());
+                    fileIssues.forEach(BranchIssue::invalidateCurrentAnchor);
                     needsAi.addAll(fileIssues);
                     continue;
                 }
@@ -759,66 +699,19 @@ public class BranchIssueReconciliationService {
             } catch (Exception e) {
                 log.warn("Failed to fetch file content for {}: {}. Falling back to AI reconciliation.",
                         filePath, e.getMessage());
+                fileIssues.forEach(BranchIssue::invalidateCurrentAnchor);
                 needsAi.addAll(fileIssues);
                 continue;
             }
 
-            classifyIssuesByContent(fileIssues, currentHashes, request,
-                    confirmed, resolved, needsAi, filePath, fetchedFileContents.get(filePath));
-        }
-
-        return new TrackingResult(
-                confirmed, resolved, needsAi, fetchedFileContents, providerUnavailable);
-    }
-
-    /**
-     * Classify each issue in a file as confirmed, resolved, or needing AI,
-     * based on content anchors (codeSnippet, lineHash).
-     * Delegates to {@link IssueReconciliationEngine#classifyByContent} for
-     * scope-aware, entity-agnostic classification.
-     */
-    private void classifyIssuesByContent(List<BranchIssue> fileIssues,
-            LineHashSequence currentHashes,
-            BranchProcessRequest request,
-            List<BranchIssue> confirmed,
-            List<BranchIssue> resolved,
-            List<BranchIssue> needsAi,
-            String filePath,
-            String fileContent) {
-
-        // Use AST overload — tryParse returns null for unsupported files,
-        // and the engine overload gracefully falls back to the base method
-        ParsedTree tree = astScopeEnricher.tryParse(filePath, fileContent);
-        List<ContentClassification> classifications;
-        try {
-            classifications = reconciliationEngine.classifyByContent(
-                    fileIssues, currentHashes, tree,
-                    astScopeEnricher.getFacade().getScopeResolver());
-        } finally {
-            if (tree != null) tree.close();
-        }
-
-        for (ContentClassification cc : classifications) {
-            BranchIssue bi = (BranchIssue) cc.issue();
-            switch (cc.classification()) {
-                case CONFIRMED -> {
-                    bi.setCurrentLineNumber(cc.updatedLine());
-                    bi.setCurrentLineHash(cc.updatedLineHash());
-                    if (cc.updatedScopeStartLine() != null) {
-                        bi.setCurrentScopeStartLine(cc.updatedScopeStartLine());
-                    }
-                    if (cc.updatedEndLineNumber() != null) {
-                        bi.setCurrentEndLineNumber(cc.updatedEndLineNumber());
-                    }
-                    bi.setTrackingConfidence(TrackingConfidence.EXACT);
-                    confirmed.add(bi);
-                    // An unchanged anchor locates the finding; guards or dependencies can still fix it.
-                    needsAi.add(bi);
-                }
-                case RESOLVED -> resolved.add(bi);
-                case NEEDS_AI -> needsAi.add(bi);
+            for (BranchIssue issue : fileIssues) {
+                refreshCurrentAnchor(issue, fetchedFileContents.get(filePath));
+                // A matching anchor can still be fixed by a changed guard or dependency.
+                needsAi.add(issue);
             }
         }
+
+        return new TrackingResult(needsAi, fetchedFileContents, providerUnavailable);
     }
 
     /**
@@ -836,44 +729,47 @@ public class BranchIssueReconciliationService {
         consumer.accept(Map.of(
                 "type", "status",
                 "state", "reanalyzing_issues",
-                "message", "AI reconciliation for " + needsAiReconciliation.size() + " ambiguous issues"));
+                "message", "AI reconciliation for " + needsAiReconciliation.size() + " candidate issues"));
 
         List<AiRequestPreviousIssueDTO> previousIssueDTOs = needsAiReconciliation.stream()
-                    .map(AiRequestPreviousIssueDTO::fromBranchIssue)
-                    .toList();
+                .map(AiRequestPreviousIssueDTO::fromBranchIssue)
+                .toList();
 
-            var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-            VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            VcsClient client = allowVcsContentFallback
-                    ? vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection())
-                    : null;
+        var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
+        EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
+        VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
+        VcsClient client = allowVcsContentFallback
+                ? vcsClientProvider.getClient(vcsRepoInfo.getVcsConnection())
+                : null;
 
-            // Build file contents for AI — only files that have issues needing
-            // reconciliation (+ cross-file context from issue descriptions — Fix 3)
-            Map<String, String> aiFileContents = buildAiFileContents(
-                    needsAiReconciliation, fetchedFileContents, archiveContents,
-                    client, vcsRepoInfo.getRepoWorkspace(),
-                    vcsRepoInfo.getRepoSlug(), request.getCommitHash(),
-                    allowVcsContentFallback);
+        // Build file contents for AI — only files that have issues needing
+        // reconciliation (+ cross-file context from issue descriptions — Fix 3)
+        Map<String, String> aiFileContents = buildAiFileContents(
+                needsAiReconciliation, fetchedFileContents, archiveContents,
+                client, vcsRepoInfo.getRepoWorkspace(),
+                vcsRepoInfo.getRepoSlug(), request.getCommitHash(),
+                allowVcsContentFallback);
 
-            // Build relevant per-file diff filtered to only files with AI-bound issues
-            // This gives the LLM "before → after" context for recognising applied fixes
-            String relevantDiff = buildRelevantDiff(rawDiff, needsAiReconciliation);
+        fetchedFileContents.putAll(aiFileContents);
 
-            log.info("Sending {} file contents{} for MCP-free AI reconciliation",
-                    aiFileContents.size(),
-                    relevantDiff != null ? " (with diff context)" : "");
+        // Build relevant per-file diff filtered to only files with AI-bound issues
+        // This gives the LLM "before → after" context for recognising applied fixes
+        String relevantDiff = buildRelevantDiff(rawDiff, needsAiReconciliation);
 
-            List<AiAnalysisRequest> aiReqs = aiClientService.buildAiAnalysisRequestsForBranchReconciliation(
-                    project, request, previousIssueDTOs, aiFileContents, relevantDiff);
+        log.info("Sending {} file contents{} for MCP-free AI reconciliation",
+                aiFileContents.size(),
+                relevantDiff != null ? " (with diff context)" : "");
 
-            if (aiReqs.isEmpty()) throw new IllegalStateException("No reconciliation requests could be prepared");
-            List<Map<String, Object>> responses = new ArrayList<>();
-            for (int i = 0; i < aiReqs.size(); i++) {
-                log.info("Processing AI reconciliation chunk {}/{} (Branch: {})",
-                        i + 1, aiReqs.size(), request.getTargetBranchName());
+        List<AiAnalysisRequest> aiReqs = aiClientService.buildAiAnalysisRequestsForBranchReconciliation(
+                project, request, previousIssueDTOs, aiFileContents, relevantDiff);
 
+        if (aiReqs.isEmpty()) throw new IllegalStateException("No reconciliation requests could be prepared");
+        List<Map<String, Object>> responses = new ArrayList<>();
+        for (int i = 0; i < aiReqs.size(); i++) {
+            log.info("Processing AI reconciliation chunk {}/{} (Branch: {})",
+                    i + 1, aiReqs.size(), request.getTargetBranchName());
+
+            try {
                 Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReqs.get(i), event -> {
                     try {
                         consumer.accept(event);
@@ -891,18 +787,20 @@ public class BranchIssueReconciliationService {
                             "state", "prompt_dry_run_completed",
                             "message", "Prompt dry run completed without reconciling issue state",
                             "promptArtifact", aiResponse.getOrDefault("promptArtifact", Map.of())));
-                    throw new IllegalStateException("Prompt dry run did not reconcile branch issues");
-                }
-                if ("degraded".equals(aiResponse.get("reconciliationStatus"))) {
-                    throw new IllegalStateException(String.valueOf(aiResponse.getOrDefault("comment", "Incomplete reconciliation evidence")));
+                    responses.add(aiResponse);
+                    continue;
                 }
                 if (!(aiResponse.get("issues") instanceof List<?> || aiResponse.get("issues") instanceof Map<?, ?>)) {
                     throw new IllegalStateException("Reconciliation response has no usable issue decisions");
                 }
                 responses.add(aiResponse);
+            } catch (Exception unavailable) {
+                responses.add(Map.of("issues", List.of(), "reconciliationStatus", "degraded",
+                        "comment", "Reconciliation chunk " + (i + 1) + " unavailable: " + unavailable.getMessage()));
             }
+        }
 
-            return responses;
+        return responses;
     }
 
     private Map<String, String> buildAiFileContents(
@@ -1088,36 +986,56 @@ public class BranchIssueReconciliationService {
     }
 
     @SuppressWarnings("unchecked")
-    private int processAiResponse(Map<String, Object> aiResponse, Branch branch,
-            String commitHash, Long sourcePrNumber, Set<Long> requestedIds) {
-        Object issuesObj = aiResponse.get("issues");
-        int aiResolvedCount = 0;
-
-        if (issuesObj instanceof List) {
-            List<Object> issuesList = (List<Object>) issuesObj;
-            for (Object item : issuesList) {
-                if (item instanceof Map) {
-                    if (requestedIds.contains(extractIssueId((Map<String, Object>) item))
-                            && processReconciledIssue((Map<String, Object>) item, branch, commitHash, sourcePrNumber)) {
-                        aiResolvedCount++;
-                    }
-                }
-            }
-        } else if (issuesObj instanceof Map) {
-            Map<String, Object> issuesMap = (Map<String, Object>) issuesObj;
-            for (Map.Entry<String, Object> mapEntry : issuesMap.entrySet()) {
-                Object val = mapEntry.getValue();
-                if (val instanceof Map) {
-                    if (requestedIds.contains(extractIssueId((Map<String, Object>) val))
-                            && processReconciledIssue((Map<String, Object>) val, branch, commitHash, sourcePrNumber)) {
-                        aiResolvedCount++;
-                    }
-                }
-            }
-        } else if (issuesObj != null) {
-            log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
+    private void processAiResponse(Map<String, Object> response, Map<Long, BranchIssue> requested,
+            Map<String, String> sources, BranchProcessRequest request, Set<Long> decided, List<String> diagnostics) {
+        Object raw = response.get("issues");
+        Collection<?> decisions = raw instanceof List<?> list ? list
+                : raw instanceof Map<?, ?> map ? map.values() : List.of();
+        if ("degraded".equals(response.get("reconciliationStatus"))) {
+            diagnostics.add(String.valueOf(response.getOrDefault("comment", "Incomplete reconciliation evidence")));
         }
-        return aiResolvedCount;
+        for (Object item : decisions) {
+            if (!(item instanceof Map<?, ?>)) continue;
+            Map<String, Object> decision = (Map<String, Object>) item;
+            Long id = extractIssueId(decision);
+            BranchIssue issue = requested.get(id);
+            if (issue == null || !decided.add(id)) continue;
+            String reason = Objects.toString(decision.get("resolutionReason"), "").strip();
+            Object resolved = decision.get("isResolved");
+            if (reason.isBlank() || !(resolved instanceof Boolean)) {
+                diagnostics.add("Issue " + id + ": " + (reason.isBlank() ? "decision lacks evidence" : reason));
+                continue;
+            }
+            if (Boolean.TRUE.equals(resolved)) {
+                markResolved(issue, request.getCommitHash(), request.getSourcePrNumber(), reason, "AI-reconciliation");
+                continue;
+            }
+            if (issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) {
+                issue.setReason(reason);
+                continue;
+            }
+            String path = Objects.toString(decision.get("filePath"), "");
+            String snippet = Objects.toString(decision.get("codeSnippet"), "");
+            int line = positiveLine(decision.get("lineNumber"));
+            int endLine = positiveLine(decision.get("endLineNumber"));
+            // The request owns the path and revision; model output cannot select another repository or file.
+            String content = sources.get(issue.getFilePath());
+            var location = SnippetLocator.locateExact(snippet, content, line);
+            if (!path.equals(issue.getFilePath()) || line <= 0 || location.line() != line
+                    || location.endLine() != endLine) {
+                diagnostics.add("Issue " + id + ": returned anchor does not match the reviewed source range");
+                continue;
+            }
+            issue.setCodeSnippet(snippet.strip());
+            issue.setReason(reason);
+            applyCurrentAnchor(issue, content, location, request.getCommitHash());
+        }
+    }
+
+    private int positiveLine(Object value) {
+        if (value instanceof Integer number) return number;
+        if (value instanceof Long number && number <= Integer.MAX_VALUE && number > 0) return number.intValue();
+        return 0;
     }
 
     private Long extractIssueId(Map<String, Object> issueData) {
@@ -1135,12 +1053,4 @@ public class BranchIssueReconciliationService {
         return null;
     }
 
-    private boolean isMarkedResolved(Map<String, Object> issueData) {
-        Object isResolvedObj = issueData.get("isResolved");
-        if (isResolvedObj instanceof Boolean) {
-            return (Boolean) isResolvedObj;
-        }
-        return issueData.get("status") != null
-                && "resolved".equalsIgnoreCase(String.valueOf(issueData.get("status")));
-    }
 }

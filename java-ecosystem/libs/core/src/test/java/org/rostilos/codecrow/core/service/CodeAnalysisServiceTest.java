@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -28,6 +30,31 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("CodeAnalysisService")
 class CodeAnalysisServiceTest {
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void partialResponsePersistsForPrAndBranchWithoutQualityVerdict(boolean branch) {
+        Project project = createProject(7L, "partial");
+        when(codeAnalysisRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        Map<String, Object> data = createBasicAnalysisData("Review incomplete: one batch failed");
+        data.put("analysisCompletion", Map.of("status", "partial", "incompleteStages", List.of("stage_1")));
+        CodeAnalysis result = branch
+                ? codeAnalysisService.createDirectPushAnalysisFromAiResponse(project, data, "main", "head", Map.of())
+                : codeAnalysisService.createAnalysisFromAiResponse(project, data, 9L, "main", "feature", "head", null, null);
+        assertThat(result.getStatus()).isEqualTo(AnalysisStatus.PARTIAL);
+        assertThat(result.getAnalysisResult()).isEqualTo(AnalysisResult.SKIPPED);
+        assertThat(result.getComment()).contains("incomplete");
+        verifyNoInteractions(qualityGateEvaluator);
+    }
+
+    @Test
+    void partialResultCannotBeReusedAsCompletedCacheHit() {
+        CodeAnalysis partial = new CodeAnalysis();
+        partial.setStatus(AnalysisStatus.PARTIAL);
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(7L, "head", 9L))
+                .thenReturn(Optional.of(partial));
+        assertThat(codeAnalysisService.getCodeAnalysisCache(7L, "head", 9L)).isEmpty();
+    }
 
     @Mock
     private CodeAnalysisRepository codeAnalysisRepository;

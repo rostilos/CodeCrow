@@ -159,7 +159,7 @@ def query_review_graph(
         if isinstance(item, Mapping)
     ]
     unit_results = pattern.strip().casefold() in {
-        "symbol_search", "symbols", "file_summary",
+        "symbol_search", "symbols", "file_summary", "file_search",
     }
     units: list[dict[str, Any]] = []
     relations: list[dict[str, Any]] = []
@@ -217,6 +217,7 @@ def query_review_graph(
         "snapshot": reader.snapshot(),
         "pattern": exact.get("pattern") or pattern,
         "target": target,
+        **({'fileCoverage': exact['fileCoverage']} if 'fileCoverage' in exact else {}),
         "cursor": int(exact.get("cursor") or cursor),
         "nextCursor": exact.get("nextCursor"),
         "resolvedUnits": response_resolved_units,

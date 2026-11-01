@@ -568,6 +568,13 @@ class DiffProcessor:
         return f"{existing}; {reason}"
 
 
+def process_complete_diff(raw_diff: Optional[str]) -> ProcessedDiff:
+    """Retain acquired textual hunks; review prompt packing owns size limits."""
+    raw = raw_diff or ""
+    size = len(raw.encode("utf-8")) + 1
+    return DiffProcessor(size, size, size, size).process(raw)
+
+
 def process_raw_diff(raw_diff: Optional[str]) -> ProcessedDiff:
     """
     Convenience function to process raw diff with default settings.

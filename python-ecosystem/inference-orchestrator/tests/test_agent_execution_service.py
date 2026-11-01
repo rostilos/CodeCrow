@@ -1128,6 +1128,20 @@ async def test_similar_user_text_is_not_treated_as_model_call_limit():
     assert result.output == output
 
 
+@pytest.mark.parametrize('mode', ['sync', 'async'])
+def test_required_tool_survives_real_framework_structured_output_binding(mode):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    source = Path(__file__).resolve().parents[1] / 'src'
+    fixture = Path(__file__).parent / 'fixtures/required_tool_binding.py'
+    result = subprocess.run([sys.executable, str(fixture), mode],
+        env={**os.environ, 'PYTHONPATH': str(source)}, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.asyncio(loop_scope="function")
 async def test_initial_required_tool_choice_expires_without_changing_inventory():
     middleware = InitialRequiredToolMiddleware(tool_name="getStructuralRelations")
@@ -1378,9 +1392,10 @@ async def test_initial_required_tool_keeps_explicit_openrouter_provider_preferen
             apply_reserve,
         )
 
-    assert prepared.tools == [graph_tool, file_tool]
+    assert prepared.tools[:2] == [graph_tool, file_tool]
+    assert prepared.tools[2]['function']['name'] == '_Output'
     assert prepared.tool_choice == "exploreReviewContext"
-    assert prepared.response_format is response_format
+    assert prepared.response_format is None
     assert prepared.model_settings == {
         "temperature": 0,
         "extra_body": {

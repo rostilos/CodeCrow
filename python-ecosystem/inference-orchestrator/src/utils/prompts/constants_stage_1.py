@@ -183,8 +183,8 @@ PRE-OUTPUT SELF-CHECK FOR EACH NEW FINDING:
 OUTPUT FORMAT:
 Return ONLY valid JSON with this structure:
 {{
-  "reviews": [
-    {{
+  "reviews": {{
+    "path/to/file": {{
       "file": "path/to/file",
       "analysis_summary": "Short summary for this file",
       "issues": [
@@ -210,11 +210,13 @@ Return ONLY valid JSON with this structure:
       "confidence": "HIGH|MEDIUM|LOW|INFO",
       "note": ""
     }}
-  ]
+  }}
 }}
 
 OUTPUT CONSTRAINTS:
-- Return exactly one review object per input file and match file paths exactly.
+- Return one required entry in reviews for every input file, keyed by its exact
+  path, including files with no findings. Do not omit a file because its finding
+  is reported under another path or this is a supplemental specialist pass.
 - Every NEW finding must include a non-empty current-source codeSnippet from a
   reviewable changed hunk and a scope; for a deleted file use removed BASE source.
 - An exact matched previous issue returned only with isResolved=true may preserve

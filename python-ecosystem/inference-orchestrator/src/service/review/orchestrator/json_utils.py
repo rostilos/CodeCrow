@@ -368,6 +368,7 @@ def load_json_with_local_repairs(text: str) -> tuple[str, Any]:
         _remove_trailing_commas(cleaned),
         _escape_invalid_string_characters(cleaned),
         _escape_invalid_string_characters(_remove_trailing_commas(cleaned)),
+        _remove_trailing_commas(_escape_invalid_string_characters(cleaned)),
     ]
 
     last_error = None
@@ -385,7 +386,39 @@ def load_json_with_local_repairs(text: str) -> tuple[str, Any]:
 
 
 def _remove_trailing_commas(text: str) -> str:
-    return re.sub(r",\s*([}\]])", r"\1", text)
+    # Walk JSON tokens so punctuation inside source snippets stays untouched.
+    result = []
+    index = 0
+    while index < len(text):
+        if text[index] == '"':
+            try:
+                _, end = json.decoder.scanstring(text, index + 1)
+            except ValueError:
+                result.append(text[index:])
+                break
+            result.append(text[index:end])
+            index = end
+            continue
+        if text[index] == ',':
+            match = re.match(r',\s*(?:"\s*)?([}\]])', text[index:])
+            if match:
+                end = index + match.end() - 1
+                # A stray opening quote before an object terminator is not a
+                # member name. Preserve any real quoted key followed by ':'.
+                quote = text.find('"', index, end)
+                if quote >= 0:
+                    try:
+                        _, key_end = json.decoder.scanstring(text, quote + 1)
+                        if text[key_end:].lstrip().startswith(':'):
+                            match = None
+                    except ValueError:
+                        pass
+                if match:
+                    index = end
+                    continue
+        result.append(text[index])
+        index += 1
+    return ''.join(result)
 
 
 def _escape_invalid_string_characters(text: str) -> str:

@@ -128,6 +128,14 @@ from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, Proces
             "bounded",
         ),
         ({"status": "ready", "unit": {}}, "complete"),
+        ({"status": "bounded"}, "bounded"),
+        ({"status": "ready", "coverage": {"graphState": "complete_for_query"}}, "complete"),
+        ({"status": "not_found", "unit": None, "sourceEvidence": False}, "unavailable"),
+        ({"status": "not_applicable"}, "unavailable"),
+        ({"status": "unsupported"}, "unavailable"),
+        ({"status": "ready", "context": {"status": "not_found"}}, "unavailable"),
+        ({"status": "ready", "coverage": {"graphState": "partial"}}, "unavailable"),
+        ({"status": "ready", "coverage": {"graphState": "unsupported"}}, "unavailable"),
         (
             {
                 "status": "ready",
@@ -344,6 +352,22 @@ def test_exact_proposed_tree_binding_requires_sealed_generation_receipt(field):
 
 
 class TestBatchReviewCoverage:
+    def test_keyed_partial_output_preserves_valid_siblings_without_inventing_reviews(self):
+        paths = ['src/a.py', 'src/b.py', 'src/c.py']
+        event = SimpleNamespace(action=SimpleNamespace(
+            tool='FileReviewBatchOutput', tool_input={'reviews': {
+                paths[0]: _clean_file_review(paths[0]).model_dump(),
+                paths[1]: {'file': paths[1], 'issues': []},
+                paths[2]: _clean_file_review('wrong.py').model_dump(),
+            }}), observation='schema validation failed')
+        accumulator = _Stage1BatchReviewAccumulator.for_paths(paths)
+        assert _salvage_stage1_schema_tool_outputs(
+            [event], accumulator, paths, generation_prompt='review', source_phase='agent',
+        ) == 1
+        assert accumulator.missing_paths() == paths[1:]
+        with pytest.raises(ValueError, match='coverage mismatch'):
+            _validate_batch_review_coverage(accumulator.output(), paths)
+
     def test_exact_clean_coverage_is_valid(self):
         output = FileReviewBatchOutput(
             reviews=[_clean_file_review("src/a.py"), _clean_file_review("src/b.py")]
@@ -846,7 +870,8 @@ class TestBatchReviewCoverage:
         assert request.allowed_tool_names == STAGE1_AGENT_TOOL_NAMES.difference({"runVerificationCheck"})
         assert request.reasoning_effort is ReasoningEffort.MEDIUM
         assert request.max_output_tokens == expected
-        assert request.output_schema is FileReviewBatchOutput
+        assert issubclass(request.output_schema, FileReviewBatchOutput)
+        assert request.output_schema.model_json_schema()['properties']['reviews']['required'] == ['src/a.py']
         assert request.metadata["batchPaths"] == ("src/a.py",)
         assert request.initial_required_tool_name == "getMinimalReviewContext"
         expected_bindings = {
@@ -916,7 +941,7 @@ class TestBatchReviewCoverage:
 
         assert result == []
         assert len(agent_service.requests) == 1
-        assert agent_service.requests[0].output_schema is FileReviewBatchOutput
+        assert issubclass(agent_service.requests[0].output_schema, FileReviewBatchOutput)
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_agent_transport_failure_falls_back_to_prepared_prompt(self):
@@ -1368,6 +1393,23 @@ class TestChunkFiles:
 # ── Stage 1 prepared context ────────────────────────────────────
 
 class TestStage1PreparedContext:
+    def test_shared_summary_is_prepared_once_and_isolated_between_reviews(self):
+        from service.review import change_summary
+        request = _packing_request(['a.py'], None)
+        request.prChangeSummary = {'files': [{'path': 'a.py', 'summary': 'Original behavior'}]}
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        material = _prepare_stage1_prompt_material(request, [], prepared, False)
+        with patch('service.review.orchestrator.stage_1_file_review.prepare_change_summary_context',
+                   wraps=change_summary.prepare_change_summary_context) as prepare:
+            first = _render_stage1_prompt(material, '')[0]
+            assert _render_stage1_prompt(material, '')[0] == first
+            assert prepare.call_count == 1
+        other = _packing_request(['a.py'], None)
+        other.prChangeSummary = {'files': [{'path': 'a.py', 'summary': 'Different tenant behavior'}]}
+        other_material = _prepare_stage1_prompt_material(other, [], _build_stage_1_prepared_context(other, None, False), False)
+        assert 'Different tenant behavior' in _render_stage1_prompt(other_material, '')[0]
+        assert 'Different tenant behavior' not in first
+
     @pytest.mark.parametrize("nested_first", [False, True])
     def test_exact_paths_survive_colliding_suffixes(self, nested_first):
         from service.review.orchestrator.stage_1_local_packing import _lookup_by_path
@@ -2199,6 +2241,22 @@ class TestRenderedInputPacking:
             "_hunk_ids": (f"hunk:{path}",),
         } for path in paths]
 
+    def test_large_pr_area_summary_survives_in_each_file_prompt(self):
+        paths = [f'src/file{i}.py' for i in range(200)]
+        request = _packing_request(paths, None)
+        request.maxAllowedTokens = 200_000
+        request.prChangeSummary = dict(summary='Large PR overview',
+            files=[dict(path=p, summary='Detailed current behavior') for p in paths],
+            changeAreas=[dict(title=f'Area {i}', paths=[p],
+                changes=[f'Behavior {i}: ' + 'before and after; ' * 40]) for i, p in enumerate(paths)])
+        prepared = _build_stage_1_prepared_context(request, None, False)
+        for path in (paths[0], paths[-1]):
+            material = _prepare_stage1_prompt_material(request, self._batch([path]), prepared, False)
+            prompt, _ = _render_stage1_prompt(material, '')
+            assert all(f'Behavior {i}: ' in prompt for i in range(200))
+            assert 'required PR context exceeds' not in prompt
+            assert _estimated_prompt_tokens(prompt) <= _stage1_batch_token_limit(request)
+
     def test_agent_repository_tools_use_the_pinned_target_revision(self):
         request = _packing_request(["src/a.py"], None)
         request.useMcpTools = True
@@ -2527,8 +2585,6 @@ class TestRenderedInputPacking:
             prepared,
             False,
             token_budget,
-            max_units_per_item=3,
-            max_total_batches=3,
         )
         units = [batch[0] for batch in expanded]
 
@@ -2606,8 +2662,6 @@ class TestRenderedInputPacking:
             prepared,
             False,
             token_budget=8_000,
-            max_units_per_item=3,
-            max_total_batches=3,
         )
 
         assert 1 <= len(expanded) <= 3
@@ -4360,6 +4414,37 @@ class TestCreateSmartBatchesWrapper:
 
 
 class TestStage1Scheduling:
+    @pytest.mark.asyncio
+    async def test_packing_keeps_worker_heartbeat_responsive(self, monkeypatch):
+        import threading
+        from service.review.orchestrator import stage_1_file_review as stage
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Queue()
+        releases = [threading.Event(), threading.Event()]
+        calls = []
+        def pack(batches, *_args):
+            index = len(calls)
+            calls.append(index)
+            loop.call_soon_threadsafe(entered.put_nowait, index)
+            assert releases[index].wait(2), 'Packing blocked the heartbeat event loop'
+            return batches
+        monkeypatch.setattr(stage, 'create_smart_batches_wrapper', AsyncMock(return_value=[]))
+        monkeypatch.setattr(stage, '_repack_stage1_batches_by_rendered_input', pack)
+        monkeypatch.setattr(stage, '_expand_oversized_stage1_evidence_batches', pack)
+        task = asyncio.create_task(stage.execute_stage_1_file_reviews(
+            None, _packing_request([], None), ReviewPlan(analysis_summary='', file_groups=[], cross_file_concerns=[]),
+            None, inference_profile=SimpleNamespace(invocation_cap=lambda _: 1),
+        ))
+        try:
+            for expected in range(2):
+                assert await asyncio.wait_for(entered.get(), 1) == expected
+                releases[expected].set()
+            assert await task == []
+        finally:
+            for release in releases:
+                release.set()
+            await asyncio.gather(task, return_exceptions=True)
+
     @pytest.fixture(autouse=True)
     def explicit_packed_batches(self):
         # These tests exercise scheduling after packing, with one core batch
@@ -4551,7 +4636,7 @@ class TestStage1Scheduling:
         assert len(state.completed_unit_ids) == 3
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_any_failed_batch_fails_the_whole_stage(self):
+    async def test_failed_batch_retains_sibling_findings_and_incomplete_units(self):
         files = [ReviewFile(path=f"src/f{i}.py", focus_areas=[], risk_level="MEDIUM") for i in range(2)]
         batches = [[{"file": file, "priority": "MEDIUM"}] for file in files]
         request = MagicMock(
@@ -4569,7 +4654,9 @@ class TestStage1Scheduling:
             if batch[0]["file"].path.endswith("f0.py"):
                 raise RuntimeError("provider timeout")
             await asyncio.sleep(0.1)
-            return []
+            return ["retained sibling finding"]
+
+        state = Stage1ReviewUnitState()
 
         with patch(
             "service.review.orchestrator.stage_1_file_review.create_smart_batches_wrapper",
@@ -4578,14 +4665,16 @@ class TestStage1Scheduling:
             "service.review.orchestrator.stage_1_file_review.review_file_batch",
             side_effect=fake_review,
         ):
-            with pytest.raises(RuntimeError, match="Stage 1 review is incomplete"):
-                await execute_stage_1_file_reviews(
-                    llm=MagicMock(),
-                    request=request,
-                    plan=ReviewPlan(analysis_summary="x", file_groups=[], cross_file_concerns=[]),
-                    rag_client=None,
-                    max_parallel=2,
-                )
+            issues = await execute_stage_1_file_reviews(
+                llm=MagicMock(), request=request,
+                plan=ReviewPlan(analysis_summary="x", file_groups=[], cross_file_concerns=[]),
+                rag_client=None, max_parallel=2, review_unit_state=state,
+            )
+        assert issues == ["retained sibling finding"]
+        assert state.failed_batches == {1: "provider timeout"}
+        assert len(state.completed_unit_ids) == 1
+        with pytest.raises(RuntimeError, match="coverage is incomplete"):
+            state.assert_complete()
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_cancellation_joins_batch_agents_before_propagating(self):

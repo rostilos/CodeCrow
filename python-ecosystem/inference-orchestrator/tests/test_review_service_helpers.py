@@ -814,3 +814,67 @@ def test_coverage_notice_does_not_label_failed_review_as_completed():
     response = {"result": create_error_response("Review timed out")}
     ReviewService._include_coverage_notice(SimpleNamespace(ragReviewGenerationStatus="unavailable"), response)
     assert response["result"]["comment"] == "Review timed out"
+
+
+@pytest.mark.parametrize('failed,expected', [(0, 'complete'), (1, 'partial'), (3, 'partial')])
+@pytest.mark.parametrize('stage', ['stage_1', 'stage_2'])
+def test_core_batch_failure_is_visible_without_discarding_findings(failed, expected, stage):
+    from types import SimpleNamespace
+    from service.review.review_service import ReviewService
+    finding = {'file': 'a.py', 'title': 'Retained defect'}
+    response = {'result': {'issues': [finding], 'comment': 'Original report'}, 'inferenceUsage': {
+        'decisions': [{'kind': stage + '_result', 'completed': 3 - failed, 'failed': failed, 'optionalFailures': 2}]}}
+    ReviewService._include_coverage_notice(SimpleNamespace(), response)
+    assert response['result']['analysisCompletion']['status'] == expected
+    assert response['result']['issues'] == [finding]
+    if failed:
+        assert response['result']['analysisCompletion']['incompleteStages'] == [stage]
+        assert response['result']['comment'].startswith('**Review incomplete.**')
+    else:
+        assert response['result']['comment'] == 'Original report'
+
+
+def test_missing_graph_is_distinct_from_an_incomplete_semantic_scan():
+    from types import SimpleNamespace
+    from service.review.review_service import ReviewService
+    response = {'result': {'issues': [], 'comment': '',
+        'prChangeSummary': {'semanticStatus': 'complete', 'graph': {'coverage': {'status': 'unavailable'}}}}}
+    request = SimpleNamespace(ragReviewGenerationStatus='unavailable')
+    ReviewService._include_coverage_notice(request, response)
+    assert response['result']['analysisCompletion']['status'] == 'complete'
+    response['result']['prChangeSummary']['semanticStatus'] = 'degraded'
+    ReviewService._include_coverage_notice(request, response)
+    assert response['result']['analysisCompletion'] == {'status': 'partial', 'incompleteStages': ['change_scan']}
+
+
+def test_incomplete_verification_is_not_reported_as_complete():
+    from types import SimpleNamespace
+    from service.review.review_service import ReviewService
+    response = {'result': {'issues': [{'title': 'Unresolved candidate'}], 'comment': 'Saved report'},
+        'inferenceUsage': {'decisions': [{'kind': 'verification_batch', 'outcome': 'timeout', 'retainedCandidates': 1}]}}
+    ReviewService._include_coverage_notice(SimpleNamespace(), response)
+    assert response['result']['analysisCompletion'] == {'status': 'partial', 'incompleteStages': ['verification']}
+    assert len(response['result']['issues']) == 1 and 'verification' in response['result']['comment']
+
+
+def test_whole_scan_fallback_without_semantic_status_is_partial():
+    from types import SimpleNamespace
+    from service.review.review_service import ReviewService
+    response = {'result': {'issues': [], 'prChangeSummary': {
+        'status': 'degraded', 'batches': 0,
+        'files': [{'path': 'a.py', 'scanStatus': 'unavailable'}]}}}
+    ReviewService._include_coverage_notice(SimpleNamespace(), response)
+    assert response['result']['analysisCompletion'] == {'status': 'partial', 'incompleteStages': ['change_scan']}
+
+
+@pytest.mark.parametrize('remaining,expected', [(0, 'complete'), (2, 'partial')])
+def test_final_verification_assessment_controls_completion_after_recovery(remaining, expected):
+    from types import SimpleNamespace
+    from service.review.review_service import ReviewService
+    response = {'result': {'issues': [{'title': 'Retained candidate'}], 'comment': 'Report'},
+        'inferenceUsage': {'decisions': [
+            {'kind': 'verification_batch', 'outcome': 'timeout'},
+            {'kind': 'verification_result', 'incomplete': remaining}]}}
+    ReviewService._include_coverage_notice(SimpleNamespace(), response)
+    assert response['result']['analysisCompletion']['status'] == expected
+    assert ('verification' in response['result']['analysisCompletion']['incompleteStages']) == bool(remaining)

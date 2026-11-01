@@ -394,6 +394,8 @@ class GenerationBuilder:
                     writer, commit=commit, repository_facts=repository_facts,
                     repository_files=repository_files, project_type=project_type,
                     source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
+                    include_patterns=include_patterns or (),
+                    exclude_patterns=[*self.config.excluded_patterns, *(exclude_patterns or ())],
                 )
             self._raise_if_cancelled(cancellation_event)
             self._progress(
@@ -655,6 +657,8 @@ class GenerationBuilder:
                     writer, commit=commit, repository_facts=repository_facts,
                     repository_files=repository_files, project_type=project_type,
                     source_root=source_root, source_file_sha256=source_tree.file_sha256_by_path,
+                    include_patterns=include_patterns or (),
+                    exclude_patterns=[*self.config.excluded_patterns, *(exclude_patterns or ())],
                 )
             self._raise_if_cancelled(cancellation_event)
             self._progress(

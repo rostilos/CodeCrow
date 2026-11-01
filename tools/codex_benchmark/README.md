@@ -23,6 +23,13 @@ checks both before serving requests. It records request hashes, model, auth type
 tool names, native usage when available, and errors in `subscription-ledger.jsonl`.
 No model API keys are passed to the CLI.
 
+Native provider errors retain their HTTP status through the facade: exhausted
+upstream 429 responses remain 429, native capacity errors become 503, and elapsed
+request deadlines become 504. Unclassified transport/local exceptions remain
+502. The bridge does not infer rate limits from arbitrary exception text or
+invent a retry delay. Record provider failures separately from incomplete core
+review coverage; a partial findings file is not a completed review.
+
 Prepare private `RUN/config/{inference-orchestrator,rag-pipeline}.env` files from
 the current service settings, removing model credentials and remote model routes.
 Use a separate random service secret in both, fresh Redis at

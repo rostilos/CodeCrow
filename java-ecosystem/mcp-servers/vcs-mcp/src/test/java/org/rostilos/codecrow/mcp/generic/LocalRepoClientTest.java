@@ -17,6 +17,63 @@ import static org.mockito.Mockito.when;
 
 class LocalRepoClientTest {
 
+    @Test
+    void completePinnedInventoryProvesAbsenceAndKeepsOverlayPrecedence() throws Exception {
+        Path overlay = repository.resolve("overlay");
+        Files.createDirectories(overlay.resolve("files"));
+        Files.writeString(overlay.resolve("files/added.ts"), "proposed");
+        Files.writeString(repository.resolve("existing.ts"), "target");
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":["added.ts","deleted.ts","unavailable.ts"],"deletedFiles":["deleted.ts"],
+                 "targetRevision":"target-sha","targetFiles":["existing.ts","deleted.ts"]}
+                """);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        var client = new LocalRepoClient(remote, repository.toString(), "team", "repo", "main",
+                "target-sha", overlay.toString());
+        var missing = client.getReviewFileContent("team", "repo", "e2e/playwright.config.ts");
+        assertThat(missing.exists()).isFalse();
+        assertThat(missing.unavailable()).isFalse();
+        assertThat(missing.changed()).isFalse();
+        assertThat(missing.deleted()).isFalse();
+        assertThat(missing.reason()).contains("pinned target inventory");
+        assertThat(client.getReviewFileContent("team", "repo", "added.ts").content()).isEqualTo("proposed");
+        assertThat(client.getReviewFileContent("team", "repo", "existing.ts").content()).isEqualTo("target");
+        assertThat(client.getReviewFileContent("team", "repo", "deleted.ts").deleted()).isTrue();
+        assertThat(client.getReviewFileContent("team", "repo", "unavailable.ts").unavailable()).isTrue();
+        assertThatThrownBy(() -> client.getReviewFileContent("other", "repo", "absent.ts"))
+                .hasMessageContaining("request-bound repository");
+        assertThatThrownBy(() -> client.getReviewFileContent("team", "repo", "../absent.ts"))
+                .hasMessageContaining("escapes");
+        verifyNoInteractions(remote);
+    }
+
+    @Test
+    void inventoryNeverConvertsUnprovenAbsenceOrArchiveOmissionIntoNotFound() throws Exception {
+        String[] evidence = {
+                "\"targetRevision\":\"target-sha\",\"targetFiles\":[\"missing.ts\"]",
+                "\"targetRevision\":\"other-sha\",\"targetFiles\":[]",
+                "\"targetFiles\":[]",
+                "\"targetRevision\":\"target-sha\",\"targetFiles\":null",
+                "\"targetRevision\":\"target-sha\",\"targetFiles\":\"invalid\"",
+                "\"targetRevision\":\"target-sha\",\"targetFiles\":[1]",
+                "\"targetRevision\":\"target-sha\",\"targetFiles\":[\"../outside\"]"
+        };
+        for (int i = 0; i < evidence.length; i++) {
+            Path overlay = repository.resolve("overlay-" + i);
+            Files.createDirectories(overlay.resolve("files"));
+            Files.writeString(overlay.resolve("manifest.json"),
+                    "{\"changedFiles\":[],\"deletedFiles\":[]," + evidence[i] + "}");
+            VcsMcpClient remote = mock(VcsMcpClient.class);
+            when(remote.getBranchFileContent("team", "repo", "target-sha", "missing.ts"))
+                    .thenReturn("recovered source");
+            var client = new LocalRepoClient(remote, repository.toString(), "team", "repo", "main",
+                    "target-sha", overlay.toString());
+            assertThat(client.getReviewFileContent("team", "repo", "missing.ts").content())
+                    .isEqualTo("recovered source");
+            verify(remote).getBranchFileContent("team", "repo", "target-sha", "missing.ts");
+        }
+    }
+
     @TempDir
     Path repository;
 

@@ -23,6 +23,7 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from service.agent import AgentExecutionService
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
+from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from utils.llm_response import extract_llm_response_text
 from utils.path_identity import repository_source_location
 from utils.diff_processor import DiffChangeType
@@ -345,16 +346,20 @@ def extract_verification_assessments(content: str, executor: McpToolExecutor,
     items = []
     missing_reason = "assessment_missing"
     try:
-        payload = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip()))
+        outer = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
+        if not outer.startswith("{"):
+            raise ValueError("Legacy prose verification response")
+        _, payload = load_json_with_local_repairs(content)
         if isinstance(payload, dict):
             items = payload.get("assessments", [])
             content = str(payload.get("report") or "")
     except (ValueError, TypeError):
+        missing_reason = "assessment_malformed"
         # Keep usable prose from a malformed response; older model responses
         # may place the same assessment records in an HTML comment.
         if match:
             try:
-                items = json.loads(match.group(1))
+                _, items = load_json_with_local_repairs(match.group(1))
             except (ValueError, TypeError):
                 missing_reason = "assessment_malformed"
             content = re.sub(pattern, "", content, flags=re.DOTALL).strip()

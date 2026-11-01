@@ -270,13 +270,22 @@ Branch: {branch}
 Commit Hash: {commit_hash}
 Evidence mode: {evidence_mode}
 
-Return only existing issues that current positive evidence proves are resolved.
+Return a decision for EVERY existing issue supplied in the issue records and authority anchors.
 Never discover new issues. Never resolve an issue merely because code, a symbol,
 a file, or a diff is absent from this prompt. In PARTIAL mode, every omitted
 source fragment or diff hunk is owned by another shard; local absence is never
 proof of deletion or resolution. A host-side atomic merge accepts a resolution
 only when all required evidence shards agree. If evidence is incomplete or
-ambiguous, omit the issue so it remains unresolved.
+ambiguous, return isResolved: null and explain the uncertainty.
+Use isResolved: true only when the ORIGINAL defect is fixed. A different new
+defect does not keep the original issue open. Use isResolved: false when that
+same defect still exists, explaining its current trigger. For still-present
+HEAD issues return filePath, lineNumber, endLineNumber and a complete verbatim
+contiguous codeSnippet from current source that demonstrates the original bug.
+The range must cover exactly the snippet; do not use blank lines, diff markers,
+ellipses, old source or unrelated surviving code as an anchor. Line numbers are
+1-based in the complete file. For fragments use sequence.startLine; its first
+line may be partial. Do not invent a replacement anchor for BASE findings.
 For BASE anchors, the missing primary file is expected. Reassess the deletion's
 effect using surviving referenced source; resolve only when that source proves
 the regression is fixed, never because the deleted file is still absent.
@@ -300,8 +309,8 @@ PARTIAL FILE PATHS (JSON):
 {json.dumps(partial_paths, ensure_ascii=False, separators=(",", ":"))}
 
 Return ONLY a valid JSON object with this shape:
-{{"comment":"summary","issues":[{{"issueId":"original id","isResolved":true,"resolutionReason":"specific positive fix evidence"}}]}}
-Unresolved issues must be omitted.
+{{"comment":"summary","issues":[{{"issueId":"original id","isResolved":false,"resolutionReason":"current evidence for the original defect","filePath":"src/example.py","lineNumber":12,"endLineNumber":12,"codeSnippet":"exact current source"}}]}}
+For fixed or uncertain issues, anchor fields may be null. Never omit an issue.
 """
 
 
@@ -326,6 +335,7 @@ def _source_segment_record(
                 "fragmentIndex": fragment_index,
                 "fragmentCount": fragment_count,
                 "characterStart": start,
+                "startLine": text[:start].count("\n") + 1,
                 "characterEnd": end,
                 "sourceCharacterCount": len(text),
                 "completeFile": False,
@@ -682,7 +692,7 @@ def _result_issue_id(issue: Dict[str, Any]) -> str:
 
 
 def _result_votes_resolved(issue: Dict[str, Any]) -> bool:
-    return issue.get("isResolved", True) is not False
+    return issue.get("isResolved") is True
 
 
 async def execute_packed_branch_reconciliation(
@@ -870,11 +880,25 @@ async def execute_packed_branch_reconciliation(
                 event_callback,
             )
         except Exception as exception:
-            raise RuntimeError(
-                "Branch reconciliation failed atomically at "
-                f"{shard.shard_id}; refusing partial resolution output"
-            ) from exception
-        shard_results[shard.shard_id] = result
+            diagnostic = f"{shard.shard_id} failed: {type(exception).__name__}; affected issues remain unverified"
+            logger.warning(diagnostic, exc_info=True)
+            diagnostics.append(diagnostic)
+            result = {"issues": [], "comment": diagnostic}
+        decisions: Dict[str, Dict[str, Any]] = {}
+        for item in result.get("issues", []):
+            if not isinstance(item, dict):
+                continue
+            issue_id = _result_issue_id(item)
+            if issue_id not in shard.issue_ids:
+                continue
+            if issue_id in decisions:
+                decisions[issue_id] = {
+                    "issueId": issue_id, "isResolved": None,
+                    "resolutionReason": "Multiple decisions returned for the same issue",
+                }
+            else:
+                decisions[issue_id] = item
+        shard_results[shard.shard_id] = {**result, "issues": list(decisions.values())}
 
     votes_by_shard = {
         shard_id: {
@@ -933,6 +957,29 @@ async def execute_packed_branch_reconciliation(
         )
         if accepted_resolution:
             accepted.append(resolution)
+        else:
+            evidence = [
+                decision
+                for shard_id in required
+                for decision in shard_results.get(shard_id, {}).get("issues", [])
+                if isinstance(decision, dict) and _result_issue_id(decision) == issue_id
+            ]
+            present = [item for item in evidence if item.get("isResolved") is False]
+            anchors = {
+                (item.get("filePath"), item.get("lineNumber"),
+                 item.get("endLineNumber"), item.get("codeSnippet"))
+                for item in present
+            }
+            if (present and len(anchors) == 1 and complete_source and unblocked
+                    and not any(_result_votes_resolved(item) for item in evidence)):
+                accepted.append(present[0])
+            else:
+                reason = next((
+                    str(item["resolutionReason"]) for item in evidence
+                    if item.get("isResolved") is None and item.get("resolutionReason")
+                ), "Missing, conflicting or incomplete reconciliation evidence")
+                diagnostics.append(f"issue {issue_id}: {reason}")
+                accepted.append({"issueId": issue_id, "isResolved": None, "resolutionReason": reason})
         issue_provenance[issue_id] = {
             "issueRecordKey": issue_record_key_by_id.get(issue_id, ""),
             "requiredShardIds": required,
@@ -989,8 +1036,10 @@ async def execute_packed_branch_reconciliation(
         "issues": accepted,
         "comment": (
             f"Branch reconciliation checked {len(issue_records)} issues in "
-            f"{len(shards)} request-aware shard(s); accepted "
-            f"{len(accepted)} atomic resolution(s)."
+            f"{len(shards)} request-aware shard(s); "
+            f"{sum(_result_votes_resolved(item) for item in accepted)} resolved, "
+            f"{sum(item.get('isResolved') is False for item in accepted)} still present, "
+            f"{sum(item.get('isResolved') is None for item in accepted)} unverified."
         ),
         "reconciliationStatus": "degraded" if diagnostics else "complete",
         "reconciliationPromptProvenance": provenance,

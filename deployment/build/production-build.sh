@@ -16,6 +16,11 @@ LOCAL_CI_VENV_ROOT="${CODECROW_CI_VENV_ROOT:-${TMPDIR:-/tmp}/codecrow-ci-python-
 
 cd "$(dirname "$0")/../../"
 
+# Concurrent clean builds otherwise remove one another's Maven outputs.
+mkdir -p .ci-logs
+exec 9>.ci-logs/production-build.lock
+flock 9
+
 echo "=========================================="
 echo "  CodeCrow local production build"
 echo "  CI verification with local observability disabled"

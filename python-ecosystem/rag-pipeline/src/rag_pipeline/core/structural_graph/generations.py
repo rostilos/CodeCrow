@@ -154,7 +154,8 @@ class StructuralGenerationStore:
             # stage every copied base page in a source-sized WAL before the
             # final checkpoint. The pending database is private until publish,
             # so enable WAL only after the coherent backup has completed.
-            backup_destination = sqlite3.connect(
+            # backup() requires a native target, not an APM-wrapped connect().
+            backup_destination = sqlite3.Connection(
                 pending.database,
                 timeout=30,
                 check_same_thread=False,

@@ -202,6 +202,7 @@ class _Stage2PromptStatic:
     architecture_path_table: Mapping[str, str]
     full_pr_status: str
     delta_status: str
+    pr_change_context: str = ''
 
 
 def _stage_2_packet_priority(packet: _Stage2Packet) -> int:
@@ -256,7 +257,9 @@ def _stage_2_input_token_budget(request: ReviewRequestDto) -> int:
         # Keep half available for generation and let the semantic packer report
         # any indivisible input unit that cannot fit the remaining half intact.
         model_safe_input = max(1, model_context_tokens // 2)
-    return min(STAGE2_INPUT_TOKEN_TARGET, model_safe_input)
+    from service.review.change_summary import change_summary_minimum_tokens
+    return min(STAGE2_INPUT_TOKEN_TARGET + change_summary_minimum_tokens(
+        getattr(request, 'prChangeSummary', None)), model_safe_input)
 
 
 def _estimated_prompt_tokens(prompt: str) -> int:
@@ -286,8 +289,8 @@ class Stage2SemanticPacketInput:
     task_context: str
     task_history_context: str
     evidence_ledger: PrEvidenceLedger
+    pr_change_context: str = ""
     token_budget: int = STAGE2_INPUT_TOKEN_TARGET
-    max_packets: int = 4
 
 
 def build_stage_2_prompts(
@@ -306,8 +309,8 @@ def build_stage_2_prompts(
         task_context=packet_input.task_context,
         task_history_context=packet_input.task_history_context,
         evidence_ledger=packet_input.evidence_ledger,
+        pr_change_context=packet_input.pr_change_context,
         token_budget=packet_input.token_budget,
-        max_packets=packet_input.max_packets,
     )
 
 
@@ -324,16 +327,15 @@ def _build_stage_2_prompts_impl(
     task_context: str,
     task_history_context: str,
     evidence_ledger: PrEvidenceLedger,
+    pr_change_context: str,
     token_budget: int,
-    max_packets: int,
 ) -> List[Stage2Prompt]:
     """Render one complete prompt or pack bounded semantic Stage 2 shards.
 
     The complete prompt remains the normal path.  Sharding begins only after
     the fully rendered request exceeds the review input target. Relationships
-    are grouped by connected component first; the profile admits core PR
-    evidence, then exact architecture, then optional context up to its packet
-    ceiling.
+    are grouped by connected component first. Every shard is admitted, with
+    core PR evidence and exact architecture ordered before optional context.
     """
     findings = _parse_stage_1_findings(stage_1_findings_json)
     complete_prompt = PromptBuilder.build_stage_2_cross_file_prompt(
@@ -347,7 +349,7 @@ def _build_stage_2_prompts_impl(
         project_rules=project_rules,
         task_context=task_context,
         task_history_context=task_history_context,
-        pr_change_summary=evidence_ledger.full_pr_context,
+        pr_change_summary="\n\n".join(part for part in (pr_change_context, evidence_ledger.full_pr_context) if part),
         incremental_delta_summary=evidence_ledger.incremental_delta_context,
     )
     if _estimated_prompt_tokens(complete_prompt) <= token_budget:
@@ -397,6 +399,7 @@ def _build_stage_2_prompts_impl(
         architecture_path_table=path_table,
         full_pr_status=full_status,
         delta_status=delta_status,
+        pr_change_context=pr_change_context,
     )
     common_probe = _render_stage_2_packet(common_static, _Stage2Packet())
     global_units: List[_Stage2Unit] = []
@@ -434,6 +437,7 @@ def _build_stage_2_prompts_impl(
             architecture_path_table=path_table,
             full_pr_status=full_status,
             delta_status=delta_status,
+            pr_change_context=pr_change_context,
         )
         if task_context != task_anchor:
             global_units.extend(
@@ -519,45 +523,13 @@ def _build_stage_2_prompts_impl(
     if current.units:
         packets.append(current)
 
-    max_packets = max(1, max_packets)
-    prioritized_packets = [
+    packets = [
         packet
         for _, packet in sorted(
             enumerate(packets),
             key=lambda item: (_stage_2_packet_priority(item[1]), item[0]),
         )
     ]
-    selected_packets = prioritized_packets[:max_packets]
-    omitted_packets = prioritized_packets[max_packets:]
-    omitted_unit_count = sum(len(packet.units) for packet in omitted_packets)
-    omitted_hunk_ids = {
-        hunk_id
-        for packet in omitted_packets
-        for hunk_id in packet.review_hunk_ids
-    }
-    if omitted_packets and selected_packets:
-        notice = (
-            "[CodeCrow Stage 2 invocation ceiling reached: "
-            f"omitted_packets={len(omitted_packets)}, "
-            f"omitted_units={omitted_unit_count}, "
-            f"omitted_hunks={len(omitted_hunk_ids)}. Core PR/diff packets and "
-            "components containing exact architecture were admitted before "
-            "optional enrichment. Absence is not negative evidence.]"
-        )
-        selected_packets[-1].add(_Stage2Unit(
-            key="stage-2-invocation-ceiling-diagnostic",
-            history_parts=(notice,),
-        ))
-        logger.warning(
-            "Stage 2 invocation ceiling reached: admitted=%d omitted_packets=%d "
-            "omitted_units=%d omitted_hunks=%d",
-            len(selected_packets),
-            len(omitted_packets),
-            omitted_unit_count,
-            len(omitted_hunk_ids),
-        )
-    packets = selected_packets
-
     prompts = [
         _Stage2Prompt(
             _render_stage_2_packet(common_static, packet),
@@ -565,9 +537,6 @@ def _build_stage_2_prompts_impl(
             visible_evidence_ids=_finding_evidence_ids(packet.findings),
             optional_enrichment_only=packet.optional_enrichment_only,
             complete_pr_evidence_visible=False,
-            omitted_packet_count=len(omitted_packets),
-            omitted_unit_count=omitted_unit_count,
-            omitted_hunk_count=len(omitted_hunk_ids),
         )
         for packet in packets
     ]
@@ -1463,6 +1432,7 @@ def _render_stage_2_packet(
         (
             _SEMANTIC_SHARD_NOTICE,
             static.full_pr_status,
+            static.pr_change_context,
             *(packet.full_pr_parts or ["No full-PR evidence record is assigned to this shard."]),
         )
     )

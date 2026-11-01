@@ -369,6 +369,45 @@ async def test_skipped_and_omitted_candidates_have_explicit_verification_status(
 # ── run_verification_agent ────────────────────────────────────
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_seconds, expected_budgets", [(None, [60, 60]), (70, [60, 18])])
+async def test_verification_batches_do_not_inherit_previous_batch_elapsed_time(
+    monkeypatch, review_seconds, expected_budgets,
+):
+    from service.review.execution_scheduler import FairReviewScheduler, review_execution, set_review_deadline
+
+    issues = [CodeReviewIssue(file="a.py", line=1, severity="HIGH", category="BUG_RISK",
+        title=f"Defect {index}", reason="Current call can lose persisted data.",
+        suggestedFixDescription="Preserve the value.", codeSnippet="call()") for index in range(2)]
+    request = SimpleNamespace(enrichmentData=SimpleNamespace(fileContents=[
+        SimpleNamespace(path="a.py", content="call()", skipped=False)]),
+        rawDiff=None, deltaDiff=None, previousCodeAnalysisIssues=[])
+    ledger = CandidateEvidenceLedger()
+    for index, issue in enumerate(issues):
+        ledger.register(issue, stage="stage_1", source_key=str(index), review_unit_ids=["unit"],
+            prompt_hunk_ids=["hunk"], generation_prompt=str(index))
+    monkeypatch.setenv("REVIEW_VERIFICATION_TIMEOUT_SECONDS", "60")
+    monkeypatch.setattr(verification_agent, "_build_verification_batches",
+        lambda records: [([record], record[0]) for record in records])
+    loop = asyncio.get_running_loop()
+    now = [loop.time()]
+    monkeypatch.setattr(loop, "time", lambda: now[0])
+    budgets = []
+
+    async def verify(llm, prompt, *, deadline, **kwargs):
+        budgets.append(deadline - now[0])
+        now[0] += 52 if len(budgets) == 1 else 1
+        return VerificationResult(assessments=[verification_agent.VerificationAssessment(
+            issue_id=prompt, verdict="unknown", reason="Caller contract is unavailable")], attempted=True)
+
+    monkeypatch.setattr(verification_agent, "_run_verification_tool_loop", verify)
+    with review_execution(FairReviewScheduler(1), asyncio.Semaphore(1)):
+        set_review_deadline(None if review_seconds is None else now[0] + review_seconds)
+        assert await run_verification_agent(object(), issues, request, candidate_ledger=ledger) == issues
+    assert budgets == pytest.approx(expected_budgets)
+    assert all(record["verificationAssessments"][-1]["completed"] for record in ledger.summary()["records"])
+
+
 class TestRunVerificationAgent:
     def _make_issue(self, issue_id, category, reason, file="a.py"):
         issue = MagicMock()

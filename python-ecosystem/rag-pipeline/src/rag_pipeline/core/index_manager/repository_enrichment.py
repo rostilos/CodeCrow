@@ -110,6 +110,7 @@ def write_repository_state(
     writer: StructuralGraphWriter, *, commit: str, repository_facts: Any,
     repository_files: Sequence[Path], project_type: str | None,
     source_root: str | None, source_file_sha256: Mapping[str, str],
+    include_patterns: Sequence[str], exclude_patterns: Sequence[str],
 ) -> str:
     repository_facts_payload = {
         "revision": commit,
@@ -127,6 +128,8 @@ def write_repository_state(
         ),
         "projectType": project_type,
         "sourceRoot": source_root,
+        "indexSelection": {"includePatterns": list(include_patterns),
+                           "excludePatterns": list(exclude_patterns)},
     }
     repository_facts_json = json.dumps(
         repository_facts_payload,

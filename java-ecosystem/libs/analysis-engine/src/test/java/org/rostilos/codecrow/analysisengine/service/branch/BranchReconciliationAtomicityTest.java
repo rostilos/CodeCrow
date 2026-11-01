@@ -21,7 +21,7 @@ import static org.mockito.Mockito.*;
 
 class BranchReconciliationAtomicityTest {
     @ParameterizedTest @ValueSource(booleans={false,true})
-    void failedOrDegradedChunkCannotPublishResolutionsFromThisOperation(boolean degraded) throws Exception {
+    void incompleteDecisionRemainsOpenDuringFailedOrDegradedReconciliation(boolean degraded) throws Exception {
         var issues=mock(BranchIssueRepository.class); var branches=mock(BranchRepository.class);
         var factory=mock(VcsServiceFactory.class); var ai=mock(AiAnalysisClient.class);
         var service=new BranchIssueReconciliationService(issues,branches,mock(FileSnapshotService.class),factory,
@@ -29,7 +29,6 @@ class BranchReconciliationAtomicityTest {
         var branch=new Branch(); ReflectionTestUtils.setField(branch,"id",1L); branch.setBranchName("main");
         var issue=new BranchIssue(); ReflectionTestUtils.setField(issue,"id",10L); issue.setBranch(branch); issue.setFilePath("src/a.py");
         when(issues.findUnresolvedByBranchIdAndFilePath(1L,"src/a.py")).thenReturn(List.of(issue));
-        when(issues.findByBranchIdAndOriginIssueId(1L,10L)).thenReturn(Optional.of(issue));
         when(branches.findByIdWithIssues(1L)).thenReturn(Optional.of(branch));
         var project=mock(Project.class); var repo=mock(VcsRepoInfo.class); var connection=mock(VcsConnection.class);
         when(project.getEffectiveVcsRepoInfo()).thenReturn(repo); when(repo.getVcsConnection()).thenReturn(connection);
@@ -42,9 +41,11 @@ class BranchReconciliationAtomicityTest {
         if (degraded) when(ai.performAnalysis(eq(second),any())).thenReturn(Map.of("issues",List.of(),"reconciliationStatus","degraded"));
         else when(ai.performAnalysis(eq(second),any())).thenThrow(new IOException("second model chunk failed"));
         var request=new BranchProcessRequest(); request.targetBranchName="main"; request.commitHash="head";
-        service.reanalyzeCandidateIssues(Set.of("src/a.py"),Set.of("src/a.py"),branch,project,request,
+        var result = service.reanalyzeCandidateIssues(Set.of("src/a.py"),Set.of("src/a.py"),branch,project,request,
                 ignored -> {},Map.of(),null,false,Runnable::run);
+        assertThat(result.complete()).isFalse();
+        assertThat(result.diagnostic()).contains("decision lacks evidence");
         assertThat(issue.isResolved()).isFalse();
-        verify(issues,never()).save(any());
+        verify(issues).saveAll(List.of(issue));
     }
 }

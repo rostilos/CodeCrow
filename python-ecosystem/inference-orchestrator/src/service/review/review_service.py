@@ -147,16 +147,47 @@ class ReviewService:
         if not isinstance(result, dict) or "issues" not in result or review_response_indicates_failure(response):
             return
         limitations = []
+        incomplete_stages = []
+        summary = result.get("prChangeSummary")
+        if isinstance(summary, dict) and summary.get("semanticStatus", summary.get("status", "complete")) != "complete":
+            incomplete_stages.append("change_scan")
+            limitations.append("The semantic change scan did not finish; file review used the acquired source and diff.")
+        decisions = response.get("inferenceUsage", {}).get("decisions", [])
+        failed_file_batches = sum(decision.get("failed", 0) for decision in decisions
+                                  if decision.get("kind") == "stage_1_result")
+        if failed_file_batches:
+            incomplete_stages.append("stage_1")
+            limitations.append(f"{failed_file_batches} core file-review batch(es) did not complete; available findings were retained.")
+        failed_cross_file = sum(decision.get("failed", 0) for decision in decisions
+                                if decision.get("kind") == "stage_2_result")
+        if failed_cross_file:
+            incomplete_stages.append("stage_2")
+            limitations.append(f"{failed_cross_file} core cross-file check(s) did not complete; available findings were retained.")
+        failed_verification = [decision for decision in decisions
+                               if decision.get("kind") == "verification_batch"
+                               and decision.get("outcome") != "completed"]
+        final_verification = next((decision for decision in reversed(decisions)
+                                   if decision.get("kind") == "verification_result"), None)
+        if final_verification is not None and final_verification.get("incomplete", 0):
+            incomplete_stages.append("verification")
+            limitations.append(f"Independent verification remains incomplete for {final_verification['incomplete']} finding(s).")
+        elif final_verification is None and failed_verification:
+            incomplete_stages.append("verification")
+            limitations.append(f"{len(failed_verification)} verification batch(es) did not complete; unresolved findings remain labelled.")
+        result["analysisCompletion"] = {
+            "status": "partial" if incomplete_stages else "complete",
+            "incompleteStages": incomplete_stages,
+        }
         if getattr(request, "ragReviewGenerationStatus", None) == "unavailable":
             limitations.append("Structural graph preparation was unavailable; review used the available source context.")
         incomplete = [
-            decision for decision in response.get("inferenceUsage", {}).get("decisions", [])
+            decision for decision in decisions
             if decision.get("kind") == "specialist_result" and decision.get("outcome") != "completed"
         ]
         if incomplete:
             limitations.append(f"{len(incomplete)} admitted specialist pass(es) did not complete.")
         if limitations:
-            notice = "**Review completed with reduced coverage.** " + " ".join(limitations)
+            notice = ("**Review incomplete.** " if incomplete_stages else "**Review completed with reduced coverage.** ") + " ".join(limitations)
             result["comment"] = notice + "\n\n" + (result.get("comment") or "")
 
     async def _process_prompt_dry_run(

@@ -2,6 +2,8 @@ package org.rostilos.codecrow.mcp.generic;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +28,7 @@ public final class LocalRepoClient implements VcsMcpClient {
     private static final String REVIEW_OVERLAY_FILES = "files";
     private static final int DIRECTORY_ENTRY_LIMIT = 200;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Logger LOGGER = LoggerFactory.getLogger(LocalRepoClient.class);
 
     private volatile VcsMcpClient remoteClient;
     private final RemoteClientProvider remoteClientProvider;
@@ -474,6 +477,18 @@ public final class LocalRepoClient implements VcsMcpClient {
         String targetRef = targetRevision != null && !targetRevision.isBlank()
                 ? targetRevision
                 : targetBranch;
+        if (targetRevision != null && targetRevision.equals(reviewOverlay.targetRevision())
+                && reviewOverlay.targetFiles() != null) {
+            try {
+                return ReviewFileContent.targetHead(normalizedPath, readLocalFile(normalizedPath));
+            } catch (NoSuchFileException absentLocally) {
+                // Archive omissions are recoverable; only the complete pinned inventory proves absence.
+                if (!reviewOverlay.targetFiles().contains(normalizedPath)) {
+                    return new ReviewFileContent(normalizedPath, null, false, false, false, false,
+                            "target-head", "No regular file at this path in the pinned target inventory or review overlay");
+                }
+            }
+        }
         return ReviewFileContent.targetHead(
                 normalizedPath,
                 getBranchFileContent(workspace, repoSlug, targetRef, normalizedPath));
@@ -483,6 +498,10 @@ public final class LocalRepoClient implements VcsMcpClient {
         return targetRevision != null && !targetRevision.isBlank()
                 ? targetRevision
                 : targetBranch;
+    }
+
+    public boolean hasReviewOverlay() {
+        return reviewOverlay != null;
     }
 
     private static String normalizeRepositoryPath(String rawPath) throws IOException {
@@ -541,7 +560,9 @@ public final class LocalRepoClient implements VcsMcpClient {
             Path filesRoot,
             Path realFilesRoot,
             Set<String> changedFiles,
-            Set<String> deletedFiles
+            Set<String> deletedFiles,
+            String targetRevision,
+            Set<String> targetFiles
     ) {
         private static ReviewOverlay open(String overlayPath) throws IOException {
             Path root = Path.of(overlayPath).toAbsolutePath().normalize();
@@ -564,11 +585,28 @@ public final class LocalRepoClient implements VcsMcpClient {
             Set<String> changed = readManifestPaths(manifest.path("changedFiles"));
             Set<String> deleted = readManifestPaths(manifest.path("deletedFiles"));
             changed.addAll(deleted);
+            String targetRevision = null;
+            Set<String> targetFiles = null;
+            if (manifest.hasNonNull("targetFiles")) {
+                try {
+                    JsonNode revision = manifest.path("targetRevision");
+                    if (!revision.isTextual() || revision.asText().isBlank()) {
+                        throw new IOException("Target inventory revision is missing");
+                    }
+                    targetFiles = Set.copyOf(readManifestPaths(manifest.path("targetFiles")));
+                    targetRevision = revision.asText();
+                } catch (IOException invalidInventory) {
+                    LOGGER.warn("Review target inventory unavailable; retaining provider fallback: {}",
+                            invalidInventory.getMessage());
+                }
+            }
             return new ReviewOverlay(
                     filesRoot,
                     realFilesRoot,
                     Set.copyOf(changed),
-                    Set.copyOf(deleted));
+                    Set.copyOf(deleted),
+                    targetRevision,
+                    targetFiles);
         }
 
         private static Set<String> readManifestPaths(JsonNode values) throws IOException {
@@ -629,6 +667,14 @@ public final class LocalRepoClient implements VcsMcpClient {
         try {
             return readDirectory(dirPath);
         } catch (NoSuchFileException absentFromSnapshot) {
+            if (reviewOverlay != null && targetRevision != null
+                    && targetRevision.equals(reviewOverlay.targetRevision())
+                    && reviewOverlay.targetFiles() != null) {
+                String prefix = normalizeRepositoryPath(dirPath) + "/";
+                if (reviewOverlay.targetFiles().stream().noneMatch(path -> path.startsWith(prefix))) {
+                    throw absentFromSnapshot;
+                }
+            }
             return providerClient().getDirectoryByPath(
                     workspace, repoSlug, targetFallbackRef(), dirPath);
         }

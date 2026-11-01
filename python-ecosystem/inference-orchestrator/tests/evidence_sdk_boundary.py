@@ -42,6 +42,12 @@ async def main():
     assert observation_status(ToolMessage(content='raise Error("invalid")', tool_call_id="x")) == "acquired"
     assert observation_status(ToolMessage(content=json.dumps({"context": {"evidence": {"format": "normalized_nodes_edges", "nodes": [], "relations": [], "frontier": [], "callPaths": [], "blastRadius": [], "tests": [], "framework": []}, "sourceWindows": []}}), tool_call_id="x")) == "empty"
     assert observation_status(SimpleNamespace(isError=True, content="missing source")) == "unavailable"
+    for candidates in ("candidates", "ambiguousTargets"):
+        ambiguous = {"status": "ambiguous", "message": "Choose an exact unit ID",
+                     "results": [], "sourceWindows": [], candidates: [{"unitId": "unit:one"}]}
+        assert observation_status(ToolMessage(content=json.dumps(ambiguous), tool_call_id="ambiguous")) == "acquired"
+        assert observation_status(ToolMessage(content=json.dumps({**ambiguous, "error": "store offline"}), tool_call_id="failed")) == "unavailable"
+        assert observation_status(ToolMessage(content=json.dumps({**ambiguous, candidates: []}), tool_call_id="empty")) == "empty"
     empty = EvidenceAcquisitionMiddleware()
     async def no_results(request):
         return ToolMessage(content=json.dumps({"results": []}), tool_call_id=request.tool_call["id"])

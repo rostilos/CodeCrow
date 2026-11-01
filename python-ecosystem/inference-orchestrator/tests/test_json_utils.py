@@ -86,6 +86,11 @@ class TestCleanJsonText:
 
 class TestLoadJsonWithLocalRepairs:
 
+    def test_stray_member_quote_repair_preserves_source_punctuation_and_keys(self):
+        text = '{"items":[{"snippet":"source,} and ,]","},{"snippet":"second"}],"},":"key",}'
+        _, parsed = load_json_with_local_repairs(text)
+        assert parsed == {"items": [{"snippet": "source,} and ,]"}, {"snippet": "second"}], "},": "key"}
+
     def test_invalid_markdown_and_regex_escapes_preserve_literal_backslashes(self):
         # Saved EmDash output escaped the backticks around this template string.
         text = r'{"source": "(obj._key as string) || \`item-${i}-${Date.now()}\`", "regex": "\d+\.\w+", "valid": "line\npath\\file\/\u263a\""}'

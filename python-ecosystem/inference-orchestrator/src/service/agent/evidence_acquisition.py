@@ -114,7 +114,8 @@ def observation_status(result: Any) -> str:
             return "unavailable"
         if payload.get("exists") is False:
             return "empty"
-        evidence_fields = ("nodes", "edges", "relations", "results", "sourceWindows", "fileContent", "content", "unit")
+        evidence_fields = ("nodes", "edges", "relations", "results", "sourceWindows", "fileContent", "content", "unit",
+                           "candidates", "ambiguousTargets")
         present = [payload[key] for key in evidence_fields if key in payload]
         evidence = payload.get("evidence")
         if isinstance(evidence, Mapping):

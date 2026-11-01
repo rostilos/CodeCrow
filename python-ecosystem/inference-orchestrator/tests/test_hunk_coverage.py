@@ -34,6 +34,19 @@ def test_reviewable_hunk_requires_every_transition():
     assert ledger.summary()[HunkCoverageState.COMPLETED.value] == 1
 
 
+def test_partial_review_keeps_failed_hunk_unreviewed():
+    processed = DiffProcessor().process(_diff("a.php") + _diff("b.php"))
+    ledger = HunkCoverageLedger.from_processed_diff(processed)
+    ledger.mark_planned(["a.php", "b.php"])
+    ledger.mark_reviewed_hunks([processed.files[0].hunks[0].id], allow_incomplete=True)
+    ledger.mark_validated(allow_incomplete=True)
+    ledger.complete(allow_incomplete=True)
+    assert ledger.summary()["completed"] == 1
+    assert ledger.summary()["planned"] == 1
+    with pytest.raises(RuntimeError, match="coverage is incomplete"):
+        ledger.assert_complete()
+
+
 def test_omitted_reviewable_path_fails_closed():
     ledger = HunkCoverageLedger.from_processed_diff(DiffProcessor().process(_diff()))
     with pytest.raises(RuntimeError, match="omitted"):

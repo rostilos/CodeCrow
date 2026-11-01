@@ -6,7 +6,7 @@ from service.review.inference_usage import record_model_response
 import logging
 from typing import Any, Callable, Dict, Optional
 
-from model.output_schemas import CodeReviewOutput, ReconciliationOutput
+from model.output_schemas import ReconciliationOutput
 from utils.llm_response import extract_llm_response_text
 from utils.prompts.prompt_builder import PromptBuilder
 
@@ -57,7 +57,7 @@ async def execute_branch_analysis(
         max_steps=15,
         reasoning_effort=ReasoningEffort.LOW,
         max_output_tokens=review_output_token_limit(llm, BRANCH_ANALYSIS_MAX_OUTPUT_TOKENS),
-        output_schema=CodeReviewOutput,
+        output_schema=ReconciliationOutput,
         additional_instructions=PromptBuilder.get_additional_instructions(),
         metadata={"flow": "review", "stage": "branch_analysis"},
     )
@@ -68,7 +68,7 @@ async def execute_branch_analysis(
             if not isinstance(event, AgentOutputEvent):
                 continue
             item = event.output
-            if isinstance(item, CodeReviewOutput):
+            if isinstance(item, ReconciliationOutput):
                 issues = [i.model_dump() for i in item.issues] if item.issues else []
                 return {"issues": issues, "comment": item.comment or "Branch analysis completed."}
             if isinstance(item, str):
@@ -77,7 +77,7 @@ async def execute_branch_analysis(
         if final_text:
             data = await parse_llm_response(
                 final_text,
-                CodeReviewOutput,
+                ReconciliationOutput,
                 llm,
                 max_provider_repairs=0,
             )
@@ -117,7 +117,7 @@ async def execute_branch_reconciliation_direct(
 
             if result and isinstance(result, ReconciliationOutput):
                 issues = [i.model_dump() for i in result.issues] if result.issues else []
-                logger.info(f"Direct reconciliation: {len(issues)} resolved issues returned")
+                logger.info(f"Direct reconciliation: {len(issues)} issue decisions returned")
                 return {"issues": issues, "comment": result.comment or "Branch reconciliation completed."}
         except Exception as structured_err:
             logger.warning(
@@ -153,7 +153,7 @@ async def execute_branch_reconciliation_direct(
             issues = [i.model_dump() for i in data.issues] if data.issues else []
             return {"issues": issues, "comment": data.comment or "Branch reconciliation completed."}
 
-        return {"issues": [], "comment": "No issues resolved."}
+        return {"issues": [], "comment": "Reconciliation returned no decisions.", "reconciliationStatus": "degraded"}
 
     except Exception as e:
         logger.error(f"Direct branch reconciliation failed: {e}", exc_info=True)

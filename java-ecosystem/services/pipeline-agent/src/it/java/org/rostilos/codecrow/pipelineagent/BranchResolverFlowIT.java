@@ -170,8 +170,8 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
         assertThat(issue.isResolved()).isFalse();
         assertThat(issue.getCurrentLineNumber()).isEqualTo(6);
         assertThat(issue.getCurrentLineHash()).isEqualTo(LineHashSequence.hashLine("        dangerousCall(userInput);"));
-        // Relocating an unchanged anchor does not verify the defect itself.
-        assertThat(issue.getLastVerifiedCommit()).isNull();
+        // The model also confirms that the defect survives at the relocated anchor.
+        assertThat(issue.getLastVerifiedCommit()).isEqualTo("line-shift-commit");
         assertThat(issue.getTrackingConfidence()).isEqualTo(TrackingConfidence.EXACT);
         verify(aiAnalysisClient, atLeastOnce()).performAnalysis(any(AiAnalysisRequest.class), any());
     }
@@ -221,6 +221,9 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
         assertThat(issue.isResolved()).isFalse();
         assertThat(issue.getResolvedAt()).isNull();
         assertThat(issue.getResolvedDescription()).isNull();
+        assertThat(issue.getCurrentLineNumber()).isEqualTo(5);
+        assertThat(issue.getCodeSnippet()).isEqualTo("dangerousCall(normalize(userInput));");
+        assertThat(issue.getLastVerifiedCommit()).isEqualTo("ai-open-commit");
     }
 
     @Test
@@ -259,7 +262,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
 
         BranchIssue stillOpen = branchIssueRepository.findById(stillOpenIssueId).orElseThrow();
         assertThat(stillOpen.isResolved()).isFalse();
-        assertThat(stillOpen.getLastVerifiedCommit()).isNull();
+        assertThat(stillOpen.getLastVerifiedCommit()).isEqualTo("full-reconcile-commit");
         assertThat(stillOpen.getTrackingConfidence()).isEqualTo(TrackingConfidence.EXACT);
 
         var requestCaptor = org.mockito.ArgumentCaptor.forClass(AiAnalysisRequest.class);
@@ -362,17 +365,20 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
     }
 
     private Map<String, Object> aiResponseFor(AiAnalysisRequest request) {
-        if ("ai-resolved-commit".equals(request.getCurrentCommitHash())
-                || "full-reconcile-commit".equals(request.getCurrentCommitHash())) {
-            String issueId = request.getPreviousCodeAnalysisIssues().get(0).id();
-            return Map.of(
-                    "comment", "resolved",
-                    "issues", List.of(Map.of(
-                            "issueId", issueId,
-                            "isResolved", true,
-                            "resolutionReason", "Dangerous call was replaced with a validated safe path.")));
-        }
-        return Map.of("comment", "still open", "issues", List.of());
+        List<Map<String, Object>> decisions = request.getPreviousCodeAnalysisIssues().stream().map(issue -> {
+            if (APP_PATH.equals(issue.file()) && ("ai-resolved-commit".equals(request.getCurrentCommitHash())
+                    || "full-reconcile-commit".equals(request.getCurrentCommitHash()))) {
+                return Map.<String, Object>of("issueId", issue.id(), "isResolved", true,
+                        "resolutionReason", "Dangerous call was replaced with a validated safe path.");
+            }
+            boolean shifted = "line-shift-commit".equals(request.getCurrentCommitHash());
+            int line = shifted ? 6 : 5;
+            return Map.<String, Object>of("issueId", issue.id(), "isResolved", false,
+                    "resolutionReason", "The dangerous call still accepts unvalidated input.",
+                    "filePath", issue.file(), "lineNumber", line, "endLineNumber", line,
+                    "codeSnippet", shifted ? "dangerousCall(userInput);" : "dangerousCall(normalize(userInput));");
+        }).toList();
+        return Map.of("comment", "Reconciled every submitted issue", "issues", decisions);
     }
 
     private String diffForCommit(String commitHash) {

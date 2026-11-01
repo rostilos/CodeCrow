@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sqlite3
 from collections.abc import Iterable, Sequence
 from typing import Any
@@ -28,10 +30,24 @@ def unit_to_manifest(row: sqlite3.Row, *, include_content: bool = False) -> dict
 def _unit_by_id(connection: sqlite3.Connection, unit_id: str | None) -> sqlite3.Row | None:
     if not unit_id:
         return None
-    return connection.execute(
+    exact = connection.execute(
         "SELECT * FROM units WHERE unit_id = ?",
         (unit_id,),
     ).fetchone()
+    if exact is not None or not re.fullmatch(r"unit:[0-9a-f]{32,64}", unit_id):
+        return exact
+    # Models can copy a long hash's prefix correctly but corrupt its tail.
+    candidates = connection.execute(
+        "SELECT * FROM units WHERE unit_id GLOB ? ORDER BY unit_id LIMIT 2",
+        (unit_id[:37] + "*",),
+    ).fetchall()
+    if len(candidates) != 1:
+        return None
+    logging.getLogger(__name__).info(
+        "Resolved structural unit by unique 32-hex prefix: requested=%s resolved=%s",
+        unit_id, candidates[0]["unit_id"],
+    )
+    return candidates[0]
 
 
 def _batches(values: Sequence[str]) -> Iterable[Sequence[str]]:

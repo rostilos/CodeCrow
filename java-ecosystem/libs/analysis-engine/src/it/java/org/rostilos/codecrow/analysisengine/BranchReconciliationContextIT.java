@@ -44,7 +44,7 @@ class BranchReconciliationContextIT {
     void relatedFileFixClosesIssueWithoutChangingItsPrimaryFile(EVcsProvider provider) throws Exception { exercise(provider, true); }
 
     @ParameterizedTest @EnumSource(EVcsProvider.class)
-    void secondModelChunkFailureCannotPublishPartialResolutions(EVcsProvider provider) throws Exception {
+    void secondModelChunkFailureRetainsCompletedDecisionAndReportsPending(EVcsProvider provider) throws Exception {
         exercise(provider, false, true);
     }
 
@@ -106,11 +106,13 @@ class BranchReconciliationContextIT {
         String diff = "diff --git a/"+changed+" b/"+changed+"\n--- a/"+changed+"\n+++ b/"+changed+"\n@@ -1 +1,2 @@\n context\n+guard(value)\n";
         var request = new BranchProcessRequest(); request.targetBranchName="main"; request.commitHash="head";
         var ast = new AstScopeEnricher();
+        BranchIssueReconciliationService.ReconciliationResult outcome;
+        var events = new ArrayList<Map<String, Object>>();
         try {
             var service = new BranchIssueReconciliationService(issues, branches, mock(FileSnapshotService.class),
                     factory, mock(VcsClientProvider.class), client, new IssueReconciliationEngine(), ast);
-            service.reanalyzeCandidateIssues(Set.of(changed), Set.of("src/service.py", "src/guard.py"), branch, project,
-                    request, ignored -> {}, Map.of("src/service.py", source, "src/guard.py", "validate(value)"), diff, false,
+            outcome = service.reanalyzeCandidateIssues(Set.of(changed), Set.of("src/service.py", "src/guard.py"), branch, project,
+                    request, events::add, Map.of("src/service.py", source, "src/guard.py", "validate(value)"), diff, false,
                     action -> {
                         if (loseLease) locks.withOwnedLocks(List.of(ownerKey), () -> { action.run(); return null; });
                         else tx.executeWithoutResult(status -> action.run());
@@ -120,9 +122,16 @@ class BranchReconciliationContextIT {
             if (replacement.get() != null) locks.releaseLock(replacement.get());
             if (ownerKey != null) locks.releaseLock(ownerKey);
         }
-        assertThat(issues.findById(selected.getId()).orElseThrow().isResolved()).isEqualTo(!failSecondChunk && !loseLease);
+        assertThat(outcome.complete()).isEqualTo(!failSecondChunk && !loseLease);
+        assertThat(issues.findById(selected.getId()).orElseThrow().isResolved()).isEqualTo(!loseLease);
         assertThat(issues.findUnresolvedByBranchIdAndFilePath(branch.getId(), "src/unrelated.py")).hasSize(1);
-        assertThat(branches.findById(branch.getId()).orElseThrow().getTotalIssues()).isEqualTo(failSecondChunk ? 3 : loseLease ? 2 : 1);
+        assertThat(branches.findById(branch.getId()).orElseThrow().getTotalIssues())
+                .isEqualTo((loseLease ? 2 : 1) + (failSecondChunk ? 1 : 0));
+        if (failSecondChunk) {
+            assertThat(issues.findUnresolvedByBranchIdAndFilePath(branch.getId(), "src/service.py")).hasSize(1);
+            assertThat(outcome.diagnostic()).contains("chunk 2 unavailable", "no reconciliation decision");
+            assertThat(events).anyMatch(event -> "reconciliation_pending".equals(event.get("state")));
+        }
         verify(builder).buildAiAnalysisRequestsForBranchReconciliation(eq(project), eq(request),
                 argThat(previous -> previous.size()==(failSecondChunk ? 2 : 1)),
                 argThat(contents -> contents.keySet().equals(Set.of("src/service.py", "src/guard.py"))), contains("+guard(value)"));

@@ -22,6 +22,13 @@ class QualityGateEvaluatorTest {
 
     private QualityGateEvaluator evaluator;
 
+    @Test
+    void partialAnalysisHasNoCompletedQualityGateVerdict() {
+        CodeAnalysis analysis = createAnalysis(0, 0, 0, 0);
+        analysis.setStatus(org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL);
+        assertThat(evaluator.evaluate(analysis, createQualityGate("Zero issues", true)).isSkipped()).isTrue();
+    }
+
     @BeforeEach
     void setUp() {
         // Pass null repository — only needed for evaluateStatus() which uses workspace default lookup.

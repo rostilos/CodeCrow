@@ -97,7 +97,7 @@ class TestSplitIssuesIntoBatches:
 
 class TestBatchedBranchReconciliation:
     @pytest.mark.asyncio
-    async def test_failed_batch_rejects_partial_merged_result(self):
+    async def test_failed_batch_retains_affected_issues_as_unverified(self):
         orchestrator = MultiStageReviewOrchestrator.__new__(
             MultiStageReviewOrchestrator
         )
@@ -145,14 +145,10 @@ class TestBatchedBranchReconciliation:
                 ),
             ),
         ):
-            with pytest.raises(
-                RuntimeError,
-                match=r"failed atomically at reconciliation-000002",
-            ):
-                await orchestrator.execute_batched_branch_analysis(
-                    request,
-                    metadata,
-                )
+            result = await orchestrator.execute_batched_branch_analysis(request, metadata)
+            assert result["reconciliationStatus"] == "degraded"
+            assert {item["issueId"] for item in result["issues"]} == {"old-1", "old-2"}
+            assert all(item["isResolved"] is None for item in result["issues"])
 
 
 # ── _filter_diff_for_files ────────────────────────────────────

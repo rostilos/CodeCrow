@@ -78,6 +78,72 @@ _REVIEW_ENDPOINTS = {
     "unit": "/query/review-unit",
 }
 
+
+@pytest.mark.asyncio(loop_scope="function")
+@respx.mock
+@pytest.mark.parametrize("proposed", [False, True])
+@pytest.mark.parametrize("unit_id", ["unit:" + "a" * 64, "unit:b72f82c334c743d503d0f90f74c3a38ee22538?"])
+@pytest.mark.parametrize("status_code", [404, 409, 503])
+async def test_missing_structural_unit_is_empty_evidence_without_hiding_service_errors(proposed, unit_id, status_code):
+    from types import SimpleNamespace
+    from service.agent.evidence_acquisition import observation_status
+    from service.agent.models import AgentToolEvent
+    from service.review.orchestrator.stage_1_agent_telemetry import stage1_agent_tool_event_failures
+
+    endpoint = "/query/review-unit" if proposed else "/query/unit"
+    detail = "Review structural unit was not found" if proposed else "Structural unit was not found"
+    route = respx.post("http://rag:8001" + endpoint).mock(
+        return_value=httpx.Response(status_code, json={"detail": detail}))
+    client = RagClient(base_url="http://rag:8001", enabled=True)
+    try:
+        if proposed:
+            result = await client.get_review_structural_unit(unit_id=unit_id, **_review_binding())
+        else:
+            result = await client.get_structural_unit(unit_id=unit_id, workspace="tenant", project="repository", branch="main")
+    finally:
+        await client.close()
+    assert route.call_count == 1
+    assert result["unit"] is None and result["status_code"] == status_code
+    if status_code == 404:
+        assert result["status"] == "not_found" and "error" not in result
+        assert result["sourceEvidence"] is False and result["requestedUnitId"] == unit_id
+        assert "read source directly" in result["message"]
+        assert observation_status(result) == "empty"
+    else:
+        assert result["status"] == "error" and result["error"] == detail
+        assert observation_status(result) == "unavailable"
+    event = AgentToolEvent(action=SimpleNamespace(tool="getStructuralUnit", tool_input={"unitId": unit_id}), observation=result)
+    assert bool(stage1_agent_tool_event_failures((event,))) == (status_code != 404)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@respx.mock
+@pytest.mark.parametrize("operation", ["query", "impact", "traverse"])
+@pytest.mark.parametrize("error", [None, "graph store unavailable"])
+async def test_ambiguous_graph_candidates_keep_coverage_without_hiding_errors(operation, error):
+    payload = {
+        "status": "ambiguous", "message": "Choose an exact candidate unit ID",
+        "candidates": [{"unitId": "unit:one"}, {"unitId": "unit:two"}],
+        "candidateCount": 2, "results": [], "sourceWindows": [],
+        "coverage": {"state": "bounded", "truncated": True,
+                     "partialReasons": ["ambiguous_target"]},
+    }
+    if error:
+        payload["error"] = error
+    route = respx.post("http://rag:8001" + _REVIEW_ENDPOINTS[operation]).mock(
+        return_value=httpx.Response(200, json=payload))
+    client = RagClient(base_url="http://rag:8001", enabled=True)
+    try:
+        result = await _call_review_operation(client, operation)
+    finally:
+        await client.close()
+    assert route.call_count == 1
+    assert result["candidates"] == payload["candidates"]
+    assert result["coverage"]["state"] == ("unavailable" if error else "bounded")
+    if not error:
+        assert result == payload
+
+
 _REVIEW_RESULT_KEYS = {
     "minimal": {
         "status", "operation", "snapshot", "question", "focusPaths",

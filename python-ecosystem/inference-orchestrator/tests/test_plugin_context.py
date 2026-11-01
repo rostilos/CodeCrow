@@ -346,7 +346,8 @@ diff --git a/app/code/Acme/Checkout/etc/di.xml b/app/code/Acme/Checkout/etc/di.x
     assert result.skipped_files == 1
 
 
-def test_file_policy_failure_aborts_before_prompt_construction(monkeypatch):
+def test_file_policy_failure_preserves_reviewable_source(monkeypatch, caplog):
+    plugin_context._plugin_host()
     runtime = MagicMock()
     runtime.file_disposition.side_effect = RuntimeError("broken-policy")
     monkeypatch.setattr(
@@ -369,8 +370,69 @@ def test_file_policy_failure_aborts_before_prompt_construction(monkeypatch):
 """
     )
 
-    with pytest.raises(RuntimeError, match="broken-policy"):
-        plugin_context.apply_plugin_file_policy(_request(), processed)
+    result = plugin_context.apply_plugin_file_policy(_request(), processed)
+    assert result is processed
+    assert result.total_files == 1 and result.skipped_files == 0
+    assert not result.files[0].is_skipped
+    assert all(h.disposition is HunkDisposition.REVIEWABLE for h in result.files[0].hunks)
+    assert "broken-policy" in caplog.text and "example.php" in caplog.text
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_unknown_plugin_projection_retains_available_context(mixed, caplog):
+    plugin_context._plugin_host.cache_clear()
+    request = _request()
+    known = ["php"] if mixed else []
+    request.projectCapabilities = ProjectCapabilitiesDto(
+        repositoryPlugins=[*known, "uninstalled-language"],
+        filePlugins={"known.php": known, "source.uncovered": ["uninstalled-language"]},
+        detectionEvidence={p: ["fixture:" + p] for p in [*known, "uninstalled-language"]},
+        fingerprint="fixture", descriptorFingerprint="fixture",
+    )
+    resolved = plugin_context.resolve_project_capabilities(request)
+    assert resolved.repository_plugins == tuple(known)
+    assert resolved.file_plugins["known.php"] == tuple(known)
+    assert resolved.file_plugins["source.uncovered"] == ()
+    assert "uninstalled-language" in resolved.unavailable_capabilities
+    assert "uninstalled-language" in caplog.text
+    assert "uninstalled-language" in request.projectCapabilities.repositoryPlugins
+
+
+def test_unavailable_plugin_runtime_preserves_diff_and_logs(monkeypatch, caplog):
+    plugin_context._plugin_host()
+    from codecrow_plugins import bootstrap
+
+    def unavailable():
+        raise ImportError("optional runtime unavailable")
+
+    plugin_context._plugin_host.cache_clear()
+    monkeypatch.setattr(bootstrap, "discover_builtin_plugins", unavailable)
+    processed = DiffProcessor().process(
+        "diff --git a/a.uncovered b/a.uncovered\n--- a/a.uncovered\n+++ b/a.uncovered\n@@ -1 +1 @@\n-old\n+new\n"
+    )
+    try:
+        result = plugin_context.apply_plugin_file_policy(_request(), processed)
+        assert result is processed and result.total_files == 1
+        assert plugin_context.review_plugin_context(_request(), ["a.uncovered"]) == ""
+        assert "optional runtime unavailable" in caplog.text
+    finally:
+        plugin_context._plugin_host.cache_clear()
+
+
+def test_malformed_plugin_projection_preserves_core_diff(caplog):
+    plugin_context._plugin_host.cache_clear()
+    request = _request()
+    request.projectCapabilities = ProjectCapabilitiesDto(
+        repositoryPlugins=["php"], filePlugins={"a.php": ["php"]},
+        detectionEvidence={},
+        fingerprint="fixture", descriptorFingerprint="fixture",
+    )
+    processed = DiffProcessor().process(
+        "diff --git a/a.php b/a.php\n--- a/a.php\n+++ b/a.php\n@@ -1 +1 @@\n-old\n+new\n"
+    )
+    assert plugin_context.apply_plugin_file_policy(request, processed) is processed
+    assert processed.total_files == 1 and not processed.files[0].is_skipped
+    assert "missing detection evidence" in caplog.text
 
 
 def test_review_context_degrades_with_observable_plugin_diagnostic(
@@ -1257,17 +1319,11 @@ def test_review_context_groups_repeated_evidence_and_preserves_line_boundaries()
     assert "set claimKind to its exact evidence class" in context
     assert "Service000.java" in context
     assert "Service039.java" in context
-    assert "Service040.java" not in context
-    assert "Service099.java" not in context
-    assert "review contribution admitted 80 of 100 owned paths" in context
-    assert "review contribution omitted 0 rule(s) and 80 evidence request(s)" in context
-    assert (
-        "[60 review path(s) have no plugin evidence request; do not treat "
-        "this omission as proof"
-    ) in context
-    assert all(f"  - {path} — E1, E2" in context for path in paths[:40])
-    assert all(f"  - {path} — E1, E2" not in context for path in paths[40:])
-    assert len(context) <= plugin_context.PLUGIN_CONTEXT_CHAR_BUDGET
+    assert "Service040.java" in context
+    assert "Service099.java" in context
+    assert "coverage diagnostics" not in context and "omitted" not in context
+    assert all(f"  - {path} — E1, E2" in context for path in paths)
+    assert len(context) > 6_000
     assert all(
         line.startswith((
             "Plugin ",

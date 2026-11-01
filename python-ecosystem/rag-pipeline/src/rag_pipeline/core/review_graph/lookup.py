@@ -135,7 +135,7 @@ def _resolve_targets(
                 if resolution.get("status") == "ambiguous":
                     ambiguous.append({
                         "target": target,
-                        "error": resolution.get("error"),
+                        "message": resolution.get("message"),
                         "candidates": list(resolution.get("candidates") or ()),
                         "candidateCount": resolution.get(
                             "candidateCount",
@@ -245,7 +245,7 @@ def _ambiguous_target_response(
     response: dict[str, Any] = {
         "status": "ambiguous",
         "operation": operation,
-        "error": "A symbolic graph root resolves to multiple structural units",
+        "message": "A symbolic graph root resolves to multiple structural units",
         "snapshot": reader.snapshot(),
         "targets": list(targets),
         "ambiguousTargets": values,

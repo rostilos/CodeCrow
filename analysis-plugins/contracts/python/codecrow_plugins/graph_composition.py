@@ -8,6 +8,7 @@ from .api import (
     GraphFact,
     OutcomeStatus,
     PluginDiagnostic,
+    PluginKind,
     ProjectCapabilities,
 )
 from .catalog import PluginCatalog
@@ -45,6 +46,9 @@ class GraphFactComposer:
                 artifact.path,
                 capabilities,
             )
+            # Keep the selected source scope, but let each language handle its graph inputs.
+            if descriptor.kind is PluginKind.LANGUAGE and artifact.path in capabilities.file_plugins:
+                plugin_root = ""
             if plugin_root is None:
                 continue
             if not ({Capability.INDEX, Capability.GRAPH} & set(descriptor.capabilities)):

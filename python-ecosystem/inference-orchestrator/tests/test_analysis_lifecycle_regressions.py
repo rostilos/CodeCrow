@@ -1,6 +1,6 @@
 """Pipeline regressions: real coordinators with deterministic model boundaries."""
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -96,18 +96,33 @@ def test_review_context_is_bounded_and_keeps_focused_file_without_mutating_saved
 async def test_slow_optional_scan_leaves_time_for_core_review_and_retains_completed_batches(monkeypatch):
     import asyncio
     import json
+    from contextlib import asynccontextmanager
     from service.review import change_summary as scan
     from service.review.execution_scheduler import FairReviewScheduler, review_execution, set_review_deadline
     from tests.test_pr_change_summary import request, diff
 
     monkeypatch.setattr(scan, "supports_structured_output", lambda llm: False)
     calls = 0
+    timeouts = []
+    active_timeout = []
+
+    @asynccontextmanager
+    async def scan_timeout(seconds):
+        timeouts.append(seconds)
+        async with asyncio.timeout(seconds) as scope:
+            active_timeout[:] = [scope]
+            yield
+
+    monkeypatch.setattr(scan, "asyncio", SimpleNamespace(
+        get_running_loop=asyncio.get_running_loop, timeout=scan_timeout))
 
     async def invoke(prompt, **kwargs):
         nonlocal calls
         calls += 1
         if calls > 1:
-            await asyncio.sleep(10)
+            # Exercise real cancellation without racing subsecond wall-clock timers.
+            active_timeout[0].reschedule(asyncio.get_running_loop().time())
+            await asyncio.Event().wait()
         records = json.loads(prompt.split(f"Batch {calls}/2:\n")[1])
         return SimpleNamespace(content=json.dumps({"summary": "Input behavior",
             "files": [{"path": r["path"], "summary": "Concrete behavior"} for r in records],
@@ -116,12 +131,14 @@ async def test_slow_optional_scan_leaves_time_for_core_review_and_retains_comple
     paths = [f"f{i}.py" for i in range(30)]
     loop = asyncio.get_running_loop()
     with review_execution(FairReviewScheduler(1), asyncio.Semaphore(1)):
-        deadline = loop.time() + 0.5
+        deadline = loop.time() + 120
         set_review_deadline(deadline)
-        async with asyncio.timeout_at(deadline):
+        async with asyncio.timeout(5):
             result = await scan.scan_pr_changes(SimpleNamespace(ainvoke=invoke), request(
                 rawDiff="".join(diff(path) for path in paths), changedFiles=paths))
-            await asyncio.sleep(0.05)  # Core review still has time to execute.
+            await asyncio.sleep(0)  # Core review can still yield and resume.
+        assert loop.time() < deadline - 60
+    assert len(timeouts) == 2 and all(0 < timeout <= 60 for timeout in timeouts)
     assert result["semanticStatus"] == "degraded"
     assert sum(f["scanStatus"] == "scanned" for f in result["files"]) == 15
     assert len(result["files"]) == 30
@@ -215,7 +232,7 @@ async def test_qa_repository_tools_use_fresh_host_binding_without_semantic_summa
         return {}
     monkeypatch.setattr(MCPConfigBuilder, "build_jvm_props", properties)
     monkeypatch.setattr(MCPConfigBuilder, "build_config", lambda *args, **kwargs: {"mcpServers": {"vcs": {}}})
-    client = SimpleNamespace(close_all_sessions=AsyncMock())
+    client = SimpleNamespace(close_all_sessions=AsyncMock(), add_middleware=Mock())
     monkeypatch.setattr(mcp_use.MCPClient, "from_dict", lambda config: client)
     agent = SimpleNamespace(initialize=AsyncMock(return_value={}), available_tool_names=["getReviewFileContent"])
     monkeypatch.setattr(service.agent, "AgentExecutionService", lambda **kwargs: agent)
@@ -225,4 +242,7 @@ async def test_qa_repository_tools_use_fresh_host_binding_without_semantic_summa
         assert prepared is agent
         assert captured["local_repo_path"] == "/qa/fresh"
         assert captured["local_review_overlay_path"] == "/qa/overlay"
+        from utils.mcp_tool_serialization import PerConnectionToolCallMiddleware
+        client.add_middleware.assert_called_once()
+        assert isinstance(client.add_middleware.call_args.args[0], PerConnectionToolCallMiddleware)
     client.close_all_sessions.assert_awaited_once()

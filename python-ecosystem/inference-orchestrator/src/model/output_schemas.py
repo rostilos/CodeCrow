@@ -236,26 +236,21 @@ class AskOutput(BaseModel):
 
 # ── Reconciliation-specific schemas ──────────────────────────────────────
 
-class ReconciliationResolvedIssue(BaseModel):
-    """Schema for a single resolved issue in branch reconciliation.
-    
-    Only resolved issues are returned by the reconciliation LLM call.
-    Unresolved issues are omitted entirely (the system treats omission as
-    "still unresolved").
-    """
+class ReconciliationIssueDecision(BaseModel):
+    """A decision about an existing issue, with current evidence if it persists."""
     issueId: str = Field(description="The original issue ID (copied from the 'id' field of the previous issue)")
-    isResolved: bool = Field(default=True, description="Always true — only resolved issues are returned")
-    resolutionReason: str = Field(description="Specific explanation of HOW/WHY the issue was fixed (e.g. 'Null check added on line 45'). Must NOT repeat the issue description.")
+    isResolved: Optional[bool] = Field(default=None, description="true: original defect fixed; false: original defect still present; null: cannot determine")
+    resolutionReason: str = Field(description="Current evidence explaining the decision, or why verification is incomplete")
+    filePath: Optional[str] = Field(default=None, description="Exact current repository path for a still-present HEAD issue")
+    lineNumber: Optional[int] = Field(default=None, description="1-based first line of codeSnippet in the current file")
+    endLineNumber: Optional[int] = Field(default=None, description="1-based last line of codeSnippet in the current file")
+    codeSnippet: Optional[str] = Field(default=None, description="Complete verbatim contiguous current-source excerpt proving the original defect still exists; no diff markers or ellipses")
 
 
 class ReconciliationOutput(BaseModel):
-    """Schema for the complete branch reconciliation output.
-    
-    Contains only the issues that the LLM determined are resolved.
-    Issues not present in this list remain unresolved.
-    """
-    comment: str = Field(description="Summary of reconciliation results (e.g. '3 issues resolved out of 10 checked')")
-    issues: List[ReconciliationResolvedIssue] = Field(
+    """One explicit decision per submitted issue; omissions remain unverified."""
+    comment: str = Field(description="Summary of fixed, still-present and unverified issues")
+    issues: List[ReconciliationIssueDecision] = Field(
         default_factory=list,
-        description="List of resolved issues only. Omit unresolved issues entirely."
+        description="A decision for every submitted issue, including still-present and uncertain issues"
     )

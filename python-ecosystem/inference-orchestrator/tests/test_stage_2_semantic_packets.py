@@ -63,7 +63,6 @@ def test_typed_packet_builder_matches_legacy_field_adapter():
         task_history_context=packet_input.task_history_context,
         evidence_ledger=packet_input.evidence_ledger,
         token_budget=packet_input.token_budget,
-        max_packets=packet_input.max_packets,
     )
 
     assert [str(prompt) for prompt in typed] == [str(prompt) for prompt in legacy]
@@ -112,3 +111,15 @@ def test_stage_2_example_does_not_invent_optional_provenance():
     assert '"coverageEvidenceRefs": []' in prompt
     assert "exact repository-context Evidence ID copied" not in prompt
     assert "PRF001 or DELTA001 from the PR evidence ledger" not in prompt
+
+
+def test_every_semantic_packet_retains_complete_pr_change_context():
+    context = 'PR-WIDE CHANGE CONTEXT: feature A changes B; changed.py -> consumer.py'
+    findings = [{'file': f'file{i}.py', 'description': f'Finding {i}: ' + 'evidence ' * 500}
+                for i in range(30)]
+    packet_input = replace(_packet_input(), stage_1_findings_json=json.dumps(findings),
+        pr_change_context=context, token_budget=8000)
+    prompts = build_stage_2_prompts(packet_input)
+    assert len(prompts) > 1
+    assert all(context in prompt for prompt in prompts)
+    assert all(stage_2_semantic_packets._estimated_prompt_tokens(prompt) <= 8000 for prompt in prompts)

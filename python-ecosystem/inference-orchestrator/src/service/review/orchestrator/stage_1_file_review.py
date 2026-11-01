@@ -19,11 +19,11 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import FileReviewBatchOutput, FileReviewOutput, ReviewPlan
 from utils.prompts.prompt_builder import PromptBuilder
-from service.review.change_summary import change_summary_context, group_review_items_by_scan
+from service.review.change_summary import change_summary_context, change_summary_minimum_tokens, group_review_items_by_scan, prepare_change_summary_context
 from utils.diff_processor import (
     DiffChangeType,
     ProcessedDiff,
-    DiffProcessor,
+    process_complete_diff,
 )
 from utils.task_context_builder import build_task_context
 from utils.dependency_graph import create_smart_batches_async
@@ -361,6 +361,12 @@ def _salvage_stage1_schema_tool_outputs(
             # must not discard its valid siblings: the correction frequently
             # contains only the repaired object, not the whole original batch.
             raw_reviews = payload.get("reviews")
+            if isinstance(raw_reviews, Mapping):
+                raw_reviews = [
+                    dict(review, file=path) if isinstance(review, Mapping) else review
+                    for path, review in raw_reviews.items()
+                    if not isinstance(review, Mapping) or review.get("file", path) == path
+                ]
             if not isinstance(raw_reviews, (list, tuple)):
                 logger.debug(
                     "Ignoring malformed Stage 1 schema tool output: %s",
@@ -445,17 +451,19 @@ def _available_stage1_agent_tools(
         return STAGE1_AGENT_TOOL_NAMES - STAGE1_OPTIONAL_RUNTIME_TOOL_NAMES
 
 
-def _stage1_schema_declaration_bytes() -> int:
+def _stage1_schema_declaration_bytes(paths: Sequence[str] = ()) -> int:
     try:
         schema = FileReviewBatchOutput.model_json_schema()
     except (AttributeError, TypeError, ValueError):
         return 0
-    return len(json.dumps(
+    declaration_bytes = len(json.dumps(
         schema,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8"))
+    # Tool adapters can inline the shared review/issue definitions for every slot.
+    return declaration_bytes * max(1, len(paths)) + 2 * len(json.dumps(list(paths)).encode("utf-8"))
 
 
 _STAGE1_SCHEMA_DECLARATION_BYTES = _stage1_schema_declaration_bytes()
@@ -470,7 +478,7 @@ def _build_stage_1_prepared_context(
     if is_incremental and request.deltaDiff:
         diff_source = apply_plugin_file_policy(
             request,
-            DiffProcessor().process(request.deltaDiff),
+            process_complete_diff(request.deltaDiff),
         )
 
     diff_by_path: Dict[str, Optional[Any]] = {}
@@ -626,7 +634,7 @@ def _ensure_full_diff_index(prepared_context: Stage1PreparedContext) -> None:
 
     # Stage 1 can split very large diffs into multiple bounded prompts. Parse
     # the original hunks only when Stage 0 explicitly asks for full-diff review.
-    raw_diff_source = DiffProcessor().process(raw_diff)
+    raw_diff_source = process_complete_diff(raw_diff)
     for diff_file in raw_diff_source.files:
         _add_path_lookup(prepared_context.full_diff_by_path, diff_file.path, diff_file)
     logger.info(
@@ -1320,18 +1328,32 @@ def _render_stage1_prompt(
         plugin_context=plugin_context_text,
         batch_boundary_context=material.boundary_context,
     )
-    prompt += change_summary_context(
-        getattr(material.request, "prChangeSummary", None), material.batch_file_paths,
-        max_tokens=_stage1_batch_token_limit(material.request) // 4,
+    summary = getattr(material.request, "prChangeSummary", None)
+    prepared = material.prepared_context
+    if prepared.change_context is None:
+        prepared.change_context = prepare_change_summary_context(summary)
+        prepared.change_context_minimum_tokens = change_summary_minimum_tokens(
+            summary, prepared_context=prepared.change_context,
+        )
+    context_tokens = min(
+        max(0, _stage1_batch_token_limit(material.request, prepared.change_context_minimum_tokens) - 8_000),
+        STAGE1_BATCH_TOKEN_BUDGET // 4 + prepared.change_context_minimum_tokens,
+        # Extra context must not manufacture source shards. Keep the complete
+        # PR map, then expand optional detail only beside the actual local input.
+        max(prepared.change_context_minimum_tokens,
+            _stage1_packing_token_limit(material.request, prepared.change_context_minimum_tokens)
+            - _estimated_prompt_tokens(prompt, material.batch_file_paths)),
     )
+    prompt += change_summary_context(summary, material.batch_file_paths, max_tokens=context_tokens,
+                                     prepared_context=prepared.change_context)
     return prompt, plugin_context_text
 
 
-def _estimated_prompt_tokens(prompt: str) -> int:
+def _estimated_prompt_tokens(prompt: str, paths: Sequence[str] = ()) -> int:
     """Estimate rendered UTF-8 input plus the structured-output declaration."""
     request_bytes = (
         len(prompt.encode("utf-8"))
-        + _STAGE1_SCHEMA_DECLARATION_BYTES
+        + (_stage1_schema_declaration_bytes(paths) if paths else _STAGE1_SCHEMA_DECLARATION_BYTES)
     )
     context_start = prompt.find('PR-WIDE CHANGE CONTEXT')
     shared_bytes = len(prompt[context_start:].encode('utf-8')) if context_start >= 0 else 0
@@ -1376,20 +1398,21 @@ def chunk_files(
     return batches
 
 
-def _stage1_batch_token_limit(request: ReviewRequestDto) -> int:
+def _stage1_batch_token_limit(request: ReviewRequestDto, summary_minimum_tokens: Optional[int] = None) -> int:
     model_context_tokens = _positive_int_or_default(
         getattr(request, "maxAllowedTokens", None),
         200000,
     )
     return min(
         max(10_000, model_context_tokens - 20_000),
-        STAGE1_BATCH_TOKEN_BUDGET,
+        STAGE1_BATCH_TOKEN_BUDGET + (change_summary_minimum_tokens(getattr(request, 'prChangeSummary', None))
+                                   if summary_minimum_tokens is None else summary_minimum_tokens),
     )
 
 
-def _stage1_packing_token_limit(request: ReviewRequestDto) -> int:
+def _stage1_packing_token_limit(request: ReviewRequestDto, summary_minimum_tokens: Optional[int] = None) -> int:
     """Reserve prompt space for the deterministic relation briefing."""
-    full_limit = _stage1_batch_token_limit(request)
+    full_limit = _stage1_batch_token_limit(request, summary_minimum_tokens)
     if not (
         getattr(request, "ragEnabled", True)
         and _has_exact_proposed_tree_binding(request)
@@ -1466,6 +1489,8 @@ async def create_smart_batches_wrapper(
         shared_prompt_tokens = _estimated_prompt_tokens(shared_prompt)
         for group in file_groups:
             for review_file in group.files:
+                # Large PR sizing must not starve queue heartbeats or cancellation.
+                await asyncio.sleep(0)
                 material = _prepare_stage1_prompt_material(
                     request,
                     [{"file": review_file, "priority": group.priority}],
@@ -1476,7 +1501,7 @@ async def create_smart_batches_wrapper(
                 token_cost_by_path[review_file.path] = (
                     max(
                         1,
-                        _estimated_prompt_tokens(local_prompt)
+                        _estimated_prompt_tokens(local_prompt, material.batch_file_paths)
                         - shared_prompt_tokens,
                     )
                 )
@@ -1490,7 +1515,9 @@ async def create_smart_batches_wrapper(
             200000,
         )
         model_safe_limit = max(10_000, model_context_tokens - 20_000)
-        batch_token_limit = _stage1_packing_token_limit(request)
+        batch_token_limit = _stage1_packing_token_limit(
+            request, prepared_context.change_context_minimum_tokens if prepared_context else None,
+        )
         graph_content_limit = max(
             1_000,
             batch_token_limit - shared_prompt_tokens,
@@ -1565,7 +1592,7 @@ def _complete_stage1_plugin_context(
 
 def _stage1_material_prompt_tokens(material: Stage1PromptMaterial) -> int:
     prompt, _ = _render_stage1_prompt(material, "")
-    return _estimated_prompt_tokens(prompt)
+    return _estimated_prompt_tokens(prompt, material.batch_file_paths)
 
 
 def _stage1_local_packing_runtime() -> Stage1LocalPackingRuntime:
@@ -1594,7 +1621,6 @@ def _joint_stage1_units_for_item(
     prepared_context: Stage1PreparedContext,
     is_incremental: bool,
     token_budget: int,
-    max_units: int = 3,
 ) -> List[Dict[str, Any]]:
     """Backward-compatible facade over the local-packing runtime boundary."""
     return _pack_joint_stage1_units_for_item(
@@ -1603,7 +1629,6 @@ def _joint_stage1_units_for_item(
         prepared_context,
         is_incremental,
         token_budget,
-        max_units=max_units,
         runtime=_stage1_local_packing_runtime(),
     )
 
@@ -1614,8 +1639,6 @@ def _expand_oversized_stage1_evidence_batches(
     prepared_context: Stage1PreparedContext,
     is_incremental: bool,
     token_budget: int,
-    max_units_per_item: int = 3,
-    max_total_batches: Optional[int] = None,
 ) -> List[List[Dict[str, Any]]]:
     """Preserve the historical adapter while using typed packing inputs."""
     return pack_stage1_local_batches(
@@ -1627,8 +1650,6 @@ def _expand_oversized_stage1_evidence_batches(
             token_budget=token_budget,
         ),
         _stage1_local_packing_runtime(),
-        max_units_per_item=max_units_per_item,
-        max_total_batches=max_total_batches,
     )
 
 
@@ -2453,14 +2474,12 @@ def _structural_retrieval_state(
         if coverage_state == "complete_for_query":
             return "complete"
         if coverage_state:
-            return coverage_state
+            return coverage_state if coverage_state in {"complete", "bounded"} else "unavailable"
 
     successful_status = nested_status or top_status
     if successful_status in {"ok", "complete", "ready"}:
         return "complete"
-    if successful_status:
-        return successful_status
-    return "unavailable"
+    return "bounded" if successful_status == "bounded" else "unavailable"
 
 
 def _tool_event_name(event: Any) -> str:
@@ -2644,20 +2663,25 @@ async def execute_stage_1_file_reviews(
         STAGE1_MAX_CURRENT_FILE_CHARS * max(1, len(items))
     )
     batches = group_review_items_by_scan(items, getattr(request, "prChangeSummary", None))
-    stage1_token_budget = _stage1_packing_token_limit(request)
-    batches = _repack_stage1_batches_by_rendered_input(
+    stage1_token_budget = _stage1_packing_token_limit(request, prepared_context.change_context_minimum_tokens)
+    batches = await asyncio.to_thread(
+        _repack_stage1_batches_by_rendered_input,
         batches,
         request,
         prepared_context,
         is_incremental,
         stage1_token_budget,
     )
+    batches = await asyncio.to_thread(
+        _expand_oversized_stage1_evidence_batches,
+        batches, request, prepared_context, is_incremental, stage1_token_budget,
+    )
     configured_stage1_invocation_cap = inference_profile.invocation_cap(
         "stage_1_total"
     )
     # Every rendered core batch owns changed-file/hunk coverage and must run
-    # at least once. The profile cap limits supplemental oversized-evidence
-    # passes; it must never discard a core file-review prompt.
+    # at least once, including oversized evidence shards. The profile cap
+    # limits supplemental investigation, never acquired primary evidence.
     stage1_invocation_cap = max(
         configured_stage1_invocation_cap,
         len(batches),
@@ -2669,17 +2693,6 @@ async def execute_stage_1_file_reviews(
             configured_stage1_invocation_cap,
             stage1_invocation_cap,
         )
-    batches = _expand_oversized_stage1_evidence_batches(
-        batches,
-        request,
-        prepared_context,
-        is_incremental,
-        stage1_token_budget,
-        max_units_per_item=inference_profile.invocation_cap(
-            "stage_1_per_unit"
-        ),
-        max_total_batches=stage1_invocation_cap,
-    )
     admitted_stage1_invocations = _allocate_stage1_invocation_quotas(
         batches,
         stage1_invocation_cap,
@@ -2759,21 +2772,27 @@ async def execute_stage_1_file_reviews(
     async def _run_batch(
         batch_idx: int,
         batch: List[Dict[str, Any]],
-    ) -> tuple[int, List[CodeReviewIssue], tuple[str, ...]]:
+    ) -> tuple[int, Optional[List[CodeReviewIssue]], tuple[str, ...]]:
         unit_ids = review_unit_state.unit_ids_for_batch(batch_idx, batch)
         async with semaphore:
             batch_paths = [item["file"].path for item in batch]
             has_rels = any(item.get('has_relationships') for item in batch)
             logger.debug(f"Batch {batch_idx}: {batch_paths} (cross-file relationships: {has_rels})")
-            result = await _review_batch_with_timing(
-                batch_idx, llm, request, batch, rag_client, prepared_context,
-                is_incremental,
-                fallback_llm=fallback_llm,
-                rag_state=rag_state,
-                candidate_ledger=candidate_ledger,
-                agent_service=agent_service,
-                event_callback=event_callback,
-            )
+            try:
+                result = await _review_batch_with_timing(
+                    batch_idx, llm, request, batch, rag_client, prepared_context,
+                    is_incremental,
+                    fallback_llm=fallback_llm,
+                    rag_state=rag_state,
+                    candidate_ledger=candidate_ledger,
+                    agent_service=agent_service,
+                    event_callback=event_callback,
+                )
+            except Exception as exc:
+                review_unit_state.failed_batches[batch_idx] = str(exc)
+                logger.warning("Stage 1 batch %d failed; retaining other batches: %s", batch_idx, exc)
+                emit_status(event_callback, "stage_1_batch_failed", f"Stage 1 batch {batch_idx} did not complete")
+                return batch_idx, None, unit_ids
             return batch_idx, result, unit_ids
 
     tasks = [
@@ -2785,6 +2804,8 @@ async def execute_stage_1_file_reviews(
         for completed_task in asyncio.as_completed(tasks):
             try:
                 batch_num, res, unit_ids = await completed_task
+                if res is None:
+                    continue
                 review_unit_state.mark_completed(unit_ids)
                 batch_results[batch_num] = res or []
                 if res:
@@ -2793,23 +2814,14 @@ async def execute_stage_1_file_reviews(
                     )
                 else:
                     logger.info(f"Batch {batch_num} completed: no issues found")
-            except Exception as exc:
-                logger.debug(
-                    "Stage 1 batch failed; cancelling sibling batches: %s",
-                    exc,
-                )
-                raise RuntimeError(
-                    "Stage 1 review is incomplete because at least one batch "
-                    "failed"
-                ) from exc
             finally:
                 completed_batches += 1
                 progress = 10 + int((completed_batches / len(batches)) * 50)
                 emit_progress(
                     event_callback,
                     progress,
-                    f"Stage 1: Reviewed {completed_batches}/{len(batches)} "
-                    "batches",
+                    f"Stage 1: Finished {completed_batches}/{len(batches)} "
+                    f"batches ({len(review_unit_state.failed_batches)} incomplete)",
                 )
     finally:
         # A streaming disconnect cancels the owning review coroutine. Join all
@@ -2821,9 +2833,15 @@ async def execute_stage_1_file_reviews(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    review_unit_state.assert_complete()
+    record_compute_decision("stage_1_result", total=len(batches), completed=len(batch_results),
+                            failed=len(review_unit_state.failed_batches))
+    if not review_unit_state.failed_batches:
+        review_unit_state.assert_complete()
     for batch_idx in range(1, len(batches) + 1):
         all_issues.extend(batch_results.get(batch_idx, []))
+
+    if review_unit_state.failed_batches:
+        return all_issues
 
     try:
         specialist_cap = inference_profile.invocation_cap("specialist_passes")
@@ -3045,7 +3063,7 @@ async def review_file_batch(
         preloaded_structural_evidence=preloaded_structural_evidence,
     )
     prompt = invocations[0][0]
-    estimated_tokens = _estimated_prompt_tokens(prompt)
+    estimated_tokens = _estimated_prompt_tokens(prompt, batch_file_paths)
 
     if rag_state is not None:
         _merge_structural_evidence(
@@ -3091,7 +3109,7 @@ async def review_file_batch(
         invocation_plugin_context,
         invocation_visible_evidence,
     ) in enumerate(invocations, start=1):
-        invocation_tokens = _estimated_prompt_tokens(invocation_prompt)
+        invocation_tokens = _estimated_prompt_tokens(invocation_prompt, batch_file_paths)
         logger.info(
             "Stage 1 prompt assembled: total=%d chars, estimated_tokens=%d, "
             "target_tokens=%d, metadata=%d, structural=%d, plugin=%d, "
@@ -3255,7 +3273,7 @@ async def review_file_batch(
 
             fallback_prompt = render_fallback()
             if (
-                _estimated_prompt_tokens(fallback_prompt) > token_budget
+                _estimated_prompt_tokens(fallback_prompt, recovery_paths) > token_budget
                 and len(structural_context_parts) > 1
             ):
                 structural_context_parts = (
@@ -3271,7 +3289,7 @@ async def review_file_batch(
                 )
                 fallback_prompt = render_fallback()
             if (
-                _estimated_prompt_tokens(fallback_prompt) > token_budget
+                _estimated_prompt_tokens(fallback_prompt, recovery_paths) > token_budget
                 and structural_context
             ):
                 structural_context = ""
@@ -3719,7 +3737,7 @@ async def _invoke_stage_1_batch_llm(
                 # Bind the complete batch schema inside the agent graph so the
                 # reserved final call returns validated JSON without mcp-use's
                 # separate post-formatting model call.
-                output_schema=FileReviewBatchOutput,
+                output_schema=FileReviewBatchOutput.for_paths(batch_file_paths),
                 additional_instructions=(
                     "State the concrete fact each retrieval must resolve. After an empty "
                     "or unavailable result, change the target or use exact source instead "
@@ -3947,7 +3965,7 @@ async def _invoke_stage_1_batch_llm(
             invocation = await invoke_structured_output(
                 llm,
                 direct_prompt,
-                FileReviewBatchOutput,
+                FileReviewBatchOutput.for_paths(recovery_paths),
                 effort=stage_one_direct_effort(llm),
                 label=f"stage-1-{label}",
                 max_tokens=direct_output_limit,

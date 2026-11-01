@@ -3,6 +3,8 @@ package org.rostilos.codecrow.mcp;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClient;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClientFactory;
 
@@ -24,6 +26,107 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class McpToolsLocalRepoTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"5beb0ddc334deb862ba90cedbf03f052b58e4974",
+            "5beb0ddc334deb862b90cedbf03f052b58e4974", "feature", ""})
+    void proposedDirectoryUsesRequestBindingRatherThanModelRef(String suppliedRef) throws Exception {
+        String base = "5beb0ddc334deb862ba90cedbf03f052b58e4974";
+        Files.createDirectories(repository.resolve("packages/auth"));
+        Files.writeString(repository.resolve("packages/auth/package.json"), "{}");
+        Files.writeString(repository.resolve("packages/auth/removed.ts"), "old");
+        Path overlay = repository.resolve("overlay");
+        Files.createDirectories(overlay.resolve("files/packages/auth"));
+        Files.writeString(overlay.resolve("files/packages/auth/proposed.ts"), "new");
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":["packages/auth/proposed.ts"],
+                 "deletedFiles":["packages/auth/removed.ts"],
+                 "targetRevision":"5beb0ddc334deb862ba90cedbf03f052b58e4974",
+                 "targetFiles":["packages/auth/package.json","packages/auth/removed.ts"]}
+                """);
+        System.setProperty(McpTools.LOCAL_REPO_PATH_PROPERTY, repository.toString());
+        System.setProperty(McpTools.LOCAL_REPO_REVISION_PROPERTY, base);
+        System.setProperty(McpTools.LOCAL_REVIEW_OVERLAY_PATH_PROPERTY, overlay.toString());
+        System.setProperty(McpTools.WORKSPACE_PROPERTY, "team");
+        System.setProperty(McpTools.REPO_SLUG_PROPERTY, "repo");
+        VcsMcpClientFactory factory = mock(VcsMcpClientFactory.class);
+        when(factory.createClient()).thenThrow(new java.io.IOException("Unexpected provider access"));
+        McpTools tools = new McpTools(factory);
+
+        assertThat(tools.getDirectoryByPath("team", "repo", suppliedRef, "packages/auth"))
+                .containsEntry("directoryContent", "package.json\nproposed.ts")
+                .containsEntry("source", "proposed-tree")
+                .containsEntry("requestedRef", suppliedRef)
+                .containsEntry("resolvedBaseRef", base).doesNotContainKey("error");
+        assertThat(tools.getDirectoryByPath("team", "repo", suppliedRef, "packages/missing"))
+                .containsEntry("status", "not_found").containsEntry("exists", false)
+                .containsEntry("directoryContent", "").doesNotContainKey("error");
+        assertThat(tools.getDirectoryByPath("other-tenant", "repo", suppliedRef, "packages/auth"))
+                .containsKey("error");
+        assertThat(tools.getDirectoryByPath("team", "repo", suppliedRef, "../outside"))
+                .containsKey("error");
+        verify(factory, never()).createClient();
+    }
+
+    @Test
+    void directoryWithoutReviewOverlayKeepsRequestedRemoteRef() throws Exception {
+        System.setProperty(McpTools.LOCAL_REPO_PATH_PROPERTY, repository.toString());
+        System.setProperty(McpTools.LOCAL_REPO_REVISION_PROPERTY, "base");
+        System.setProperty(McpTools.WORKSPACE_PROPERTY, "team");
+        System.setProperty(McpTools.REPO_SLUG_PROPERTY, "repo");
+        VcsMcpClientFactory factory = mock(VcsMcpClientFactory.class);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        when(factory.createClient()).thenReturn(remote);
+        when(remote.getDirectoryByPath("team", "repo", "feature", "src")).thenReturn("Remote.java");
+        assertThat(new McpTools(factory).getDirectoryByPath("team", "repo", "feature", "src"))
+                .containsExactlyEntriesOf(Map.of("directoryContent", "Remote.java"));
+        verify(remote).getDirectoryByPath("team", "repo", "feature", "src");
+    }
+
+    @Test
+    void proposedDirectoryRecoversArchiveOmissionAtTrustedBaseRef() throws Exception {
+        Path overlay = repository.resolve("overlay");
+        Files.createDirectories(overlay.resolve("files"));
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":[],"deletedFiles":[],"targetRevision":"base",
+                 "targetFiles":["generated/Recovered.java"]}
+                """);
+        System.setProperty(McpTools.LOCAL_REPO_PATH_PROPERTY, repository.toString());
+        System.setProperty(McpTools.LOCAL_REPO_REVISION_PROPERTY, "base");
+        System.setProperty(McpTools.LOCAL_REVIEW_OVERLAY_PATH_PROPERTY, overlay.toString());
+        System.setProperty(McpTools.WORKSPACE_PROPERTY, "team");
+        System.setProperty(McpTools.REPO_SLUG_PROPERTY, "repo");
+        VcsMcpClientFactory factory = mock(VcsMcpClientFactory.class);
+        VcsMcpClient remote = mock(VcsMcpClient.class);
+        when(factory.createClient()).thenReturn(remote);
+        when(remote.getDirectoryByPath("team", "repo", "base", "generated")).thenReturn("Recovered.java");
+        assertThat(new McpTools(factory).getDirectoryByPath("team", "repo", "model-ref", "generated"))
+                .containsEntry("directoryContent", "Recovered.java").containsEntry("resolvedBaseRef", "base");
+        verify(remote).getDirectoryByPath("team", "repo", "base", "generated");
+    }
+
+    @Test
+    void absentRegularFileIsAnExplicitNegativeResultWhenPinnedInventoryProvesIt() throws Exception {
+        Path overlay = repository.resolve("overlay");
+        Files.createDirectories(overlay.resolve("files"));
+        Files.writeString(overlay.resolve("manifest.json"), """
+                {"changedFiles":[],"deletedFiles":[],"targetRevision":"target-sha",
+                 "targetFiles":["playwright.config.ts"]}
+                """);
+        System.setProperty(McpTools.LOCAL_REPO_PATH_PROPERTY, repository.toString());
+        System.setProperty(McpTools.LOCAL_REPO_REVISION_PROPERTY, "target-sha");
+        System.setProperty(McpTools.LOCAL_REVIEW_OVERLAY_PATH_PROPERTY, overlay.toString());
+        System.setProperty(McpTools.WORKSPACE_PROPERTY, "team");
+        System.setProperty(McpTools.REPO_SLUG_PROPERTY, "repo");
+        VcsMcpClientFactory factory = mock(VcsMcpClientFactory.class);
+        McpTools tools = new McpTools(factory);
+        assertThat(tools.getReviewFileContent("team", "repo", "e2e/playwright.config.ts", 1, 180))
+                .containsEntry("exists", false).containsEntry("unavailable", false)
+                .containsEntry("deleted", false).containsEntry("filePath", "e2e/playwright.config.ts")
+                .containsEntry("fileContent", "").containsEntry("totalLines", 0)
+                .doesNotContainKey("error");
+        verify(factory, never()).createClient();
+    }
 
     @TempDir
     Path repository;
@@ -346,6 +449,15 @@ class McpToolsLocalRepoTest {
                 .containsEntry("fileContent", "line two")
                 .containsEntry("startLine", 2)
                 .containsEntry("endLine", 2);
+        assertThat(tools.getReviewFileContent("team", "repo", "src/Changed.java", 530, 610))
+                .doesNotContainKey("error")
+                .containsEntry("fileContent", "line one\nline two\n")
+                .containsEntry("startLine", 1)
+                .containsEntry("endLine", 3)
+                .containsEntry("requestedStartLine", 530)
+                .containsEntry("requestedEndLine", 610)
+                .containsEntry("rangeAdjustment", "requested_start_beyond_eof")
+                .containsEntry("source", "review-overlay");
         assertThat(related)
                 .containsEntry("fileContent", "related source\n")
                 .containsEntry("completeFile", true);

@@ -6,7 +6,27 @@ import pytest
 
 from tools.codex_benchmark.bridge import Conversation, SubscriptionBridge, create_app, dynamic_tools, prompt_parts
 from tools.codex_benchmark.inference_entrypoint import install_subscription_guard
-from tools.codex_benchmark.rpc import AppServer, MODEL
+from tools.codex_benchmark.rpc import AppServer, MODEL, NativeProviderError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error,status", [
+    (NativeProviderError({"error": {"codexErrorInfo": {"responseTooManyFailedAttempts": {"httpStatusCode": 429}}}}), 429),
+    (NativeProviderError({"codexErrorInfo": "serverOverloaded"}), 503),
+    (NativeProviderError({"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}}), 401),
+    (RuntimeError("local cleanup failed, previous message mentioned 429"), 502),
+    (TimeoutError("native deadline expired"), 504),
+])
+async def test_http_facade_preserves_native_error_status_without_guessing(tmp_path, error, status):
+    import httpx
+    bridge = SubscriptionBridge(FakeRPC(), tmp_path)
+    async def fail(*args, **kwargs):
+        raise error
+    bridge.complete = fail
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(bridge, "token")), base_url="http://local") as client:
+        response = await client.post("/v1/chat/completions", json={}, headers={"Authorization": "Bearer token"})
+    assert response.status_code == status
+    assert "retry-after" not in response.headers
 
 
 class FakeRPC:

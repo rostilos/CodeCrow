@@ -1,6 +1,6 @@
 """Stage 2: Cross-file and architectural analysis."""
 from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.inference_usage import record_model_response, record_compute_decision
 import json
 import hashlib
 import logging
@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from model.dtos import ReviewRequestDto
-from service.review.change_summary import change_summary_context
+from service.review.change_summary import change_summary_context, change_summary_minimum_tokens
 from model.output_schemas import CodeReviewIssue
 from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
@@ -72,8 +72,8 @@ def _build_stage_2_prompts(
     task_context: str,
     task_history_context: str,
     evidence_ledger: PrEvidenceLedger,
+    pr_change_context: str = "",
     token_budget: int = STAGE2_INPUT_TOKEN_TARGET,
-    max_packets: int = 4,
 ) -> List[str]:
     """Compatibility facade over the typed semantic-packet boundary."""
     return build_stage_2_prompts(Stage2SemanticPacketInput(
@@ -88,8 +88,8 @@ def _build_stage_2_prompts(
         task_context=task_context,
         task_history_context=task_history_context,
         evidence_ledger=evidence_ledger,
+        pr_change_context=pr_change_context,
         token_budget=token_budget,
-        max_packets=max_packets,
     ))
 
 
@@ -149,8 +149,12 @@ async def execute_stage_2_cross_file(
         pr_title=request.prTitle or "",
         commit_hash=request.currentCommitHash or request.commitHash or "",
         stage_1_findings_json=issues_json,
-        architecture_context=architecture_context + change_summary_context(
-            getattr(request, "prChangeSummary", None), max_tokens=input_token_budget // 4,
+        architecture_context=architecture_context,
+        pr_change_context=change_summary_context(
+            getattr(request, "prChangeSummary", None), max_tokens=min(
+                max(0, input_token_budget - 8_000),
+                input_token_budget // 4 + change_summary_minimum_tokens(getattr(request, 'prChangeSummary', None)),
+            ),
         ),
         migrations=migrations,
         cross_file_concerns=plan.cross_file_concerns,
@@ -162,7 +166,6 @@ async def execute_stage_2_cross_file(
         task_history_context=_build_task_history_context(request),
         evidence_ledger=evidence_ledger,
         token_budget=input_token_budget,
-        max_packets=inference_profile.invocation_cap("stage_2_packets"),
     )
     if visible_prompt_hunk_ids is not None:
         visible_prompt_hunk_ids.clear()
@@ -295,6 +298,8 @@ async def execute_stage_2_cross_file(
         if core_failures:
             prompt_provenance["completePrEvidenceVisible"] = "false"
 
+    record_compute_decision("stage_2_result", completed=core_successes, failed=core_failures,
+                            optionalFailures=optional_failures)
     if core_successes == 0:
         raise Stage2GenerationError(
             "Stage 2 exhausted every core semantic shard response "

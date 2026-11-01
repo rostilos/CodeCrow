@@ -1,0 +1,16 @@
+{
+  "id": "astro",
+  "kind": "language",
+  "requires": [],
+  "capabilities": ["graph", "index"],
+  "detection": {
+    "extensions": [".astro"],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "python": "codecrow_plugin_astro:create_plugin"
+  }
+}

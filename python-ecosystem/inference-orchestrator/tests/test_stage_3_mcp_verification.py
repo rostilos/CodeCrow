@@ -343,7 +343,8 @@ async def test_terminal_failure_retains_issue_and_ignores_tool_turn_marker() -> 
     assert result["dismissed_issue_object_ids"] == []
 
 
-def test_structured_assessments_preserve_valid_records_and_mark_missing_or_invalid():
+@pytest.mark.parametrize("malformed", [False, True])
+def test_structured_assessments_preserve_valid_records_and_mark_missing_or_invalid(malformed):
     issues = {f"issue_{i}": CodeReviewIssue(file="a.py", line=1, severity="HIGH", category="BUG_RISK",
               reason="Guard allegedly absent", suggestedFixDescription="Guard it") for i in range(3)}
     executor = SimpleNamespace(verification_source={("issue_0", "a.py"): ["if missing: return"]})
@@ -351,6 +352,8 @@ def test_structured_assessments_preserve_valid_records_and_mark_missing_or_inval
         {"issue_id": "issue_0", "verdict": "disproven", "contradicting_evidence": [
             {"file_path": "a.py", "snippet": "if missing: return"}]},
         {"issue_id": "issue_1", "verdict": "invented"}]})
+    if malformed:
+        content = content.replace('"snippet": "if missing: return"}', '"snippet": "if missing: return", "}')
     report, assessments = stage_3_mcp_verification.extract_verification_assessments(content, executor, issues)
     assert report == "Review summary"
     assert assessments["issue_0"]["verdict"] == "disproven"

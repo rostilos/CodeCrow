@@ -166,12 +166,12 @@ async def test_capture_failure_before_or_after_provider_does_not_retry_or_drop_r
     write = session._write
     writes = 0
 
-    def fail_once():
+    def fail_once(*args):
         nonlocal writes
         writes += 1
         if writes == failed_write:
             raise OSError("capture disk unavailable")
-        write()
+        write(*args)
 
     monkeypatch.setattr(session, "_write", fail_once)
     result = await wrapped.ainvoke("Review the exact source")
@@ -192,13 +192,91 @@ async def test_capture_keeps_tool_call_identity_and_effective_invocation_paramet
          SimpleNamespace(type="tool", content="observed code", tool_call_id="native-call-42")],
         reasoning_effort="high",
     )
-    artifact = json.loads(session.path.read_text())
+    artifact = quality_capture.read_quality_capture(session.path)
     call = artifact["calls"][0]
     assert call["input"][1]["tool_call_id"] == "native-call-42"
     assert call["invocationParameters"]["reasoning_effort"] == "high"
     assert call["stage"] == "verification"
     assert quality_capture._classify_stage(type("SemanticDeduplicationDecision", (), {}), "", ()) == "deduplication"
     assert quality_capture._classify_stage(None, "senior code reviewer analyzing one batch of PR files; lifecycle reconciliation", ()) == "stage_1"
+
+
+@pytest.mark.asyncio
+async def test_capture_journal_recovers_concurrent_calls_and_compacts_without_loss(capture_environment):
+    session = create_quality_capture_session(_request())
+    initial = session.path.read_bytes()
+    wrapped = ReviewQualityCaptureLLM(_FakeDelegate(), session)
+    await asyncio.gather(*(wrapped.ainvoke(f"source {i}: provider-secret α") for i in range(12)))
+
+    # Each checkpoint adds only the changed event; earlier prompts stay untouched.
+    assert session.path.read_bytes() == initial
+    journal = session.path.with_suffix(".jsonl")
+    assert journal.stat().st_mode & 0o777 == 0o600
+    assert "provider-secret" not in journal.read_text()
+    recovered = quality_capture.read_quality_capture(session.path)
+    assert recovered == session._artifact
+    assert len(recovered["calls"]) == recovered["providerCalls"] == 12
+    assert all(call["status"] == "completed" for call in recovered["calls"])
+
+    await session.complete({"result": {"issues": []}})
+    final = json.loads(session.path.read_text())
+    assert not journal.exists()
+    assert final["calls"] == recovered["calls"]
+    assert final["captureGaps"] == []
+    assert final["captureDigest"] == quality_capture._digest({**final, "captureDigest": None})
+    assert quality_capture.read_quality_capture(session.path) == final
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", [b'{"call":', b'{"call":"\xce'])
+async def test_capture_journal_reports_torn_tail_without_losing_prior_events(capture_environment, tail):
+    session = create_quality_capture_session(_request())
+    await ReviewQualityCaptureLLM(_FakeDelegate(), session).ainvoke("durable prompt")
+    with session.path.with_suffix(".jsonl").open("ab") as handle:
+        handle.write(tail)
+    recovered = quality_capture.read_quality_capture(session.path)
+    assert recovered["status"] == "recording"
+    assert len(recovered["calls"]) == 1
+    assert recovered["calls"][0]["status"] == "completed"
+    assert recovered["captureGaps"] == [{"reason": "incomplete_journal_tail"}]
+
+
+@pytest.mark.asyncio
+async def test_capture_final_serialization_runs_outside_event_loop(capture_environment, monkeypatch):
+    import threading
+
+    session = create_quality_capture_session(_request())
+    original = session._finalize_artifact
+    loop_thread = threading.get_ident()
+    observed = []
+
+    def finalize():
+        observed.append(threading.get_ident())
+        original()
+
+    monkeypatch.setattr(session, "_finalize_artifact", finalize)
+    await session.complete({"result": {"issues": []}})
+    assert observed and observed[0] != loop_thread
+    assert session.receipt()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_failed_capture_compaction_keeps_recoverable_journal(capture_environment, monkeypatch):
+    session = create_quality_capture_session(_request())
+    delegate = _FakeDelegate()
+    await ReviewQualityCaptureLLM(delegate, session).ainvoke("durable source")
+
+    def unavailable(*args):
+        raise OSError("disk unavailable during replacement")
+
+    monkeypatch.setattr(quality_capture.os, "replace", unavailable)
+    await session.complete({"result": {"issues": []}})
+    assert session.receipt()["status"] == "unavailable"
+    assert len(delegate.calls) == 1
+    assert session.path.with_suffix(".jsonl").exists()
+    recovered = quality_capture.read_quality_capture(session.path)
+    assert recovered["status"] == "recording"
+    assert recovered["calls"][0]["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -407,6 +485,8 @@ async def test_capture_records_tool_binding_options(capture_environment):
 async def test_capture_marks_missing_or_invalid_terminal_pipeline_evidence(
     capture_environment,
 ):
+    from service.review.orchestrator.stage_1_file_review import _structural_retrieval_state
+
     missing = create_quality_capture_session(_request())
     await missing.complete({"result": {"issues": []}})
     missing_artifact = json.loads(missing.path.read_text(encoding="utf-8"))
@@ -449,6 +529,11 @@ async def test_capture_marks_missing_or_invalid_terminal_pipeline_evidence(
         ("disabled", []),
         ("bounded", ["bounded"]),
         ("unavailable", ["unavailable"]),
+        ("missing_optional_unit", [
+            _structural_retrieval_state({
+                "status": "not_found", "unit": None, "sourceEvidence": False,
+            }),
+        ]),
     ):
         optional = create_quality_capture_session(_request())
         optional.observe_pipeline_event({
@@ -594,7 +679,7 @@ async def test_capture_persists_ordered_stage1_agent_batch_telemetry(
         },
     })
 
-    recording = json.loads(session.path.read_text(encoding="utf-8"))
+    recording = quality_capture.read_quality_capture(session.path)
     assert [
         batch["batchNumber"]
         for batch in recording["stage1AgentBatches"]
@@ -605,7 +690,7 @@ async def test_capture_persists_ordered_stage1_agent_batch_telemetry(
     assert recording["stage1AgentBatches"][1]["partialFailure"] == (
         "transport unavailable"
     )
-    assert "must-not-survive" not in session.path.read_text(encoding="utf-8")
+    assert "must-not-survive" not in json.dumps(recording)
 
     await session.complete({"result": {"issues": []}})
     receipt = session.receipt()
@@ -709,7 +794,7 @@ async def test_review_service_routes_pipeline_events_through_capture_session(
         event_callback=forwarded.append,
     )
 
-    assert response["result"] == {"issues": []}
+    assert response["result"] == {"issues": [], "analysisCompletion": {"status": "complete", "incompleteStages": []}}
     assert response["inferenceUsage"]["attempts"] == 0
     assert observed[0] == {"state": "review_evidence_completed"}
     assert observed[1]["state"] == "review_quality_capture_completed"

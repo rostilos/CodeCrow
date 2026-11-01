@@ -90,6 +90,7 @@ class _ReviewExecution:
     pull_request_id: Any
     owner: object = field(default_factory=object)
     deadline: float | None = None
+    provider_failure: list[BaseException] = field(default_factory=list)
 
 
 _EXECUTION: ContextVar[_ReviewExecution | None] = ContextVar("review_execution", default=None)
@@ -180,6 +181,8 @@ async def review_model_slot(stage: str):
         _capacity_event(execution, stage=stage, resource="model-call", acquired=False)
 
     async with execution.scheduler.slot(execution.owner, on_wait):
+        if execution.provider_failure:
+            raise execution.provider_failure[0]
         started = time.perf_counter()
         wait_ms = (started - queued_at) * 1000
         logger.info("Review model call acquired: project=%s PR=%s stage=%s queue_wait_ms=%.1f",
@@ -196,6 +199,22 @@ async def review_model_slot(stage: str):
             yield
         except BaseException as error:
             outcome = type(error).__name__
+            cause = error
+            seen = set()
+            while cause is not None and id(cause) not in seen:
+                seen.add(id(cause))
+                if getattr(cause, "status_code", None) in {401, 402, 403}:
+                    # A fixed review connection cannot recover authentication
+                    # or exhausted credit by repeating another stage's request.
+                    if not execution.provider_failure:
+                        execution.provider_failure.append(error)
+                        account_rejected = cause.status_code in {401, 402} or any(
+                            marker in str(cause).lower()
+                            for marker in ("key limit exceeded", "insufficient_quota", "insufficient credits"))
+                        logger.warning("Provider rejected review credentials/account; remaining model calls stopped: project=%s PR=%s status=%s account_rejected=%s",
+                                       execution.project_id, execution.pull_request_id, cause.status_code, account_rejected)
+                    break
+                cause = cause.__cause__ or cause.__context__
             raise
         finally:
             call.update(outcome=outcome, durationMs=(time.perf_counter() - started) * 1000)

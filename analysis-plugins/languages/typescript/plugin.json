@@ -25,7 +25,7 @@
         "filesAll": [],
         "filesAny": [],
         "pathPatternsAll": [],
-        "pathPatternsAny": ["**/*.tsx"],
+        "pathPatternsAny": ["**/*.tsx", "**/tsconfig.*.json", "**/tsconfig.json", "tsconfig.*.json", "tsconfig.json"],
         "contentMarkers": []
       }
     ]

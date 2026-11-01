@@ -290,10 +290,10 @@ class PromptCaptureSession:
         return CapturedAIMessage(content=content)
 
     def _structured_response(self, schema: Any, rendered: str) -> Any:
-        if schema is CumulativeChanges:
+        if isinstance(schema, type) and issubclass(schema, CumulativeChanges):
             batch_text = re.split(r"\nBatch \d+/\d+:\n", rendered)[-1]
             batch = json.loads(batch_text)
-            return CumulativeChanges(
+            return schema(
                 summary="Dry-run synthetic cumulative change description; not a measured review result.",
                 files=[ChangeNode(path=item["path"], summary="Synthetic changed-file description") for item in batch],
                 relationships=[],
@@ -327,7 +327,7 @@ class PromptCaptureSession:
                 ),
             )
 
-        if schema is FileReviewBatchOutput:
+        if isinstance(schema, type) and issubclass(schema, FileReviewBatchOutput):
             reviews = []
             for section in _FILE_SECTION.finditer(rendered):
                 path = section.group("path").strip()

@@ -4,6 +4,8 @@ import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
@@ -15,6 +17,8 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
@@ -42,6 +46,108 @@ class BranchIssueReconciliationServiceTest {
     @Mock private AstScopeEnricher astScopeEnricher;
 
     private BranchIssueReconciliationService service;
+
+    @ParameterizedTest
+    @EnumSource(EVcsProvider.class)
+    void stillPresentDecisionUpdatesExactAnchorAndPreservesOriginalFinding(EVcsProvider provider) throws Exception {
+        String source = "<?php\n\n$max = $withTax ? $orderAmount : $baseAmount;\n$result = $max;\n";
+        var decision = Map.<String, Object>of("issueId", "100", "isResolved", false,
+                "resolutionReason", "The false branch still assigns base currency to the order-currency result.",
+                "filePath", "src/refund.php", "lineNumber", 3, "endLineNumber", 4,
+                "codeSnippet", "$max = $withTax ? $orderAmount : $baseAmount;\n$result = $max;");
+        var run = reconcileDecision(provider, source, "$result = min($requested, $baseAmount);", List.of(decision), false);
+        assertThat(run.result.complete()).isTrue();
+        assertThat(run.issue.isResolved()).isFalse();
+        assertThat(run.issue.getCurrentLineNumber()).isEqualTo(3);
+        assertThat(run.issue.getCurrentEndLineNumber()).isEqualTo(4);
+        assertThat(run.issue.getLastVerifiedCommit()).isEqualTo("reviewed-head");
+        assertThat(run.issue.getReason()).contains("false branch");
+        assertThat(run.issue.getCodeSnippet()).isEqualTo(decision.get("codeSnippet"));
+        assertThat(run.origin.getLineNumber()).isEqualTo(2);
+        assertThat(run.origin.getCodeSnippet()).isEqualTo("$result = min($requested, $baseAmount);");
+        assertThat(run.origin.isResolved()).isFalse();
+    }
+
+    @Test void missingDecisionAndModelFailureKeepDeletedAnchorUnverified() throws Exception {
+        var run = reconcileDecision(EVcsProvider.GITHUB, "<?php\n\nchanged();", "removed();", List.of(), true);
+        assertThat(run.result.complete()).isFalse();
+        assertThat(run.result.diagnostic()).contains("unavailable");
+        assertThat(run.issue.isResolved()).isFalse();
+        assertThat(run.issue.getCurrentLineNumber()).isZero();
+        verify(branchIssueRepository).saveAll(List.of(run.issue));
+    }
+
+    @Test void unchangedFragmentOfMultilineSnippetCannotKeepAnAnchor() throws Exception {
+        var run = reconcileDecision(EVcsProvider.GITHUB, "<?php\nfirst();\nchanged();", "first();\nsecond();", List.of(), false);
+        assertThat(run.result.complete()).isFalse();
+        assertThat(run.issue.getCurrentLineNumber()).isZero();
+    }
+
+    @Test void exactMovedSnippetIsLocatedWhileMissingSemanticDecisionRemainsPending() throws Exception {
+        var run = reconcileDecision(EVcsProvider.GITHUB, "<?php\n\n\noriginal();", "original();", List.of(), false);
+        assertThat(run.result.complete()).isFalse();
+        assertThat(run.issue.getCurrentLineNumber()).isEqualTo(4);
+        assertThat(run.issue.getLastVerifiedCommit()).isNull();
+        assertThat(run.issue.isResolved()).isFalse();
+    }
+
+    @Test void wrongRangeOrForeignIssueCannotUpdateOrResolveBranchIssue() throws Exception {
+        var wrongRange = Map.<String, Object>of("issueId", "100", "isResolved", false,
+                "resolutionReason", "Still present", "filePath", "src/refund.php",
+                "lineNumber", 2, "endLineNumber", 2, "codeSnippet", "changed();");
+        var foreign = Map.<String, Object>of("issueId", "999", "isResolved", true, "resolutionReason", "Fixed");
+        var run = reconcileDecision(EVcsProvider.GITHUB, "<?php\n\nchanged();", "old();", List.of(wrongRange, foreign), false);
+        assertThat(run.result.complete()).isFalse();
+        assertThat(run.result.diagnostic()).contains("does not match");
+        assertThat(run.issue.getCurrentLineNumber()).isZero();
+        assertThat(run.issue.isResolved()).isFalse();
+        verify(branchIssueRepository, never()).findById(anyLong());
+    }
+
+    @Test void fixedOriginalIssueClosesEvenWhenCurrentCodeHasADifferentDefect() throws Exception {
+        var decision = Map.<String, Object>of("issueId", "100", "isResolved", true,
+                "resolutionReason", "Separate currency amounts replaced the shared cap; partial refunds are a different defect.");
+        var run = reconcileDecision(EVcsProvider.GITHUB, "<?php\n$result = $remainingOrderAmount;", "old();", List.of(decision), false);
+        assertThat(run.result.complete()).isTrue();
+        assertThat(run.issue.isResolved()).isTrue();
+        assertThat(run.issue.getResolvedInCommitHash()).isEqualTo("reviewed-head");
+        assertThat(run.origin.isResolved()).isFalse();
+    }
+
+    private record DecisionRun(BranchIssue issue, CodeAnalysisIssue origin,
+            BranchIssueReconciliationService.ReconciliationResult result) {}
+
+    private DecisionRun reconcileDecision(EVcsProvider provider, String source, String oldSnippet,
+            List<Map<String, Object>> decisions, boolean fail) throws Exception {
+        var branch = new Branch(); setId(branch, 1L); branch.setBranchName("main");
+        var origin = new CodeAnalysisIssue(); setId(origin, 100L);
+        origin.setFilePath("src/refund.php"); origin.setLineNumber(2); origin.setCodeSnippet(oldSnippet);
+        origin.setSeverity(org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.HIGH);
+        var issue = BranchIssue.fromCodeAnalysisIssue(origin, branch); setId(issue, 10L);
+        when(branchIssueRepository.findUnresolvedByBranchIdAndFilePath(1L, "src/refund.php")).thenReturn(List.of(issue));
+        when(branchIssueRepository.findAllUnresolvedByBranchId(1L)).thenReturn(List.of(issue));
+        when(branchRepository.findByIdWithIssues(1L)).thenReturn(java.util.Optional.of(branch));
+        var project = mock(Project.class);
+        var repo = mock(org.rostilos.codecrow.core.model.vcs.VcsRepoInfo.class);
+        var connection = mock(org.rostilos.codecrow.core.model.vcs.VcsConnection.class);
+        when(project.getEffectiveVcsRepoInfo()).thenReturn(repo);
+        when(repo.getVcsConnection()).thenReturn(connection);
+        when(connection.getProviderType()).thenReturn(provider);
+        var builder = mock(org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService.class);
+        var aiRequest = mock(org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest.class);
+        when(vcsServiceFactory.getAiClientService(provider)).thenReturn(builder);
+        when(builder.buildAiAnalysisRequestsForBranchReconciliation(any(), any(), anyList(), anyMap(), any()))
+                .thenReturn(List.of(aiRequest));
+        if (fail) when(aiAnalysisClient.performAnalysis(eq(aiRequest), any())).thenThrow(new java.io.IOException("provider unavailable"));
+        else when(aiAnalysisClient.performAnalysis(eq(aiRequest), any())).thenReturn(Map.of("issues", decisions));
+        var request = new BranchProcessRequest(); request.targetBranchName="main"; request.commitHash="reviewed-head";
+        var result = service.reanalyzeCandidateIssues(Set.of("src/refund.php"), Set.of("src/refund.php"),
+                branch, project, request, event -> {}, Map.of("src/refund.php", source), null, false, Runnable::run);
+        verify(builder).buildAiAnalysisRequestsForBranchReconciliation(eq(project), eq(request),
+                argThat(items -> items.size() == 1 && items.get(0).id().equals("100") && items.get(0).codeSnippet().equals(oldSnippet)),
+                eq(Map.of("src/refund.php", source)), isNull());
+        return new DecisionRun(issue, origin, result);
+    }
 
     @BeforeEach
     void setUp() {

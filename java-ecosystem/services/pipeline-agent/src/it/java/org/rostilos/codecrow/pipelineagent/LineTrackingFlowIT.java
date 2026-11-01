@@ -112,9 +112,16 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 .thenAnswer(inv -> aiResponse(((AiAnalysisRequest) inv.getArgument(0)).getCurrentCommitHash()));
         var branchRequest = mock(AiAnalysisRequest.class);
         when(vcsAiClientService.buildAiAnalysisRequestsForBranchReconciliation(any(), any(), anyList(), any(), any()))
-                .thenReturn(List.of(branchRequest));
-        org.mockito.Mockito.doReturn(Map.of("issues", List.of())).when(aiAnalysisClient)
-                .performAnalysis(org.mockito.ArgumentMatchers.eq(branchRequest), any());
+                .thenAnswer(inv -> {
+                    when(branchRequest.getPreviousCodeAnalysisIssues()).thenReturn(inv.getArgument(2));
+                    return List.of(branchRequest);
+                });
+        org.mockito.Mockito.doAnswer(inv -> Map.of("issues", branchRequest.getPreviousCodeAnalysisIssues().stream()
+                .map(issue -> Map.<String, Object>of("issueId", issue.id(), "isResolved", false,
+                        "resolutionReason", "The secret is still leaked by the surviving call.",
+                        "filePath", "src/App.java", "lineNumber", 6, "endLineNumber", 6,
+                        "codeSnippet", "leakedSecret();")).toList()))
+                .when(aiAnalysisClient).performAnalysis(org.mockito.ArgumentMatchers.eq(branchRequest), any());
 
         when(branchCommitService.resolveCommitRange(any(Project.class), any(VcsConnection.class), anyString(), anyString()))
                 .thenAnswer(inv -> CommitRangeContext.firstAnalysis(inv.getArgument(3)));
@@ -204,7 +211,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
         assertThat(branchIssue.getTitle()).isEqualTo("Secret leak remains");
         assertThat(branchIssue.getCurrentLineNumber()).isEqualTo(6);
         assertThat(branchIssue.getCurrentLineHash()).isNotBlank();
-        assertThat(branchIssue.getLastVerifiedCommit()).isNull();
+        assertThat(branchIssue.getLastVerifiedCommit()).isEqualTo("merge-pr3-commit");
         assertThat(branchIssue.isResolved()).isFalse();
     }
 

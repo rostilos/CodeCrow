@@ -15,6 +15,7 @@ and tested without installing the entire LangChain / LLM stack.
 """
 
 import sys
+from types import SimpleNamespace
 from typing import TypedDict
 from unittest.mock import MagicMock
 
@@ -49,6 +50,7 @@ def _ensure_mock(dotted: str, attrs: dict | None = None) -> MagicMock:
 _ensure_mock("langchain_core")
 _ensure_mock("langchain_core.globals", {"set_debug": lambda x: None})
 _ensure_mock("langchain_core.utils")
+_ensure_mock("langchain_core.utils.function_calling", {"convert_to_openai_tool": lambda value: value})
 _ensure_mock("langchain_core.utils.utils", {
     "secret_from_env": MagicMock(return_value=lambda: "mock-key"),
 })
@@ -130,12 +132,16 @@ class _MockToolStrategy:
             handle_errors=True,
     ):
         self.schema = schema
+        self.schema_specs = [SimpleNamespace(name=getattr(schema, '__name__', None), schema=schema)]
         self.tool_message_content = tool_message_content
         self.handle_errors = handle_errors
 
 
 _ensure_mock("langchain.agents.structured_output", {
     "ToolStrategy": _MockToolStrategy,
+    "OutputToolBinding": SimpleNamespace(from_schema_spec=lambda spec: SimpleNamespace(tool={
+        'type': 'function', 'function': {'name': spec.name, 'parameters': spec.schema.model_json_schema()},
+    })),
 })
 
 # ---------------------------------------------------------------------------

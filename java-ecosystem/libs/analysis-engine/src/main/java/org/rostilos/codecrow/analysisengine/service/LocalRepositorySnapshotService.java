@@ -195,7 +195,9 @@ public class LocalRepositorySnapshotService {
                     reviewOverlayDirectory = prepareReviewOverlay(
                             proposedFileContents,
                             changedFiles,
-                            deletedFiles);
+                            deletedFiles,
+                            targetRevision,
+                            readTargetInventory(connection, workspace, repoSlug, targetRevision));
                 } catch (Exception overlayFailure) {
                     deleteTree(reviewOverlayDirectory);
                     reviewOverlayDirectory = null;
@@ -233,10 +235,31 @@ public class LocalRepositorySnapshotService {
         }
     }
 
+    private List<String> readTargetInventory(
+            VcsConnection connection, String workspace, String repoSlug, String revision
+    ) {
+        try {
+            List<String> paths = vcsClientProvider.getClient(connection)
+                    .listRepositoryFiles(workspace, repoSlug, revision, Integer.MAX_VALUE);
+            Set<String> normalized = new LinkedHashSet<>();
+            for (String path : paths) {
+                normalized.add(normalizeRepositoryPath(path)
+                        .orElseThrow(() -> new IOException("Invalid target inventory path")));
+            }
+            return normalized.stream().sorted().toList();
+        } catch (Exception unavailable) {
+            log.info("Target file inventory unavailable for {}/{} @ {}; retaining provider fallback: {}",
+                    workspace, repoSlug, shortRevision(revision), unavailable.getMessage());
+            return null;
+        }
+    }
+
     private Path prepareReviewOverlay(
             Map<String, String> proposedFileContents,
             Collection<String> changedFiles,
-            Collection<String> deletedFiles
+            Collection<String> deletedFiles,
+            String targetRevision,
+            List<String> targetFiles
     ) throws IOException {
         Path overlayRoot = Files.createTempDirectory(temporaryRoot, REVIEW_OVERLAY_PREFIX);
         try {
@@ -275,7 +298,9 @@ public class LocalRepositorySnapshotService {
 
             ReviewOverlayManifest manifest = new ReviewOverlayManifest(
                     changed.stream().sorted().toList(),
-                    deleted.stream().sorted().toList());
+                    deleted.stream().sorted().toList(),
+                    targetRevision,
+                    targetFiles);
             OBJECT_MAPPER.writeValue(
                     overlayRoot.resolve(REVIEW_OVERLAY_MANIFEST).toFile(),
                     manifest);
@@ -324,7 +349,9 @@ public class LocalRepositorySnapshotService {
 
     private record ReviewOverlayManifest(
             List<String> changedFiles,
-            List<String> deletedFiles
+            List<String> deletedFiles,
+            String targetRevision,
+            List<String> targetFiles
     ) {
     }
 

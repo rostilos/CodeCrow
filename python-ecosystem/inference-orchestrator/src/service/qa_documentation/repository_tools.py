@@ -4,6 +4,7 @@ import logging
 import os
 
 from utils.mcp_config import MCPConfigBuilder
+from utils.mcp_tool_serialization import install_per_connection_tool_serialization
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ async def qa_repository_tools(llm, summary, context):
                 verification_context=scoped(saved.get("verification")),
             )
             client = MCPClient.from_dict(config)
+            install_per_connection_tool_serialization(client)
             candidate = AgentExecutionService(llm=llm, client=client)
             errors = await candidate.initialize(
                 required_server_names=(),

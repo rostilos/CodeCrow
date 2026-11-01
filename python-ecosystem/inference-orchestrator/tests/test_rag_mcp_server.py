@@ -1,4 +1,5 @@
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 
 from service.rag import rag_mcp_server
 
@@ -64,6 +65,55 @@ class _FakeRagClient:
 
     async def close(self):
         self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tool,arguments', [
+    ('getMinimalReviewContext', {'question': 'Find callers', 'focusPaths': ['a.py']}),
+    ('getImpactRadius', {'focusPaths': ['a.py']}),
+    ('traverseCodeGraph', {'start': 'a.py', 'focusPaths': ['a.py']}),
+    ('queryCodeGraph', {'pattern': 'importers_of', 'target': 'a.py'}),
+])
+async def test_metadata_only_graph_tools_accept_inactive_zero_source_budgets(monkeypatch, tool, arguments):
+    fake = _FakeRagClient()
+    monkeypatch.setattr(rag_mcp_server, 'RagClient', lambda: fake)
+    monkeypatch.setenv('CODECROW_RAG_MCP_WORKSPACE', 'tenant')
+    monkeypatch.setenv('CODECROW_RAG_MCP_PROJECT', 'project')
+    await rag_mcp_server.server.call_tool(tool, {**arguments, 'includeSource': False,
+        'maxSourceWindows': 0, 'maxSourceCharacters': 0})
+    assert len(fake.calls) == 1 and fake.closed
+    call = fake.calls[0]
+    assert call['include_source'] is False
+    assert call['max_source_windows'] >= 1 and call['max_source_characters'] >= 1000
+    assert call['workspace'] == 'tenant' and call['project'] == 'project'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source,windows,characters', [(True, 0, 0), (False, -1, 1000)])
+async def test_source_budget_normalization_keeps_active_and_resource_bounds(monkeypatch, source, windows, characters):
+    fake = _FakeRagClient()
+    monkeypatch.setattr(rag_mcp_server, 'RagClient', lambda: fake)
+    with pytest.raises(ToolError, match='validation error'):
+        await rag_mcp_server.server.call_tool('queryCodeGraph', {'target': 'a.py',
+            'includeSource': source, 'maxSourceWindows': windows, 'maxSourceCharacters': characters})
+    assert not fake.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('windows', [40, 80])
+async def test_oversized_graph_requests_use_existing_resource_ceilings(monkeypatch, windows):
+    fake = _FakeRagClient()
+    monkeypatch.setattr(rag_mcp_server, 'RagClient', lambda: fake)
+    monkeypatch.setenv('CODECROW_RAG_MCP_WORKSPACE', 'tenant')
+    monkeypatch.setenv('CODECROW_RAG_MCP_PROJECT', 'project')
+    await rag_mcp_server.server.call_tool('exploreReviewContext', {
+        'question': 'Find callers', 'focusPaths': ['a.py'], 'maxSourceWindows': windows,
+        'maxSourceCharacters': 100000, 'tokenBudget': 50000})
+    assert len(fake.calls) == 1 and fake.closed
+    call = fake.calls[0]
+    assert call['max_source_windows'] == 20 and call['max_source_characters'] == 60000
+    assert call['token_budget'] == 16000
+    assert call['workspace'] == 'tenant' and call['project'] == 'project'
 
 
 @pytest.mark.asyncio

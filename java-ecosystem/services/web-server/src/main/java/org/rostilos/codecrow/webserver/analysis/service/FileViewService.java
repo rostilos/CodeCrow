@@ -707,22 +707,7 @@ public class FileViewService {
                 .filter(bi -> bi.getTitle() != null && !bi.getTitle().isBlank())
                 .filter(bi -> !bi.isResolved())
                 .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
-                .map(bi -> new FileViewResponse.InlineIssue(
-                        bi.getId(),
-                        correctBranchLineNumber(bi, lineHashes),
-                        bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
-                        bi.getTitle(),
-                        bi.getReason(),
-                        bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
-                        bi.isResolved(),
-                        bi.getSuggestedFixDescription(),
-                        bi.getSuggestedFixDiff(),
-                        bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
-                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
-                        bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
-                        bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
-                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
-                ))
+                .map(bi -> branchInlineIssue(bi, content))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
 
@@ -779,28 +764,10 @@ public class FileViewService {
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(bi -> !bi.isResolved())
-                .filter(bi -> {
-                    int ln = effectiveLine(bi);
-                    return ln >= finalStartLine && ln <= finalEndLine;
-                })
-                .sorted(Comparator.comparingInt(bi -> effectiveLine(bi)))
                 .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
-                .map(bi -> new FileViewResponse.InlineIssue(
-                        bi.getId(),
-                        effectiveLine(bi),
-                        bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
-                        bi.getTitle(),
-                        bi.getReason(),
-                        bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
-                        bi.isResolved(),
-                        bi.getSuggestedFixDescription(),
-                        bi.getSuggestedFixDiff(),
-                        bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
-                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
-                        bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
-                        bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
-                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
-                ))
+                .map(bi -> branchInlineIssue(bi, content))
+                .filter(issue -> issue.lineNumber() >= finalStartLine && issue.lineNumber() <= finalEndLine)
+                .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
 
         return Optional.of(new FileSnippetResponse(
@@ -850,28 +817,10 @@ public class FileViewService {
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(bi -> !bi.isResolved())
-                .filter(bi -> {
-                    int ln = effectiveLine(bi);
-                    return ln >= finalStartLine && ln <= finalEndLine;
-                })
-                .sorted(Comparator.comparingInt(bi -> effectiveLine(bi)))
                 .filter(bi -> bi.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
-                .map(bi -> new FileViewResponse.InlineIssue(
-                        bi.getId(),
-                        effectiveLine(bi),
-                        bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
-                        bi.getTitle(),
-                        bi.getReason(),
-                        bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
-                        bi.isResolved(),
-                        bi.getSuggestedFixDescription(),
-                        bi.getSuggestedFixDiff(),
-                        bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
-                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
-                        bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
-                        bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
-                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
-                ))
+                .map(bi -> branchInlineIssue(bi, content))
+                .filter(issue -> issue.lineNumber() >= finalStartLine && issue.lineNumber() <= finalEndLine)
+                .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
 
         return Optional.of(new FileSnippetResponse(
@@ -913,65 +862,21 @@ public class FileViewService {
      * Prefers currentLineNumber (set during reconciliation), falls back to detection-time lineNumber.
      */
     private static int effectiveLine(BranchIssue bi) {
-        if (bi.getCurrentLineNumber() != null && bi.getCurrentLineNumber() > 0) {
-            return bi.getCurrentLineNumber();
-        }
-        return bi.getLineNumber() != null ? bi.getLineNumber() : 0;
+        return bi.getLine() == null ? 0 : bi.getLine();
     }
 
-    /**
-     * Correct a BranchIssue's line number at serve-time by verifying its codeSnippet
-     * and lineHash against the current file content. Similar to correctLineNumber for
-     * CodeAnalysisIssue but reads from BranchIssue's own fields.
-     */
-    private static int correctBranchLineNumber(BranchIssue bi, LineHashSequence lineHashes) {
-        if (bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
-            return bi.getLineNumber() == null ? 1 : bi.getLineNumber();
-        int lineNumber = effectiveLine(bi);
-        if (lineNumber <= 0 || lineHashes.getLineCount() == 0) {
-            return lineNumber;
-        }
-
-        // 1st priority: use persisted codeSnippet (strongest anchor)
-        String snippet = bi.getCodeSnippet();
-        if (snippet != null && !snippet.isBlank()) {
-            String snippetHash = LineHashSequence.hashLine(snippet);
-            if (lineNumber <= lineHashes.getLineCount()) {
-                String currentHash = lineHashes.getHashForLine(lineNumber);
-                if (snippetHash.equals(currentHash)) {
-                    return lineNumber; // correct
-                }
-            }
-            int corrected = lineHashes.findClosestLineForHash(snippetHash, lineNumber);
-            if (corrected > 0) {
-                if (corrected != lineNumber) {
-                    log.debug("Serve-time snippet correction for branch issue {} at {}:{} -> {}",
-                            bi.getId(), bi.getFilePath(), lineNumber, corrected);
-                }
-                return corrected;
-            }
-        }
-
-        // 2nd priority: use lineHash (from BranchIssue's own field)
-        String storedHash = bi.getCurrentLineHash() != null ? bi.getCurrentLineHash() : bi.getLineHash();
-        if (storedHash == null || storedHash.isBlank()) {
-            return lineNumber;
-        }
-        if (lineNumber > lineHashes.getLineCount()) {
-            int corrected = lineHashes.findClosestLineForHash(storedHash, lineHashes.getLineCount());
-            return corrected > 0 ? corrected : lineNumber;
-        }
-        String currentHash = lineHashes.getHashForLine(lineNumber);
-        if (storedHash.equals(currentHash)) {
-            return lineNumber;
-        }
-        int corrected = lineHashes.findClosestLineForHash(storedHash, lineNumber);
-        if (corrected > 0) {
-            log.debug("Serve-time line correction for branch issue {} at {}:{} -> {}",
-                    bi.getId(), bi.getFilePath(), lineNumber, corrected);
-            return corrected;
-        }
-        return lineNumber;
+    private static FileViewResponse.InlineIssue branchInlineIssue(BranchIssue bi, String content) {
+        var location = org.rostilos.codecrow.core.util.anchoring.SnippetLocator.locateExact(
+                bi.getCodeSnippet(), content, effectiveLine(bi));
+        int line = bi.getCurrentLineNumber() != null && bi.getCurrentLineNumber() == 0 ? 0 : location.line();
+        return new FileViewResponse.InlineIssue(
+                bi.getId(), line, bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
+                bi.getTitle(), bi.getReason(), bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
+                bi.isResolved(), bi.getSuggestedFixDescription(), bi.getSuggestedFixDiff(),
+                bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
+                bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
+                bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
+                line > 0 ? location.endLine() : 0, line);
     }
 
     /**

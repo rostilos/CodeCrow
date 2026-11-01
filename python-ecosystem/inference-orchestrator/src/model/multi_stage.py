@@ -9,7 +9,7 @@ These models are used for the multi-stage PR review process:
 
 import json
 from typing import Optional, List
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
 from model.output_schemas import CodeReviewIssue
 
@@ -51,7 +51,34 @@ class FileReviewBatchOutput(BaseModel):
     """Stage 1 Output: Batch of file reviews."""
     reviews: List[FileReviewOutput] = Field(description="List of review results for the files in the batch")
 
+    @classmethod
+    def for_paths(cls, paths):
+        paths = list(dict.fromkeys(paths))
+
+        def require_file_slots(schema):
+            review = schema['properties']['reviews']['items']
+            schema['properties']['reviews'] = dict(
+                type='object', additionalProperties=False,
+                properties={path: review for path in paths},
+                required=paths,
+            )
+
+        # Declare coverage during generation; existing validation still owns partial output.
+        return create_model(cls.__name__, __base__=cls,
+                            __config__=ConfigDict(json_schema_extra=require_file_slots))
+
     @field_validator("reviews", mode="before")
+    @classmethod
+    def normalize_path_reviews(cls, value):
+        value = cls.decode_json_reviews(value)
+        if isinstance(value, dict):
+            if any(isinstance(review, dict) and review.get('file', path) != path
+                   for path, review in value.items()):
+                raise ValueError('Review file must match its path key')
+            return [dict(review, file=path) if isinstance(review, dict) else review
+                    for path, review in value.items()]
+        return value
+
     @classmethod
     def decode_json_reviews(cls, value):
         """Normalize an encoded array without changing any review or finding."""

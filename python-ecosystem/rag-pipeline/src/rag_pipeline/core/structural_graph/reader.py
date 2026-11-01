@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..exact_index import ExactIndexPreconditionError
+from ...utils.utils import should_exclude_file, should_include_file
 
 from .shared import (
     _MAX_PRELOADED_ANCHOR_UNITS,
@@ -263,6 +264,10 @@ class StructuralGraphReader:
             "snapshot": self.snapshot(),
             "unit": unit_to_manifest(row, include_content=source_evidence),
             "sourceEvidence": source_evidence,
+            **({"unitIdResolution": {
+                "requestedUnitId": unit_id, "resolvedUnitId": row["unit_id"],
+                "method": "unique_prefix", "prefixHexCharacters": 32,
+            }} if row["unit_id"] != unit_id else {}),
         }
 
     def source_detail_for_manifest(self, unit: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -288,6 +293,24 @@ class StructuralGraphReader:
             if detail and detail.get("sourceEvidence"):
                 return detail
         return None
+
+    def _file_coverage(self, path: str) -> dict[str, str]:
+        """Explain known intentional absences using sealed generation facts."""
+        try:
+            facts = self.repository_facts()
+        except ExactIndexPreconditionError:
+            return {'state': 'unknown', 'reason': 'sealed_file_metadata_unavailable'}
+        hashes = facts.get('fileSha256')
+        if isinstance(hashes, Mapping) and hashes.get(path) == _sha256_text(''):
+            return {'state': 'empty', 'reason': 'sealed_empty_content_digest'}
+        selection = facts.get('indexSelection')
+        if isinstance(selection, Mapping):
+            include, exclude = selection.get('includePatterns'), selection.get('excludePatterns')
+            if all(isinstance(patterns, list) and all(isinstance(p, str) for p in patterns)
+                   for patterns in (include, exclude)):
+                if not should_include_file(path, include) or should_exclude_file(path, exclude):
+                    return {'state': 'excluded', 'reason': 'sealed_index_selection'}
+        return {'state': 'unknown', 'reason': 'no_structural_units'}
 
     def get_relation(self, evidence_id: str) -> dict[str, Any] | None:
         """Read one exact fact only from this already-bound generation."""
@@ -369,6 +392,15 @@ class StructuralGraphReader:
                 "truncated": truncated,
                 "resultCount": len(selected),
             }
+        if pattern == "file_search":
+            fragment = _normalize_path(target)
+            suffix = '/' + fragment
+            rows = self.connection.execute(
+                "SELECT * FROM units WHERE path = ? OR substr(path, -?) = ? "
+                "ORDER BY path, start_line, end_line, unit_id LIMIT ? OFFSET ?",
+                (fragment, len(suffix), suffix, max_results + 1, cursor),
+            ).fetchall()
+            return self._unit_query_response(pattern, target, rows, max_results, cursor=cursor)
         if pattern == "file_summary":
             path = _normalize_path(target)
             rows = self.connection.execute(
@@ -376,13 +408,15 @@ class StructuralGraphReader:
                 "ORDER BY start_line, end_line, unit_id LIMIT ? OFFSET ?",
                 (path, max_results + 1, cursor),
             ).fetchall()
-            return self._unit_query_response(
+            response = self._unit_query_response(
                 pattern,
                 target,
                 rows,
                 max_results,
                 cursor=cursor,
             )
+            response['fileCoverage'] = self._file_coverage(path) if not rows else {'state': 'indexed'}
+            return response
 
         kind_map = {
             "callers_of": ("incoming", {
@@ -447,7 +481,7 @@ class StructuralGraphReader:
             return {
                 "status": "error",
                 "error": "Unknown graph pattern",
-                "availablePatterns": sorted((*kind_map, "symbol_search", "file_summary")),
+                "availablePatterns": sorted((*kind_map, "symbol_search", "file_summary", "file_search")),
                 "results": [],
             }
         direction, kinds = kind_map[pattern]
@@ -477,7 +511,7 @@ class StructuralGraphReader:
             has_more_candidates = next_cursor < candidate_count
             return {
                 "status": "ambiguous",
-                "error": "Graph target resolves to multiple structural units",
+                "message": "Graph target resolves to multiple structural units",
                 "snapshot": self.snapshot(),
                 "pattern": pattern,
                 "target": target,

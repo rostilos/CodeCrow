@@ -36,3 +36,6 @@ pytest-cov>=5.0.0,<7.0.0
 
 # System monitoring
 psutil>=5.9.0,<6.0.0
+
+# Source-backed pnpm catalog facts in the installed pnpm plugin.
+PyYAML==6.0.3

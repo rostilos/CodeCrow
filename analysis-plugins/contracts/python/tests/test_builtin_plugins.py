@@ -401,7 +401,13 @@ def test_discovers_and_selects_php_and_magento_deterministically():
     capabilities = ProjectSelector(catalog.registry).select(_facts())
 
     assert set(catalog.registry.ordered_ids) == {
-        "bash", "c", "c-sharp", "cpp", "css", "go", "haskell", "html",
+        "pnpm",
+        "babel",
+        "localization",
+        "github-actions",
+        "wrangler",
+        "dockerfile",
+        "astro", "bash", "c", "c-sharp", "cpp", "css", "go", "haskell", "html",
         "data-contracts", "django", "ember", "express", "fastapi", "hyva",
         "java", "javascript", "json", "magento", "nextjs", "php", "python",
         "quarkus", "rails", "ruby", "spring", "rust", "scala", "tsx",
@@ -773,7 +779,7 @@ def test_php_repository_claim_requires_matching_cited_relation():
     ]
 
 
-def test_review_contribution_bounds_framework_evidence_with_diagnostics():
+def test_review_contribution_retains_every_owned_path_for_each_plugin():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     runtime = PluginRuntime(catalog)
     paths = tuple(f"src/main/java/example/Service{index:03d}.java" for index in range(100))
@@ -786,13 +792,8 @@ def test_review_contribution_bounds_framework_evidence_with_diagnostics():
 
     contribution, diagnostics = runtime.review_contribution(paths, capabilities)
 
-    assert [diagnostic.code for diagnostic in diagnostics] == [
-        "plugin-review-input-limit",
-        "plugin-review-input-limit",
-        "plugin-review-output-limit",
-    ]
-    assert all(diagnostic.recoverable for diagnostic in diagnostics)
-    assert len(contribution.evidence_requests) == 80
+    assert not diagnostics
+    assert len(contribution.evidence_requests) == 200
     counts = {
         kind: sum(
             request.kind == kind
@@ -800,29 +801,32 @@ def test_review_contribution_bounds_framework_evidence_with_diagnostics():
         )
         for kind in ("java-file", "spring-component")
     }
-    assert counts == {"java-file": 40, "spring-component": 40}
+    assert counts == {"java-file": 100, "spring-component": 100}
     assert {
         request.identifier
         for request in contribution.evidence_requests
         if request.kind == "java-file"
-    } == set(paths[:40])
+    } == set(paths)
     assert {
         request.identifier
         for request in contribution.evidence_requests
         if request.kind == "spring-component"
-    } == set(paths[:40])
+    } == set(paths)
 
 
-def test_review_contribution_bounds_rules_and_requests_with_diagnostics():
+def test_review_contribution_preserves_complete_rules_requests_and_cross_path_groups():
     rules = tuple(f"deterministic rule {index:03d}" for index in range(45))
     paths = tuple(f"src/example_{index:03d}.py" for index in range(85))
     requests = tuple(
         EvidenceRequest("synthetic-evidence", path, "exact synthetic fact")
         for path in paths
     )
-    implementation = SimpleNamespace(review=lambda _paths: PluginOutcome.handled(
-        ReviewContribution(rules=rules, evidence_requests=requests)
-    ))
+    def review(owned_paths):
+        assert owned_paths == paths
+        return PluginOutcome.handled(ReviewContribution(
+            rules=rules, evidence_requests=requests, group_paths=((paths[0], paths[-1]),),
+        ))
+    implementation = SimpleNamespace(review=review)
     catalog = SimpleNamespace(
         registry=SimpleNamespace(descriptor=lambda _plugin_id: SimpleNamespace(
             kind=PluginKind.DOMAIN
@@ -837,12 +841,10 @@ def test_review_contribution_bounds_rules_and_requests_with_diagnostics():
 
     contribution, diagnostics = runtime.review_contribution(paths, capabilities)
 
-    assert [diagnostic.code for diagnostic in diagnostics] == [
-        "plugin-review-input-limit",
-        "plugin-review-output-limit",
-    ]
-    assert contribution.rules == rules[:40]
-    assert contribution.evidence_requests == requests[:80]
+    assert not diagnostics
+    assert contribution.rules == rules
+    assert contribution.evidence_requests == requests
+    assert contribution.group_paths == ((paths[0], paths[-1]),)
 
 
 def test_magento_selects_installed_application_without_direct_framework_requirement():

@@ -22,10 +22,11 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     PrivateStateAttr,
 )
-from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.structured_output import OutputToolBinding, ToolStrategy
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.channels import UntrackedValue
 from utils.mcp_runtime import configure_mcp_runtime
 
@@ -232,8 +233,17 @@ class InitialRequiredToolMiddleware(AgentMiddleware):
             "MCP agent requiring initial tool: %s",
             self._tool_name,
         )
+        tools = request.tools
+        response_format = request.response_format
+        if isinstance(response_format, ToolStrategy):
+            # ToolStrategy overwrites named choices with "any"; retain its exact declarations explicitly.
+            tools = [*tools, *(convert_to_openai_tool(OutputToolBinding.from_schema_spec(spec).tool)
+                              for spec in response_format.schema_specs)]
+            response_format = None
         return request.override(
+            tools=tools,
             tool_choice=self._tool_name,
+            response_format=response_format,
         )
 
     def _mark_narrowed_response(self, response: Any) -> Any:

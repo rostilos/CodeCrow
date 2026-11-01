@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
 from service.review.change_summary import scan_pr_changes
+from service.review.inference_usage import record_compute_decision
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import CrossFileAnalysisResult
 from utils.diff_processor import ProcessedDiff
@@ -177,6 +178,7 @@ def _emit_review_evidence_completed(
     callback({
         "type": "status",
         "state": "review_evidence_completed",
+        **({"completionStatus": "partial"} if review_units is not None and review_units.failed_batches else {}),
         "message": "Review manifest, review-unit, and retrieval accounting completed",
         "hunkCoverage": hunk_coverage.summary(),
         "reviewUnits": {
@@ -190,7 +192,9 @@ def _emit_review_evidence_completed(
         ),
         "hunkReceipts": (
             candidate_ledger.hunk_receipts(
-                hunk_coverage.reviewable_hunks
+                tuple((hunk_id, path) for hunk_id, path in hunk_coverage.reviewable_hunks
+                      if review_units is None or not review_units.failed_batches
+                      or hunk_id in review_units.reviewed_hunk_ids)
             )
             if candidate_ledger is not None
             else []
@@ -577,7 +581,7 @@ class MultiStageReviewOrchestrator:
             _emit_status(self.event_callback, "change_scan_started", "Scanning all PR changes before review...")
             request.prChangeSummary = await scan_pr_changes(
                 self.llm, request, full_pr_processed_diff or processed_diff, self.event_callback,
-                self.rag_client,
+                self.rag_client, review_parallelism=self.max_parallel_stage_1,
             )
             if (
                 processed_diff is not None
@@ -695,6 +699,7 @@ class MultiStageReviewOrchestrator:
             hunk_coverage.mark_reviewed_hunks(
                 stage_1_review_unit_state.reviewed_hunk_ids,
                 allow_excluded=True,
+                allow_incomplete=bool(stage_1_review_unit_state.failed_batches),
             )
             
             # Cross-batch deduplication applies only to active findings.
@@ -714,7 +719,8 @@ class MultiStageReviewOrchestrator:
                 code="cross_batch_duplicate",
             )
             
-            _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
+            stage_1_status = "Incomplete" if stage_1_review_unit_state.failed_batches else "Complete"
+            _emit_progress(self.event_callback, 60, f"Stage 1 {stage_1_status}: {len(file_issues)} issues found across files")
 
             # === STAGE 1.5: Issue Reconciliation ===
             if request.previousCodeAnalysisIssues:
@@ -934,7 +940,7 @@ class MultiStageReviewOrchestrator:
                 ),
                 candidate_ledger=candidate_ledger,
             )
-            hunk_coverage.mark_validated()
+            hunk_coverage.mark_validated(allow_incomplete=bool(stage_1_review_unit_state.failed_batches))
 
             _emit_progress(
                 self.event_callback,
@@ -1125,11 +1131,13 @@ class MultiStageReviewOrchestrator:
                 )
 
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
-            hunk_coverage.complete()
-            hunk_coverage.assert_complete()
+            hunk_coverage.complete(allow_incomplete=bool(stage_1_review_unit_state.failed_batches))
+            if not stage_1_review_unit_state.failed_batches:
+                hunk_coverage.assert_complete()
             candidate_ledger.publish(file_issues)
             candidate_ledger.assert_terminal()
             verification = candidate_ledger.verification_summary()
+            record_compute_decision("verification_result", **verification)
             if verification["candidates"]:
                 state = "verification_degraded" if verification["incomplete"] else "verification_completed"
                 if self.event_callback:
@@ -1148,7 +1156,7 @@ class MultiStageReviewOrchestrator:
                 candidate_ledger,
                 request=request,
             )
-            logger.info("Review hunk coverage complete: %s", hunk_coverage.summary())
+            logger.info("Review hunk coverage: %s", hunk_coverage.summary())
 
             response = {
                 "prChangeSummary": request.prChangeSummary,

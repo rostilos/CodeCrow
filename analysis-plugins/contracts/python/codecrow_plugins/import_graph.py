@@ -32,8 +32,8 @@ class ImportBinding:
     line: int
 
     def __post_init__(self) -> None:
-        if not self.local or self.line < 1:
-            raise ValueError("import binding requires a local name and positive line")
+        if (self.imported and not self.local) or self.line < 1:
+            raise ValueError("named import binding requires a local name; every import requires a positive line")
 
 
 @dataclass(frozen=True, order=True)
@@ -268,13 +268,7 @@ class ImportGraphSession:
                 target = records.get(target_path)
                 if target is None:
                     continue
-                if (
-                    binding.imported not in {"", "*", "default"}
-                    and binding.imported not in target.exports
-                ):
-                    continue
                 packet_paths.add(target_path)
-                resolved_by_local[binding.local] = (binding, target_path)
                 facts.add(GraphFact(
                     f"{prefix}-module-resolution",
                     record.module,
@@ -289,6 +283,13 @@ class ImportGraphSession:
                     ),
                     related_paths=(target_path,),
                 ))
+                # A known module file does not establish its imported member.
+                if not binding.local or (
+                    binding.imported not in {"", "*", "default"}
+                    and binding.imported not in target.exports
+                ):
+                    continue
+                resolved_by_local[binding.local] = (binding, target_path)
                 facts.add(GraphFact(
                     f"{prefix}-import-binding",
                     f"{record.module}::{binding.local}",

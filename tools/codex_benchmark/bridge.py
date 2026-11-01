@@ -21,7 +21,7 @@ import uuid
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .rpc import AppServer, MODEL
+from .rpc import AppServer, MODEL, NativeProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +294,7 @@ class SubscriptionBridge:
                                terminal_tools=frozenset(terminal_tools), owner=owner)
         self.sessions[thread] = session
         self.record({"event": "conversation_started", "id": request_id, "thread": thread,
+                     "model_provider": getattr(self.rpc, "provider", None),
                      "owner": owner, "instructions_bytes": len(instructions.encode("utf-8")),
                      "native_prompt_bytes": len(prompt.encode("utf-8"))})
         try:
@@ -538,13 +539,13 @@ class SubscriptionBridge:
             elif method == "turn/completed":
                 turn = params["turn"]
                 if turn.get("status") != "completed":
-                    raise RuntimeError(canonical(turn.get("error") or {"status": turn.get("status")}))
+                    raise NativeProviderError(turn.get("error") or {"status": turn.get("status")})
                 if not session.text:
                     raise RuntimeError("Codex completed without an assistant response")
                 return {"role": "assistant", "content": session.text}, "stop"
             elif method in {"error", "bridge/closed"}:
                 if not params.get("willRetry"):
-                    raise RuntimeError(canonical(params))
+                    raise NativeProviderError(params) if method == "error" else RuntimeError(canonical(params))
             elif "id" in event:
                 raise RuntimeError(f"Unexpected Codex server request: {method}")
 
@@ -592,6 +593,10 @@ def create_app(bridge: SubscriptionBridge, token: str):
             raise
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
+        except NativeProviderError as error:
+            raise HTTPException(error.status_code, str(error)) from error
+        except TimeoutError as error:
+            raise HTTPException(504, str(error)) from error
         except Exception as error:
             raise HTTPException(502, str(error)) from error
         finally:

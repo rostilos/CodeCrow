@@ -18,6 +18,8 @@ from codecrow_plugins import (
     PluginOutcome,
     PluginRuntime,
     ProjectCapabilities,
+    ProjectSelector,
+    RepositoryFacts,
 )
 
 
@@ -180,6 +182,33 @@ def test_javascript_long_call_expression_is_retained_exactly():
     assert long_call in facts
     assert all(fact.contributing_plugin_ids == ("javascript",) for fact in facts)
     assert diagnostics == ()
+
+
+@pytest.mark.parametrize("other_paths", [(), ("src/policy.ts", "app.py", "Main.java")])
+def test_tsx_syntax_owner_does_not_hide_typescript_import_facts(other_paths):
+    catalog = PluginCatalog.discover(Path(__file__).resolve().parents[3])
+    runtime = PluginRuntime(catalog)
+    path = "packages/admin/src/App.tsx"
+    capabilities = ProjectSelector(catalog.registry).select(RepositoryFacts(
+        revision="head", paths=tuple(sorted((path, *other_paths))),
+    ))
+    artifact = FileArtifact(path, 'import { i18n } from "@lingui/core";\n'
+        'import type { Messages } from "@lingui/core";\n'
+        'import { I18nProvider } from "@lingui/react";\n'
+        'export const App = () => <I18nProvider i18n={i18n}><div /></I18nProvider>;\n')
+
+    facts, diagnostics = runtime.graph_facts(artifact, capabilities)
+
+    assert not diagnostics
+    assert {(fact.target, fact.line) for fact in facts if fact.relation == "imports"} == {
+        ("@lingui/core::i18n", 1), ("@lingui/core::Messages", 2),
+        ("@lingui/react::I18nProvider", 3),
+    }
+    assert all(fact.path == path and fact.contributing_plugin_ids == ("typescript",) for fact in facts)
+    assert capabilities.file_plugins[path] == ("tsx",)
+    assert runtime.syntax_contribution(path, capabilities) == (None, ())
+    assert runtime.graph_facts(FileArtifact(path, artifact.content, deleted=True), capabilities) == ((), ())
+    assert runtime.graph_facts(FileArtifact("README.md", artifact.content), capabilities) == ((), ())
 
 
 def test_graph_fact_merge_is_deterministic_across_kinds_and_duplicates():

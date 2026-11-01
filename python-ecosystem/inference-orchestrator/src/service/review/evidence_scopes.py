@@ -9,7 +9,7 @@ from typing import Optional
 
 from model.dtos import ReviewRequestDto
 from service.review.plugin_context import apply_plugin_file_policy
-from utils.diff_processor import DiffChangeType, DiffHunk, DiffProcessor, ProcessedDiff
+from utils.diff_processor import DiffChangeType, DiffHunk, ProcessedDiff, process_complete_diff
 
 
 logger = logging.getLogger(__name__)
@@ -90,12 +90,12 @@ def process_review_evidence_scopes(
 
     review = apply_plugin_file_policy(
         request,
-        _include_rename_impact_source(request, DiffProcessor().process(review_raw_diff)),
+        _include_rename_impact_source(request, process_complete_diff(review_raw_diff)),
     )
     full_pr_raw_diff = request.rawDiff
     if request.analysisMode == "INCREMENTAL" and request.deltaDiff:
         if full_pr_raw_diff:
-            full_pr = _include_rename_impact_source(request, DiffProcessor().process(full_pr_raw_diff))
+            full_pr = _include_rename_impact_source(request, process_complete_diff(full_pr_raw_diff))
             try:
                 full_pr = apply_plugin_file_policy(request, full_pr)
             except Exception as exc:
@@ -107,7 +107,7 @@ def process_review_evidence_scopes(
                     "diff classification: %s",
                     exc,
                 )
-                full_pr = _include_rename_impact_source(request, DiffProcessor().process(full_pr_raw_diff))
+                full_pr = _include_rename_impact_source(request, process_complete_diff(full_pr_raw_diff))
         else:
             logger.warning(
                 "Incremental request has no full PR diff; Stage 2 full-PR "
