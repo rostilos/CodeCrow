@@ -761,6 +761,8 @@ class ReviewService:
             max_allowed_tokens=request.maxAllowedTokens,
             vcs_provider=request.vcsProvider,
             vcs_base_url=request.vcsBaseUrl,
+            vcs_quota_identity=request.vcsQuotaIdentity,
+            vcs_job_id=request.vcsJobId,
             local_repo_path=request.localRepoPath,
             local_repo_target_branch=request.localRepoTargetBranch,
             local_repo_revision=request.localRepoRevision,

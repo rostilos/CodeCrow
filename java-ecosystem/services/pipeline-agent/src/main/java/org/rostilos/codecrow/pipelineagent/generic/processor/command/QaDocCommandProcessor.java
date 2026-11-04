@@ -124,7 +124,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                 project.getId(), payload.pullRequestId());
 
         QaDocOperationService.Operation operation = null;
-        try {
+        try (var acquisition = snapshots.openAcquisition(project.getId())) {
             // 1. Validate QA auto-doc is configured
             ProjectConfig config = project.getConfiguration();
             if (config == null || !config.isQaAutoDocEnabled()) {
@@ -521,49 +521,26 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         }
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService snapshots;
+
     // ── Enrichment helper ─────────────────────────────────────────
 
     /**
      * Fetch enrichment data with graceful fallback (same pattern as QaAutoDocListener).
      */
     private PrEnrichmentDataDto fetchEnrichmentData(VcsConnection vcsConnection,
-                                                     String workspace,
-                                                     String repoSlug,
-                                                     String commitHash,
+                                                     String workspace, String repoSlug, String commitHash,
                                                      List<String> changedFiles) {
-        VcsClient vcsClient;
-        try {
-            vcsClient = vcsClientProvider.getClient(vcsConnection);
-        } catch (Exception e) {
-            log.warn("qa-doc command: failed to obtain VCS client for enrichment: {}", e.getMessage());
+        if (enrichmentService == null) return PrEnrichmentDataDto.empty();
+        try (var source = snapshots.prepare(vcsConnection, workspace, repoSlug, commitHash, commitHash).orElse(null)) {
+            if (source == null) return PrEnrichmentDataDto.empty();
+            return enrichmentService.enrichContents(
+                    enrichmentService.fetchFileContentsOnly(source, changedFiles), changedFiles);
+        } catch (Exception unavailable) {
+            log.warn("QA source enrichment unavailable: {}", unavailable.getMessage());
             return PrEnrichmentDataDto.empty();
         }
-
-        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled()) {
-            try {
-                PrEnrichmentDataDto data = enrichmentService.enrichPrFiles(
-                        vcsClient, workspace, repoSlug, commitHash, changedFiles);
-                if (data != null && data.hasData()) {
-                    log.info("qa-doc command: enrichment complete — {} files",
-                            data.fileContents() != null ? data.fileContents().size() : 0);
-                    return data;
-                }
-            } catch (Exception e) {
-                log.warn("qa-doc command: full enrichment failed: {}", e.getMessage());
-            }
-
-            try {
-                PrEnrichmentDataDto fallback = enrichmentService.fetchFileContentsOnly(
-                        vcsClient, workspace, repoSlug, commitHash, changedFiles);
-                if (fallback != null && fallback.hasData()) {
-                    log.info("qa-doc command: using file-contents-only fallback enrichment");
-                    return fallback;
-                }
-            } catch (Exception e) {
-                log.warn("qa-doc command: fallback enrichment failed: {}", e.getMessage());
-            }
-        }
-        return PrEnrichmentDataDto.empty();
     }
 
     /**

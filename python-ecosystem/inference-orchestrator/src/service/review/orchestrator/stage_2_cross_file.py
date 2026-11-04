@@ -1,7 +1,7 @@
 """Stage 2: Cross-file and architectural analysis."""
 from llm.provider_errors import raise_if_outcome_unknown
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response, record_compute_decision
+from service.review.execution_scheduler import invoke_review_model
+from service.review.inference_usage import record_compute_decision
 import json
 import hashlib
 import logging
@@ -221,44 +221,50 @@ async def execute_stage_2_cross_file(
             estimated_tokens,
             input_token_budget,
         )
-        result = await _invoke_stage_2_llm(
-            llm,
-            prompt,
-            label=(
-                "structured primary"
-                if len(prompts) == 1
-                else (
-                    f"structured primary semantic-shard-{index}-of-"
-                    f"{len(prompts)}"
-                )
-            ),
-        )
-        retry_llm = (
-            fallback_llm
-            if fallback_llm is not None and fallback_llm is not llm
-            else llm
-        )
-        if result is None:
-            logger.info(
-                "Stage 2 structured response was unusable for semantic shard "
-                "%d/%d; retrying once as a reasoning-free direct output "
-                "request",
-                index,
-                len(prompts),
-            )
+        try:
             result = await _invoke_stage_2_llm(
-                retry_llm,
+                llm,
                 prompt,
                 label=(
-                    "direct-output recovery"
+                    "structured primary"
                     if len(prompts) == 1
                     else (
-                        f"direct-output recovery semantic-shard-{index}-of-"
+                        f"structured primary semantic-shard-{index}-of-"
                         f"{len(prompts)}"
                     )
                 ),
-                force_unstructured=True,
             )
+            retry_llm = (
+                fallback_llm
+                if fallback_llm is not None and fallback_llm is not llm
+                else llm
+            )
+            if result is None:
+                logger.info(
+                    "Stage 2 structured response was unusable for semantic shard "
+                    "%d/%d; retrying once as a reasoning-free direct output "
+                    "request",
+                    index,
+                    len(prompts),
+                )
+                result = await _invoke_stage_2_llm(
+                    retry_llm,
+                    prompt,
+                    label=(
+                        "direct-output recovery"
+                        if len(prompts) == 1
+                        else (
+                            f"direct-output recovery semantic-shard-{index}-of-"
+                            f"{len(prompts)}"
+                        )
+                    ),
+                    force_unstructured=True,
+                )
+        except Exception as error:
+            if not bool(getattr(prompt, "optional_enrichment_only", False)):
+                raise
+            logger.warning("Optional Stage 2 provider call failed; skipping without replay: %s", error)
+            result = None
         if result is None:
             if bool(getattr(prompt, "optional_enrichment_only", False)):
                 optional_failures += 1
@@ -382,18 +388,16 @@ async def _invoke_stage_2_llm(
         logger.info("Structured output skipped for Stage 2 (%s); using prompt JSON parsing", label)
 
     try:
-        async with review_model_slot("stage_2_cross_file"):
-            response = await llm.ainvoke(
-                prompt,
-                **output_token_request_kwargs(llm, output_token_limit),
-                **reasoning_request_kwargs(
-                    llm,
-                    ReasoningEffort.NONE
-                    if force_unstructured
-                    else ReasoningEffort.LOW,
-                ),
-            )
-            record_model_response(response)
+        response = await invoke_review_model("stage_2_cross_file", llm.ainvoke,
+            prompt,
+            **output_token_request_kwargs(llm, output_token_limit),
+            **reasoning_request_kwargs(
+                llm,
+                ReasoningEffort.NONE
+                if force_unstructured
+                else ReasoningEffort.LOW,
+            ),
+        )
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(
@@ -409,6 +413,7 @@ async def _invoke_stage_2_llm(
         )
     except Exception as e:
         logger.debug("Stage 2 cross-file analysis failed (%s): %s", label, e)
+        raise_if_outcome_unknown(e)
         return None
 
 

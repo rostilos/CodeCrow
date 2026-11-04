@@ -1,7 +1,7 @@
 """Stage 1: Parallel file reviews with exact repository context."""
 from llm.provider_errors import raise_if_outcome_unknown
-from service.review.execution_scheduler import review_model_slot, optional_work_budget, optional_timeout_seconds
-from service.review.inference_usage import record_model_response, record_compute_decision
+from service.review.execution_scheduler import invoke_review_model, optional_work_budget, optional_timeout_seconds
+from service.review.inference_usage import record_compute_decision
 from service.review.orchestrator.specialist_discovery import ReviewSpecialist, select_specialist_batches
 import asyncio
 from contextlib import AsyncExitStack
@@ -4017,18 +4017,16 @@ async def _invoke_stage_1_batch_llm(
         )
 
     try:
-        async with review_model_slot("stage_1_file_review"):
-            response = await llm.ainvoke(
-                direct_prompt,
-                **output_token_request_kwargs(llm, direct_output_limit),
-                **reasoning_request_kwargs(
-                    llm,
-                    ReasoningEffort.NONE
-                    if force_unstructured
-                    else stage_one_direct_effort(llm),
-                ),
-            )
-            record_model_response(response)
+        response = await invoke_review_model("stage_1_file_review", llm.ainvoke,
+            direct_prompt,
+            **output_token_request_kwargs(llm, direct_output_limit),
+            **reasoning_request_kwargs(
+                llm,
+                ReasoningEffort.NONE
+                if force_unstructured
+                else stage_one_direct_effort(llm),
+            ),
+        )
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(
@@ -4054,6 +4052,7 @@ async def _invoke_stage_1_batch_llm(
             ),
         )
     except Exception as parse_err:
+        raise_if_outcome_unknown(parse_err)
         logger.debug(
             "Stage 1 batch parse failed for %s (%s): %s",
             recovery_paths,

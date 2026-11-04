@@ -172,6 +172,8 @@ class QaDocHistoryFlowIT {
         // Return no new content: this test observes preparation without an external publication.
         var command = new QaDocCommandProcessor(connections, clients, generation, analyses, providers,
                 states, documents, previews, enrichment, summaries, operationService);
+        org.springframework.test.util.ReflectionTestUtils.setField(command, "snapshots",
+                mock(org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService.class));
         if (automatic) {
             var sourceReviews=mock(CodeAnalysisRepository.class);
             var input=expectedAnalysisId == null ? new CodeAnalysis() : analysisRepository.findById(expectedAnalysisId).orElseThrow();

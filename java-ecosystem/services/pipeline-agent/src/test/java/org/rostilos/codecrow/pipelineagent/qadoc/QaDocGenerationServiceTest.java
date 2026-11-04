@@ -22,6 +22,7 @@ import java.net.http.HttpTimeoutException;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.crypto.KeyGenerator;
 
@@ -37,6 +38,17 @@ class QaDocGenerationServiceTest {
     private QaDocGenerationService service;
     private final ObjectMapper mapper = new ObjectMapper();
     private Project project;
+
+    @Test
+    void cancelledPreparationDoesNotSubmitQaGeneration() {
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(() -> service.generateQaDocumentation(
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                    .isInstanceOf(java.io.InterruptedIOException.class);
+            assertThat(mockWebServer.getRequestCount()).isZero();
+        } finally { Thread.interrupted(); }
+    }
 
     @BeforeEach
     void setUp() throws IOException {
@@ -309,6 +321,41 @@ class QaDocGenerationServiceTest {
                     service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
             ).isInstanceOf(IOException.class).hasMessageContaining("not automatically retried");
             assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+        }
+
+        @Test
+        void preservesSafeFailureDiagnosticsWithoutReplayingGeneration() {
+            mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("""
+                    {"detail":{"error":"qa_generation_failed",
+                    "error_id":"ce9d800a-4103-4b92-9565-09da9b69b475",
+                    "error_type":"ServiceUnavailable","upstream_status":503,
+                    "message":"secret provider response"}}
+                    """));
+
+            assertThatThrownBy(() -> service.generateQaDocumentation(
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Inference orchestrator returned 500")
+                    .hasMessageContaining("error_id=ce9d800a-4103-4b92-9565-09da9b69b475")
+                    .hasMessageContaining("error_type=ServiceUnavailable")
+                    .hasMessageContaining("upstream_status=503")
+                    .hasMessageContaining("not automatically retried")
+                    .hasMessageNotContaining("secret provider response");
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+        }
+
+        @Test
+        void proxyAndMalformedErrorsDoNotExposeResponseBodies() {
+            for (String body : List.of("<html>secret proxy response</html>", "null", "",
+                    "{\"detail\":{\"error\":\"qa_generation_failed\",\"error_id\":\"secret\"}}",
+                    "secret".repeat(3_000))) {
+                mockWebServer.enqueue(new MockResponse().setResponseCode(503).setBody(body));
+                assertThatThrownBy(() -> service.generateQaDocumentation(
+                        project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                        .isInstanceOf(IOException.class)
+                        .hasMessage("Inference orchestrator returned 503; not automatically retried");
+            }
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(5);
         }
 
         @Test

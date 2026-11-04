@@ -36,10 +36,11 @@ public class GitLabClientFactory {
 
         LOGGER.info("Created GitLab MCP client for {}/{} on {}",
                 namespace, project, configuration.getBaseUrl());
-        GitLabClient gitLabClient =
-                org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory
-                        .createWithAccessToken(
-                                accessToken, configuration.getBaseUrl());
+        GitLabClient gitLabClient = new GitLabClient(
+                org.rostilos.codecrow.mcp.generic.McpRateLimitTransport.observe(
+                        org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory.createAuthorizedHttpClient(accessToken),
+                        java.net.URI.create(configuration.getBaseUrl()).getHost(), accessToken),
+                configuration.getBaseUrl());
         return new GitLabMcpClientImpl(gitLabClient, configuration, fileLimit);
     }
 }

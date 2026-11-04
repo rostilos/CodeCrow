@@ -7,8 +7,8 @@ this narrow adapter lets the verification loop remain independent from Stage
 """
 
 from llm.provider_lifecycle import provider_execution_scope
-from service.review.execution_scheduler import review_model_slot, optional_work_budget, optional_timeout_seconds
-from service.review.inference_usage import record_model_response, record_compute_decision
+from service.review.execution_scheduler import invoke_review_model, optional_work_budget, optional_timeout_seconds
+from service.review.inference_usage import record_compute_decision
 
 import json
 import asyncio
@@ -741,12 +741,10 @@ async def _execute_stage_3_mcp_verification(
                 # parameter in some adapters. A direct call guarantees that
                 # this terminal response has no callable repository tools.
                 state["attempted"] = True
-                async with review_model_slot("stage_3_mcp_verification"):
-                    response = await llm.ainvoke(
-                        messages,
-                        **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-                    )
-                    record_model_response(response)
+                response = await invoke_review_model("stage_3_mcp_verification", llm.ainvoke,
+                    messages,
+                    **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+                )
             messages.append(response)
 
             tool_calls = getattr(response, "tool_calls", None)

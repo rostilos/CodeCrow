@@ -41,6 +41,9 @@ public class AiAnalysisClient {
     private final RedisQueueService queueService;
     private final ObjectMapper objectMapper;
 
+    @Autowired
+    private org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService enrichmentService;
+
     @Autowired(required = false)
     private RagBranchIndexGenerationRepository branchGenerationRepository;
 
@@ -122,6 +125,8 @@ public class AiAnalysisClient {
             java.util.function.Consumer<Map<String, Object>> eventHandler)
             throws IOException, GeneralSecurityException {
 
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("Review submission cancelled");
+
         String jobId = UUID.randomUUID().toString();
         String eventQueueKey = "codecrow:analysis:events:" + jobId;
         String jobsQueueKey = "codecrow:analysis:jobs";
@@ -159,6 +164,8 @@ public class AiAnalysisClient {
                     "request", requestPayload);
 
             jsonPayload = objectMapper.writeValueAsString(jobPayload);
+
+            if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("Review submission cancelled");
 
             // Push the job to the Redis queue
             queueService.startJobLease(ownerKey);
@@ -372,6 +379,8 @@ public class AiAnalysisClient {
         payload.put("analysisType", request.getAnalysisType());
         payload.put("vcsProvider", request.getVcsProvider());
         payload.put("vcsBaseUrl", request.getVcsBaseUrl());
+        payload.put("vcsQuotaIdentity", request.getVcsQuotaIdentity());
+        payload.put("vcsJobId", org.slf4j.MDC.get("jobId"));
         payload.put("prTitle", request.getPrTitle());
         payload.put("prDescription", request.getPrDescription());
         payload.put("taskContext", request.getTaskContext());
@@ -432,7 +441,9 @@ public class AiAnalysisClient {
         payload.put("reconciliationFileContents", request.getReconciliationFileContents());
         payload.put("projectCapabilities", request.getProjectCapabilities());
         if (request instanceof AiAnalysisRequestImpl impl) {
-            payload.put("enrichmentData", impl.getEnrichmentData());
+            payload.put("enrichmentData", enrichmentService != null
+                    ? enrichmentService.enrichContents(impl.getEnrichmentData(), request.getChangedFiles())
+                    : impl.getEnrichmentData());
             payload.put("projectRules", impl.getProjectRules());
         }
         return payload;

@@ -19,8 +19,8 @@ except ModuleNotFoundError as exception:
         return function
 from model.output_schemas import CodeReviewIssue
 from service.review.candidate_ledger import CandidateEvidenceLedger
-from service.review.inference_usage import record_compute_decision, record_model_response
-from service.review.execution_scheduler import optional_work_budget, optional_timeout_seconds, review_model_slot
+from service.review.inference_usage import record_compute_decision
+from service.review.execution_scheduler import optional_work_budget, optional_timeout_seconds, invoke_review_model
 from model.dtos import ReviewRequestDto
 from utils.llm_response import extract_llm_response_text
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs
@@ -164,11 +164,11 @@ def search_file_content(file_path: str, search_string: str) -> str:
     """
     Searches complete request-local source and returns an exact, bounded source window.
     Use this tool to verify if a variable, method, or import actually exists in the file.
-    
+
     Args:
         file_path: The path to the file to search in.
         search_string: The exact string to search for (e.g., a variable name or method signature).
-        
+
     Returns:
         Found/Not Found and, for a match, exact source with its line coordinates.
     """
@@ -177,7 +177,7 @@ def search_file_content(file_path: str, search_string: str) -> str:
     content = contents.get(file_path)
     if not content:
         return f"Error: File content for '{file_path}' not available in memory."
-    
+
     if search_string and search_string in content:
         start = content[:content.index(search_string)].count("\n")
         lines = content.splitlines(keepends=True)
@@ -1644,10 +1644,8 @@ async def _run_verification_tool_loop(
         else:
             try:
                 async with asyncio.timeout_at(deadline):
-                    async with review_model_slot("stage_1_verification_finalization"):
-                        attempted = True
-                        response = await llm.ainvoke(messages, **reasoning_request_kwargs(llm, ReasoningEffort.HIGH))
-                        record_model_response(response)
+                    attempted = True
+                    response = await invoke_review_model("stage_1_verification_finalization", llm.ainvoke, messages, **reasoning_request_kwargs(llm, ReasoningEffort.HIGH))
                 if getattr(response, "tool_calls", None):
                     incomplete_reason = "finalization_requested_tools"
                 elif not collect(response):
@@ -1993,7 +1991,7 @@ async def run_verification_agent(
             for issue in issues
             if _issue_is_resolved(issue) or id(issue) in retained_active
         ]
-        
+
     except Exception as e:
         logger.info("Stage 1.5 verification unavailable; retaining all issues: %s", e)
         record_unknown(active_issues, "verification_unavailable", attempted=True)

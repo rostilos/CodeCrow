@@ -1,8 +1,7 @@
 """
 Issue reconciliation and deduplication logic for incremental reviews.
 """
-from service.review.execution_scheduler import review_model_slot, optional_work_budget
-from service.review.inference_usage import record_model_response
+from service.review.execution_scheduler import invoke_review_model, optional_work_budget
 import asyncio
 import logging
 import difflib
@@ -105,7 +104,7 @@ def _env_int(name: str, default: int) -> int:
 
 def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
     """Check if an issue is related to any of the given file paths.
-    
+
     Matches on exact path, or when one path is a suffix of the other
     (handles relative vs absolute paths). Does NOT match on basename alone
     to avoid false positives (e.g., two different utils.py files).
@@ -116,11 +115,11 @@ def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
         issue_data = issue
     else:
         issue_data = vars(issue) if hasattr(issue, '__dict__') else {}
-    
+
     issue_file = issue_data.get('file', issue_data.get('filePath', ''))
     if not issue_file:
         return False
-    
+
     for fp in file_paths:
         if repository_paths_match(issue_file, fp):
             return True
@@ -129,12 +128,12 @@ def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
 
 def compute_issue_fingerprint(data: dict) -> str:
     """Compute a fingerprint for prompt-level issue deduplication.
-    
+
     NOTE: This is used only for deduplicating previous issues before including
     them in LLM prompts. It is NOT related to Java's IssueFingerprint which
     uses SHA-256 of (category + lineHash + normalizedTitle) for persistent
     content-based tracking.
-    
+
     Uses file + normalized line (±3 tolerance) + severity + complete reason.
     """
     file_path = data.get('file', data.get('filePath', ''))
@@ -143,7 +142,7 @@ def compute_issue_fingerprint(data: dict) -> str:
     severity = data.get('severity', '')
     reason = data.get('reason', data.get('description', ''))
     normalized_reason = reason.lower().strip() if reason else ''
-    
+
     return f"{file_path}::{str(data.get('anchorSide') or 'HEAD').upper()}::{line_group}::{severity}::{normalized_reason}"
 
 
@@ -154,11 +153,11 @@ def is_semantically_similar(reason1: str, reason2: str, threshold: float = 0.70)
     # Normalize strings
     r1 = reason1.lower().strip()
     r2 = reason2.lower().strip()
-    
+
     # Quick exact match
     if r1 == r2:
         return True
-        
+
     # Use difflib for similarity ratio
     matcher = difflib.SequenceMatcher(None, r1, r2)
     return matcher.ratio() >= threshold
@@ -548,14 +547,14 @@ def _semantic_candidate_groups(
 
 def deduplicate_issues(issues: List[Any]) -> List[dict]:
     """Deduplicate issues by fingerprint, keeping most recent version.
-    
+
     If an older version is resolved but newer isn't, preserves resolved status.
     """
     if not issues:
         return []
-    
+
     deduped: dict = {}
-    
+
     for issue in issues:
         if hasattr(issue, 'model_dump'):
             data = issue.model_dump()
@@ -568,10 +567,10 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
         if resolution:
             data['resolutionReason'] = resolution
             data['resolutionExplanation'] = resolution
-        
+
         fingerprint = compute_issue_fingerprint(data)
         existing = deduped.get(fingerprint)
-        
+
         if existing is None:
             deduped[fingerprint] = data
         else:
@@ -579,7 +578,7 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
             current_version = data.get('prVersion') or 0
             existing_closed = not _is_open_previous_issue(existing)
             current_closed = not _is_open_previous_issue(data)
-            
+
             if current_version > existing_version:
                 # Current is newer
                 if existing_closed and not current_closed:
@@ -595,32 +594,32 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
                 # Same version - prefer a terminal resolved/ignored record.
                 if current_closed and not existing_closed:
                     deduped[fingerprint] = data
-    
+
     return list(deduped.values())
 
 
 def format_previous_issues_for_batch(issues: List[Any]) -> str:
     """Format previous issues for inclusion in batch prompt.
-    
+
     Only OPEN (or legacy blank-status) issues belong in runtime analysis.
     RESOLVED/IGNORED history remains in storage and is intentionally omitted so
     it cannot prime the model to recreate an already-closed finding.
     """
     if not issues:
         return ""
-    
+
     # Deduplicate issues to avoid confusing the LLM with duplicates
     deduped_issues = deduplicate_issues(issues)
-    
+
     # Only OPEN and legacy blank statuses may be reconciled.
     open_issues = [i for i in deduped_issues if _is_open_previous_issue(i)]
     if not open_issues:
         return ""
-    
+
     lines = ["=== PREVIOUS ISSUES HISTORY (check if resolved/persisting) ==="]
     lines.append("Only OPEN issues are included; terminal history is excluded from runtime context.")
     lines.append("")
-    
+
     if open_issues:
         lines.append("--- OPEN ISSUES (check if now fixed) ---")
         for data in open_issues:
@@ -631,12 +630,12 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
             title = data.get('title') or ''
             reason = data.get('reason', data.get('description', 'No description'))
             pr_version = data.get('prVersion', '?')
-            
+
             title_part = f" [{title}]" if title else ""
             lines.append(f"[ID:{issue_id}] {severity}{title_part} @ {file_path}:{line} (v{pr_version})")
             lines.append(f"  Issue: {reason}")
             lines.append("")
-    
+
     lines.append("INSTRUCTIONS:")
     lines.append("- For OPEN issues that are now FIXED: report with 'isResolved': true (boolean)")
     lines.append("- For OPEN issues still present: report with 'isResolved': false (boolean)")
@@ -883,11 +882,9 @@ async def _invoke_semantic_dedup_decision(
             invocation, SemanticDeduplicationDecision, llm,
         )
     logger.info("Structured output skipped for %s; using prompt JSON parsing", label)
-    async with review_model_slot("reconciliation"):
-        response = await llm.ainvoke(
-            prompt, **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-        )
-        record_model_response(response)
+    response = await invoke_review_model("reconciliation", llm.ainvoke,
+        prompt, **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+    )
     return await parse_llm_response(
         extract_llm_response_text(response), SemanticDeduplicationDecision, llm,
         max_provider_repairs=0,
@@ -1282,7 +1279,7 @@ def deduplicate_cross_batch_issues(issues: List[CodeReviewIssue]) -> List[CodeRe
     """
     if not issues:
         return []
-        
+
     deduped = []
     for issue in issues:
         duplicate_index = next((
@@ -1321,21 +1318,21 @@ async def reconcile_previous_issues(
     """
     if not request.previousCodeAnalysisIssues:
         return new_issues
-    
+
     logger.info(f"Reconciling {len(request.previousCodeAnalysisIssues)} previous issues with {len(new_issues)} new issues")
-    
+
     # Current commit for resolution tracking
     current_commit = request.currentCommitHash or request.commitHash
-    
+
     # Get the delta diff content to check what files/lines changed
     delta_diff = request.deltaDiff or ""
-    
+
     # Build a set of files that changed in the delta
     changed_files_in_delta = set()
     if processed_diff:
         for f in processed_diff.files:
             changed_files_in_delta.add(f.path)
-    
+
     # Build lookup of previous issues by ID for merging with LLM results
     prev_issues_by_id = {}
     closed_prev_ids = set()
@@ -1351,10 +1348,10 @@ async def reconcile_previous_issues(
                 prev_issues_by_id[normalized_id] = prev_data
             else:
                 closed_prev_ids.add(normalized_id)
-    
+
     reconciled_issues = []
     processed_prev_ids = set()  # Track which previous issues we've handled
-    
+
     # Process new issues from LLM - merge with previous issue data if they reference same ID
     for new_issue in new_issues:
         new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
@@ -1372,7 +1369,7 @@ async def reconcile_previous_issues(
                     code="terminal_history_id",
                 )
             continue
-        
+
         # If no ID provided, check if it's semantically similar to an OPEN previous issue
         if not issue_id:
             new_reason = new_data.get('reason', '')
@@ -1389,17 +1386,17 @@ async def reconcile_previous_issues(
                         logger.info(f"Semantic match found: mapping new issue to previous ID {prev_id}")
                         issue_id = prev_id
                         break
-        
+
         # If this issue references a previous issue ID, merge data
         if issue_id and str(issue_id) in prev_issues_by_id:
             prev_data = prev_issues_by_id[str(issue_id)]
             processed_prev_ids.add(str(issue_id))
-            
+
             # Check if LLM marked it resolved
             llm_says_resolved = new_data.get('isResolved', False)
 
             is_resolved = llm_says_resolved
-            
+
             # Determine resolution metadata
             if is_resolved:
                 # Newly resolved by LLM
@@ -1408,7 +1405,7 @@ async def reconcile_previous_issues(
             else:
                 resolution_explanation = None
                 resolved_commit = None
-            
+
             # PRESERVE original identity & description, but use LLM's UPDATED
             # positional data (line, codeSnippet, scope).  The LLM re-analyzed
             # the current code — its line/snippet reflect where the issue IS NOW,
@@ -1486,7 +1483,7 @@ async def reconcile_previous_issues(
         else:
             # New issue not referencing previous - keep as is
             reconciled_issues.append(new_issue)
-    
+
     # Process remaining previous issues not handled by LLM
     for prev_issue in request.previousCodeAnalysisIssues:
         if hasattr(prev_issue, 'model_dump'):
@@ -1496,26 +1493,26 @@ async def reconcile_previous_issues(
 
         if not _is_open_previous_issue(prev_data):
             continue
-        
+
         issue_id = prev_data.get('id')
         if issue_id and str(issue_id) in processed_prev_ids:
             continue  # Already handled above
-        
+
         file_path = prev_data.get('file', prev_data.get('filePath', ''))
-        
+
         # Check if this issue was already found in new issues (by file+line)
         already_reported = False
         for new_issue in new_issues:
             new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
-            if (new_data.get('file') == file_path and 
+            if (new_data.get('file') == file_path and
                 str(new_data.get("anchorSide") or "HEAD").upper() == str(prev_data.get("anchorSide") or "HEAD").upper() and
                 str(new_data.get('line')) == str(prev_data.get('line', prev_data.get('lineNumber')))):
                 already_reported = True
                 break
-        
+
         if already_reported:
             continue
-        
+
         # Preserve unhandled OPEN history so it remains active until explicitly
         # matched and resolved. Terminal history was skipped above.
         persisting_issue = CodeReviewIssue(
@@ -1538,7 +1535,7 @@ async def reconcile_previous_issues(
             codeSnippet=prev_data.get('codeSnippet') or ''
         )
         reconciled_issues.append(persisting_issue)
-    
+
     before_history_dedup = list(reconciled_issues)
     reconciled_issues = _deduplicate_reconciled_history(
         reconciled_issues,

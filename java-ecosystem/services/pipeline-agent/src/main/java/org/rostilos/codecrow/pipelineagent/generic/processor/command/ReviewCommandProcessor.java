@@ -192,7 +192,9 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
                 credentials.accessToken(),
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString(),
-                credentials.vcsBaseUrl()
+                credentials.vcsBaseUrl(),
+                org.rostilos.codecrow.vcsclient.VcsClientProvider.quotaIdentity(vcsConnection),
+                org.slf4j.MDC.get("jobId")
             );
             
         } catch (GeneralSecurityException e) {

@@ -71,8 +71,8 @@ public class McpStdioServer {
                             return new CallToolResult(
                                     List.of(new TextContent("Tool execution interrupted")), true);
                         }
-                        try {
-                            log.info(exchange.toString());
+                        try (var vcsContext = new org.rostilos.codecrow.vcsclient.VcsRequestContext(
+                                Long.getLong("project.id"), System.getProperty("vcs.job.id"), "mcp:" + tool.name())) {
                             Object result = mcpTools.execute(tool.name(), arguments);
                             String jsonResult = objectMapper.writeValueAsString(result);
                             return new CallToolResult(List.of(new TextContent(jsonResult)), false);

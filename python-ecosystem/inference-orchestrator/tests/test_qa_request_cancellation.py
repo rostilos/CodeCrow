@@ -78,8 +78,10 @@ async def test_generation_completion_cleans_up_disconnect_listener(monkeypatch, 
     result = generate_qa_documentation(Request({"type": "http"}, receive=receive),
                                       QaDocumentationRequest(project_id=7, project_name="repo"))
     if failure:
-        with pytest.raises(RuntimeError, match="generation failed"):
+        with pytest.raises(HTTPException) as caught:
             await asyncio.wait_for(result, timeout=2)
+        assert caught.value.status_code == 500
+        assert caught.value.detail["error_type"] == "RuntimeError"
     else:
         assert (await asyncio.wait_for(result, timeout=2)).documentation == "QA guide"
     assert closed.is_set()

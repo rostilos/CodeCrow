@@ -856,13 +856,7 @@ class PullRequestAnalysisProcessorTest {
                                         List.of(),
                                         supplied,
                                         "source-head-sha");
-                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
-                        when(vcsClient.getFileContents(
-                                        "team",
-                                        "repo",
-                                        List.of("src/Omitted.java"),
-                                        "source-head-sha",
-                                        100_000))
+                        when(localRepositorySnapshotService.readSourceFiles(vcsConnection, "team", "repo", "source-head-sha", List.of("src/Omitted.java"), 100_000))
                                         .thenReturn(Map.of(
                                                         "src/Omitted.java",
                                                         "class Omitted { int proposed; }"));
@@ -873,12 +867,7 @@ class PullRequestAnalysisProcessorTest {
                                         project);
 
                         assertThat(result).containsEntry("status", "error");
-                        verify(vcsClient).getFileContents(
-                                        "team",
-                                        "repo",
-                                        List.of("src/Omitted.java"),
-                                        "source-head-sha",
-                                        100_000);
+                        verify(localRepositorySnapshotService).readSourceFiles(vcsConnection, "team", "repo", "source-head-sha", List.of("src/Omitted.java"), 100_000);
                         verify(localRepositorySnapshotService).prepareForReview(
                                         vcsConnection,
                                         "team",
@@ -913,13 +902,7 @@ class PullRequestAnalysisProcessorTest {
                                         "source-head-sha",
                                         proposedTreeChangedFiles,
                                         proposedTreeDeletedFiles);
-                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
-                        when(vcsClient.getFileContents(
-                                        "team",
-                                        "repo",
-                                        List.of("src/Earlier.java", "docs/Excluded.md"),
-                                        "source-head-sha",
-                                        100_000))
+                        when(localRepositorySnapshotService.readSourceFiles(vcsConnection, "team", "repo", "source-head-sha", List.of("src/Earlier.java", "docs/Excluded.md"), 100_000))
                                         .thenReturn(Map.of(
                                                         "src/Earlier.java",
                                                         "class Earlier { int current; }",
@@ -933,12 +916,7 @@ class PullRequestAnalysisProcessorTest {
 
                         assertThat(result).containsEntry("status", "error");
                         assertThat(request.getChangedFiles()).containsExactly("src/Delta.java");
-                        verify(vcsClient).getFileContents(
-                                        "team",
-                                        "repo",
-                                        List.of("src/Earlier.java", "docs/Excluded.md"),
-                                        "source-head-sha",
-                                        100_000);
+                        verify(localRepositorySnapshotService).readSourceFiles(vcsConnection, "team", "repo", "source-head-sha", List.of("src/Earlier.java", "docs/Excluded.md"), 100_000);
                         verify(localRepositorySnapshotService).prepareForReview(
                                         vcsConnection,
                                         "team",
@@ -973,13 +951,7 @@ class PullRequestAnalysisProcessorTest {
                                         deletedFiles,
                                         supplied,
                                         "source-head-sha");
-                        when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
-                        when(vcsClient.getFileContents(
-                                        "team",
-                                        "repo",
-                                        List.of("src/Unavailable.java"),
-                                        "source-head-sha",
-                                        100_000))
+                        when(localRepositorySnapshotService.readSourceFiles(vcsConnection, "team", "repo", "source-head-sha", List.of("src/Unavailable.java"), 100_000))
                                         .thenReturn(Map.of());
 
                         Map<String, Object> result = processor.process(
@@ -988,12 +960,7 @@ class PullRequestAnalysisProcessorTest {
                                         project);
 
                         assertThat(result).containsEntry("status", "error");
-                        verify(vcsClient).getFileContents(
-                                        "team",
-                                        "repo",
-                                        List.of("src/Unavailable.java"),
-                                        "source-head-sha",
-                                        100_000);
+                        verify(localRepositorySnapshotService).readSourceFiles(vcsConnection, "team", "repo", "source-head-sha", List.of("src/Unavailable.java"), 100_000);
                         verify(localRepositorySnapshotService).prepareForReview(
                                         vcsConnection,
                                         "team",

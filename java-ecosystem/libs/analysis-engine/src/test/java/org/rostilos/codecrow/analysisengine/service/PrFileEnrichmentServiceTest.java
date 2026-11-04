@@ -10,7 +10,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.*;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.RepositorySource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
@@ -25,7 +25,7 @@ import static org.mockito.Mockito.*;
 @DisplayName("PrFileEnrichmentService")
 class PrFileEnrichmentServiceTest {
 
-    @Mock private VcsClient vcsClient;
+    @Mock private RepositorySource vcsClient;
 
     private PrFileEnrichmentService service;
     private MockWebServer mockWebServer;
@@ -71,17 +71,17 @@ class PrFileEnrichmentServiceTest {
     class DisabledAndEmptyTests {
         @Test void returnsEmpty_whenDisabled() {
             ReflectionTestUtils.setField(service, "enrichmentEnabled", false);
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", List.of("a.java"));
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, List.of("a.java"));
             assertThat(result.hasData()).isFalse();
         }
 
         @Test void returnsEmpty_whenNullFiles() {
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", null);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, null);
             assertThat(result.hasData()).isFalse();
         }
 
         @Test void returnsEmpty_whenEmptyFiles() {
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", List.of());
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, List.of());
             assertThat(result.hasData()).isFalse();
         }
     }
@@ -90,8 +90,7 @@ class PrFileEnrichmentServiceTest {
     @DisplayName("enrichPrFiles() - file filtering")
     class FilterTests {
         @Test void filtersBinaryExtensions() {
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main",
-                    List.of("image.png", "photo.jpg", "archive.zip", "lib.dll"));
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, List.of("image.png", "photo.jpg", "archive.zip", "lib.dll"));
             assertThat(result.stats().filesSkipped()).isEqualTo(4);
             assertThat(result.stats().skipReasons()).containsKey("binary_or_non_text");
         }
@@ -114,7 +113,7 @@ class PrFileEnrichmentServiceTest {
                     Map.entry("styles.min.css", ".ready{display:block}"),
                     Map.entry("bundle.js.map", "{\"version\":3}")
             );
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(contents);
 
             mockWebServer.enqueue(new MockResponse()
@@ -122,7 +121,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[], \"total_files\":12, \"successful\":12, \"failed\":0}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.stats().totalFilesRequested()).isEqualTo(12);
             assertThat(result.stats().filesEnriched()).isEqualTo(12);
             assertThat(result.stats().skipReasons()).doesNotContainKey("binary_or_non_text");
@@ -139,7 +138,7 @@ class PrFileEnrichmentServiceTest {
                     "src/Service.java", "import Repository; public class Service extends Base {}",
                     "src/Repository.java", "public class Repository {}"
             );
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(contents);
 
             String parseResponse = objectMapper.writeValueAsString(Map.of(
@@ -163,7 +162,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody(parseResponse));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
 
             assertThat(result.hasData()).isTrue();
             assertThat(result.fileContents()).hasSize(2);
@@ -174,7 +173,7 @@ class PrFileEnrichmentServiceTest {
 
         @Test void sendsParseBatchRequest() throws Exception {
             List<String> files = List.of("App.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("App.java", "public class App {}"));
 
             mockWebServer.enqueue(new MockResponse()
@@ -182,7 +181,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[], \"total_files\":1}"));
 
-            service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            service.enrichPrFiles(vcsClient, files);
 
             RecordedRequest recorded = mockWebServer.takeRequest();
             assertThat(recorded.getPath()).endsWith("/parse/batch");
@@ -198,16 +197,16 @@ class PrFileEnrichmentServiceTest {
     class FileContentIssueTests {
         @Test void handlesNullContent_fetchFailed() throws Exception {
             List<String> files = List.of("Missing.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of());
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.stats().skipReasons()).containsKey("fetch_failed");
         }
 
         @Test void treatsEmptyFileContentAsCompleteSource() throws Exception {
             List<String> files = List.of("Empty.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("Empty.java", ""));
 
             mockWebServer.enqueue(new MockResponse()
@@ -215,7 +214,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[], \"total_files\":1, \"successful\":1, \"failed\":0}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.stats().filesEnriched()).isEqualTo(1);
             assertThat(result.stats().filesSkipped()).isZero();
             assertThat(result.fileContents()).singleElement().satisfies(file -> {
@@ -232,16 +231,14 @@ class PrFileEnrichmentServiceTest {
         @Test void acceptsGeneratedCssAboveLegacyHundredKilobyteLimit() throws Exception {
             String content = ".generated{display:block}".repeat(8_000);
             List<String> files = List.of("app/theme/web/css/styles.css");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"),
-                    eq(5 * 1024 * 1024))).thenReturn(Map.of(files.get(0), content));
+            when(vcsClient.readFiles(anyList(), eq(5 * 1024 * 1024), anyLong())).thenReturn(Map.of(files.get(0), content));
 
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[], \"total_files\":1, \"successful\":1, \"failed\":0}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(
-                    vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
 
             assertThat(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
                     .isGreaterThan(102_400);
@@ -255,7 +252,7 @@ class PrFileEnrichmentServiceTest {
             ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 50L);
 
             List<String> files = List.of("big1.java", "big2.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of(
                             "big1.java", "a".repeat(30),
                             "big2.java", "b".repeat(30)));
@@ -265,7 +262,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[]}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.stats().skipReasons()).containsKey("total_size_limit");
         }
     }
@@ -273,14 +270,27 @@ class PrFileEnrichmentServiceTest {
     @Nested
     @DisplayName("enrichPrFiles() - RAG parse failures")
     class ParseFailureTests {
+        @Test void localContentsSurviveUnavailableOrDisabledParserWithoutRefetching() {
+            var contents = new PrEnrichmentDataDto(List.of(FileContentDto.of("Fail.java", "class Fail {}")),
+                    List.of(), List.of(), PrEnrichmentDataDto.EnrichmentStats.empty());
+            mockWebServer.enqueue(new MockResponse().setResponseCode(500));
+            var result = service.enrichContents(contents, List.of("Fail.java"));
+            assertThat(result.fileContents()).isEqualTo(contents.fileContents());
+            assertThat(result.fileMetadata().get(0).error()).isEqualTo("parse_failed");
+            ReflectionTestUtils.setField(service, "enrichmentEnabled", false);
+            assertThat(service.enrichContents(contents, List.of("Fail.java"))).isSameAs(contents);
+            verifyNoInteractions(vcsClient);
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+        }
+
         @Test void fallbackMetadata_whenParseReturns500() throws Exception {
             List<String> files = List.of("Fail.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("Fail.java", "class Fail {}"));
 
             mockWebServer.enqueue(new MockResponse().setResponseCode(500));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.fileContents()).hasSize(1);
             assertThat(result.fileMetadata()).isNotEmpty();
             assertThat(result.fileMetadata().get(0).error()).isEqualTo("parse_failed");
@@ -288,7 +298,7 @@ class PrFileEnrichmentServiceTest {
 
         @Test void fallbackMetadata_whenParseReturnsNullResults() throws Exception {
             List<String> files = List.of("NullBody.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("NullBody.java", "class NullBody {}"));
 
             mockWebServer.enqueue(new MockResponse()
@@ -296,7 +306,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":null}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.fileMetadata()).isNotEmpty();
             assertThat(result.fileMetadata().get(0).error()).isEqualTo("parse_failed");
         }
@@ -307,13 +317,13 @@ class PrFileEnrichmentServiceTest {
     class ExceptionTests {
         @Test void failsClosed_onException() throws Exception {
             List<String> files = List.of("Error.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenThrow(new RuntimeException("VCS down"));
 
             assertThatThrownBy(() ->
-                    service.enrichPrFiles(vcsClient, "ws", "repo", "main", files))
+                    service.enrichPrFiles(vcsClient, files))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("PR enrichment failed before producing per-file outcomes")
+                    .hasMessage("File-content acquisition failed before producing per-file outcomes")
                     .hasCauseInstanceOf(RuntimeException.class);
         }
     }
@@ -327,7 +337,7 @@ class PrFileEnrichmentServiceTest {
                     "com/example/A.java", "class A {}",
                     "com/example/B.java", "class B {}",
                     "com/other/C.java", "class C {}");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(contents);
 
             mockWebServer.enqueue(new MockResponse()
@@ -335,13 +345,13 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[]}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.relationships()).isEmpty();
         }
 
         @Test void buildsImportRelationships() throws Exception {
             List<String> files = List.of("src/UserService.java", "src/UserRepo.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of(
                             "src/UserService.java", "import UserRepo;",
                             "src/UserRepo.java", "class UserRepo {}"));
@@ -356,7 +366,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody(parseResponse));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.relationships().stream()
                     .anyMatch(r -> r.relationshipType() == FileRelationshipDto.RelationshipType.IMPORTS
                             && r.sourceFile().equals("src/UserService.java")
@@ -369,7 +379,7 @@ class PrFileEnrichmentServiceTest {
                     "src/Caller.java",
                     "domain/User.java",
                     "transport/User.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of(
                             "src/Caller.java", "import User;",
                             "domain/User.java", "class User {}",
@@ -382,8 +392,7 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Caller.java", "imports", List.of("User"),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(
-                    vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
 
             assertThat(result.relationships()).isEmpty();
         }
@@ -393,7 +402,7 @@ class PrFileEnrichmentServiceTest {
                     "src/Caller.java",
                     "domain/User.java",
                     "transport/User.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of(
                             "src/Caller.java", "import domain.User;",
                             "domain/User.java", "class User {}",
@@ -406,8 +415,7 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Caller.java", "imports", List.of("domain.User"),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(
-                    vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
 
             assertThat(result.relationships())
                     .singleElement()
@@ -420,7 +428,7 @@ class PrFileEnrichmentServiceTest {
 
         @Test void mismatchedQualifiedReferenceDoesNotFallBackToUniqueBasename() throws Exception {
             List<String> files = List.of("src/Caller.java", "domain/User.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of(
                             "src/Caller.java", "import external.User;",
                             "domain/User.java", "class User {}"));
@@ -432,15 +440,14 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Caller.java", "imports", List.of("external.User"),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(
-                    vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
 
             assertThat(result.relationships()).isEmpty();
         }
 
         @Test void substringReferenceDoesNotCreateRelationship() throws Exception {
             List<String> files = List.of("src/Caller.java", "src/UserService.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of(
                             "src/Caller.java", "import User;",
                             "src/UserService.java", "class UserService {}"));
@@ -452,15 +459,14 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Caller.java", "imports", List.of("User"),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(
-                    vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
 
             assertThat(result.relationships()).isEmpty();
         }
 
         @Test void doesNotCreateSelfRelationships_excludesSameFile() throws Exception {
             List<String> files = List.of("src/Self.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("src/Self.java", "import Self;"));
 
             mockWebServer.enqueue(new MockResponse()
@@ -470,7 +476,7 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Self.java", "imports", List.of("Self"),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.relationships().stream()
                     .noneMatch(r -> r.sourceFile().equals(r.targetFile())))
                     .isTrue();
@@ -478,7 +484,7 @@ class PrFileEnrichmentServiceTest {
 
         @Test void buildsExtendsRelationships() throws Exception {
             List<String> files = List.of("src/Child.java", "src/Parent.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("src/Child.java", "class Child extends Parent {}", "src/Parent.java", "class Parent {}"));
 
             mockWebServer.enqueue(new MockResponse()
@@ -490,7 +496,7 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Parent.java", "imports", List.of(),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.relationships().stream()
                     .anyMatch(r -> r.relationshipType() == FileRelationshipDto.RelationshipType.EXTENDS))
                     .isTrue();
@@ -498,7 +504,7 @@ class PrFileEnrichmentServiceTest {
 
         @Test void buildsImplementsRelationships() throws Exception {
             List<String> files = List.of("src/Impl.java", "src/Api.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("src/Impl.java", "class Impl implements Api {}", "src/Api.java", "interface Api {}"));
 
             mockWebServer.enqueue(new MockResponse()
@@ -510,7 +516,7 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Api.java", "imports", List.of(),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.relationships().stream()
                     .anyMatch(r -> r.relationshipType() == FileRelationshipDto.RelationshipType.IMPLEMENTS))
                     .isTrue();
@@ -518,7 +524,7 @@ class PrFileEnrichmentServiceTest {
 
         @Test void buildsCallsRelationships() throws Exception {
             List<String> files = List.of("src/Caller.java", "src/Callee.java");
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(Map.of("src/Caller.java", "class Caller {}", "src/Callee.java", "class Callee {}"));
 
             mockWebServer.enqueue(new MockResponse()
@@ -530,7 +536,7 @@ class PrFileEnrichmentServiceTest {
                             Map.of("path", "src/Callee.java", "imports", List.of(),
                                     "extends", List.of(), "implements", List.of(), "calls", List.of()))))));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.relationships().stream()
                     .anyMatch(r -> r.relationshipType() == FileRelationshipDto.RelationshipType.CALLS))
                     .isTrue();
@@ -549,7 +555,7 @@ class PrFileEnrichmentServiceTest {
             Map<String, String> contents = new HashMap<>();
             for (String f : files) contents.put(f, "content of " + f);
 
-            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+            when(vcsClient.readFiles(anyList(), anyInt(), anyLong()))
                     .thenReturn(contents);
 
             mockWebServer.enqueue(new MockResponse()
@@ -557,7 +563,7 @@ class PrFileEnrichmentServiceTest {
                     .addHeader("Content-Type", "application/json")
                     .setBody("{\"results\":[]}"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
+            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.stats().filesEnriched()).isEqualTo(files.size());
             assertThat(result.stats().skipReasons()).doesNotContainKey("unsupported_extension");
         }

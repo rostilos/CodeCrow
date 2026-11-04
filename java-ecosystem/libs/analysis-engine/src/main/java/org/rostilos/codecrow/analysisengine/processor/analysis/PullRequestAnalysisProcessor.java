@@ -185,7 +185,7 @@ public class PullRequestAnalysisProcessor {
         AnalysisLockService.LockLease lockLease = null;
         ReviewUsagePolicy.Reservation usageReservation =
                 ReviewUsagePolicy.Reservation.NONE;
-        try {
+        try (var acquisition = localRepositorySnapshotService.openAcquisition(project.getId())) {
             lockLease = analysisLockService.maintainLockLease(
                     lockKey,
                     analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS));
@@ -695,14 +695,9 @@ public class PullRequestAnalysisProcessor {
                 log.warn("No VCS repo info available — cannot fetch file contents for source viewer");
                 return Collections.emptyMap();
             }
-            VcsClient vcsClient = vcsClientProvider.getClient(repoInfo.getVcsConnection());
-            Map<String, String> contents = vcsClient.getFileContents(
-                    repoInfo.getRepoWorkspace(),
-                    repoInfo.getRepoSlug(),
-                    changedFiles,
-                    commitHash,
-                    100_000 // 100 KB max per file, consistent with enrichment service
-            );
+            Map<String, String> contents = localRepositorySnapshotService.readSourceFiles(
+                    repoInfo.getVcsConnection(), repoInfo.getRepoWorkspace(), repoInfo.getRepoSlug(),
+                    commitHash, changedFiles, 100_000);
             log.info("VCS file fetch: fetched {}/{} requested bodies (commit={})",
                     contents.size(), changedFiles.size(),
                     commitHash != null ? commitHash.substring(0, Math.min(7, commitHash.length())) : "null");

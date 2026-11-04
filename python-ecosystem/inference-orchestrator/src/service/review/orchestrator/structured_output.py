@@ -6,8 +6,7 @@ provider-backed models an inspectable raw response when schema parsing fails.
 """
 
 from __future__ import annotations
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.execution_scheduler import invoke_review_model
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -205,12 +204,10 @@ async def invoke_structured_output(
         for key, value in request_kwargs.items()
         if key not in bound_request_keys
     }
-    async with review_model_slot(label):
-        response = await structured_llm.ainvoke(
-            prompt,
-            **invocation_kwargs,
-        )
-        record_model_response(response)
+    response = await invoke_review_model(label, structured_llm.ainvoke,
+        prompt,
+        **invocation_kwargs,
+    )
 
     if (
         isinstance(response, Mapping)

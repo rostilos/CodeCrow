@@ -16,7 +16,8 @@ import os
 import time
 from typing import Any, Callable, Iterator
 
-from service.review.inference_usage import InferenceUsage, _ACTIVE_USAGE, _ACTIVE_CALL
+from llm.provider_errors import is_quota_exhausted, rate_limit_retry_delay, RATE_LIMIT_MAX_RETRIES, RATE_LIMIT_MAX_WAIT_SECONDS
+from service.review.inference_usage import InferenceUsage, _ACTIVE_USAGE, _ACTIVE_CALL, record_model_response, record_compute_decision
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class _ReviewExecution:
 
 
 _EXECUTION: ContextVar[_ReviewExecution | None] = ContextVar("review_execution", default=None)
+_IN_MODEL_INVOCATION: ContextVar[bool] = ContextVar("review_model_invocation", default=False)
 
 
 def set_review_deadline(deadline: float | None) -> None:
@@ -122,6 +124,51 @@ def optional_timeout_seconds(name: str, default: float) -> float:
     except (ValueError, TypeError):
         logger.warning("Invalid optional timeout %s=%r; using %.1fs", name, raw, default)
         return default
+
+
+def review_model_call_budget(llm=None) -> float:
+    """Allow the configured request duration plus bounded 429 rejection waits."""
+    from llm.llm_factory import _provider_transport_settings
+    from utils.llm_delegate import unwrap_llm_delegate
+    delegate = unwrap_llm_delegate(llm)
+    timeout = getattr(delegate, "request_timeout", None) or getattr(delegate, "timeout", None)
+    if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+        timeout = _provider_transport_settings()["timeout"]
+    return timeout + RATE_LIMIT_MAX_RETRIES * RATE_LIMIT_MAX_WAIT_SECONDS
+
+
+async def invoke_review_model(stage: str, invoke, *args, **kwargs):
+    """One invocation allowance; SDKs and callers must not retry its failures."""
+    if _IN_MODEL_INVOCATION.get():
+        return await invoke(*args, **kwargs)
+    for retry in range(RATE_LIMIT_MAX_RETRIES + 1):
+        try:
+            async with review_model_slot(stage):
+                call = _ACTIVE_CALL.get()
+                if call is not None:
+                    call["providerAttempt"] = retry + 1
+                token = _IN_MODEL_INVOCATION.set(True)
+                try:
+                    response = await invoke(*args, **kwargs)
+                finally:
+                    _IN_MODEL_INVOCATION.reset(token)
+                record_model_response(response)
+                return response
+        except Exception as error:
+            delay = rate_limit_retry_delay(error, retry)
+            if delay is None or optional_work_budget(delay) < delay:
+                raise
+            record_compute_decision("provider_rate_limit_retry", stage=stage,
+                                    attempt=retry + 1, delaySeconds=delay)
+            logger.warning("Provider rejected request with HTTP 429: stage=%s retry=%d/%d wait_seconds=%.1f",
+                           stage, retry + 1, RATE_LIMIT_MAX_RETRIES, delay)
+            execution = _EXECUTION.get()
+            if execution is not None and execution.event_callback:
+                execution.event_callback({"type": "status", "state": "provider_rate_limited",
+                    "stage": stage, "retry": retry + 1, "delaySeconds": delay,
+                    "message": f"Provider rate limit; retrying rejected request in {delay:g}s"})
+            # Return the provider permit while waiting; caller cancellation stops sleep.
+            await asyncio.sleep(delay)
 
 
 @contextmanager
@@ -203,16 +250,15 @@ async def review_model_slot(stage: str):
             seen = set()
             while cause is not None and id(cause) not in seen:
                 seen.add(id(cause))
-                if getattr(cause, "status_code", None) in {401, 402, 403}:
+                status = getattr(cause, "status_code", getattr(cause, "code", None))
+                if status in {401, 402, 403} or status == 429 and is_quota_exhausted(cause):
                     # A fixed review connection cannot recover authentication
                     # or exhausted credit by repeating another stage's request.
                     if not execution.provider_failure:
                         execution.provider_failure.append(error)
-                        account_rejected = cause.status_code in {401, 402} or any(
-                            marker in str(cause).lower()
-                            for marker in ("key limit exceeded", "insufficient_quota", "insufficient credits"))
+                        account_rejected = status in {401, 402} or is_quota_exhausted(cause)
                         logger.warning("Provider rejected review credentials/account; remaining model calls stopped: project=%s PR=%s status=%s account_rejected=%s",
-                                       execution.project_id, execution.pull_request_id, cause.status_code, account_rejected)
+                                       execution.project_id, execution.pull_request_id, status, account_rejected)
                     break
                 cause = cause.__cause__ or cause.__context__
             raise

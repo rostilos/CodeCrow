@@ -570,6 +570,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             return documentation
 
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.error("Multi-stage QA doc pipeline failed: %s", e, exc_info=True)
             emit_error(self.event_callback, str(e))
             # Fallback to single-pass
@@ -781,12 +782,11 @@ class QaDocOrchestrator(BaseOrchestrator):
                         total_batches,
                         e,
                     )
-                    return [{
-                        "batch_id": idx,
-                        "error": str(e),
-                        "file_analyses": [],
-                        "required_evidence_failed": True,
-                    }]
+                    # Stop queued batches before releasing this batch's semaphore slot.
+                    for task in tasks:
+                        if task is not asyncio.current_task():
+                            task.cancel()
+                    raise
                 finally:
                     completed_count += 1
                     emit_progress(
@@ -800,33 +800,16 @@ class QaDocOrchestrator(BaseOrchestrator):
             "Stage 1: launching %d batches with max_concurrency=%d",
             total_batches, MAX_CONCURRENCY,
         )
-        tasks = [_process_batch(idx, batch) for idx, batch in enumerate(batches, start=1)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Handle any unexpected exceptions from gather
-        processed: List[Dict[str, Any]] = []
-        for idx, result in enumerate(results, start=1):
-            if isinstance(result, BaseException):
-                logger.error("Stage 1 batch %d/%d unexpected failure: %s", idx, total_batches, result)
-                processed.append({
-                    "batch_id": idx,
-                    "error": str(result),
-                    "file_analyses": [],
-                    "required_evidence_failed": True,
-                })
-            else:
-                processed.extend(result)
-
-        required_failures = [
-            result for result in processed if result.get("required_evidence_failed")
-        ]
-        if required_failures:
-            raise RuntimeError(
-                "QA Stage 1 failed atomically because a required semantic "
-                "evidence shard was not analyzed"
-            )
-
-        return processed
+        tasks = [asyncio.create_task(_process_batch(idx, batch))
+                 for idx, batch in enumerate(batches, start=1)]
+        try:
+            results = await asyncio.gather(*tasks)
+            return [result for batch_results in results for result in batch_results]
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── Stage 2: Cross-Impact Analysis ───────────────────────────────
 
@@ -882,6 +865,7 @@ class QaDocOrchestrator(BaseOrchestrator):
                     "raw_analysis": content,
                 }
             except Exception as e:
+                raise_if_outcome_unknown(e)
                 logger.error("Stage 2 cross-impact failed: %s", e)
                 return {
                     "cross_file_scenarios": [],
@@ -998,6 +982,7 @@ class QaDocOrchestrator(BaseOrchestrator):
                         "raw_analysis": content,
                     })
                 except Exception as exception:
+                    raise_if_outcome_unknown(exception)
                     failures += 1
                     logger.warning(
                         "Optional QA Stage 2 semantic shard %d/%d failed open: %s",
@@ -1808,6 +1793,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             logger.debug("Relevance check answer: %s", answer)
             return answer.startswith("YES")
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.warning("Relevance check failed, defaulting to YES: %s", e)
             return True
 

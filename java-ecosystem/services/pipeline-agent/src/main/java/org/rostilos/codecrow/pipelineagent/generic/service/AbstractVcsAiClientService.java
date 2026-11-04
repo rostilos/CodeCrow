@@ -58,6 +58,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     private final TaskHistoryContextService taskHistoryContextService;
     private final PullRequestDiffPreparationService diffPreparationService;
     private final ProjectCapabilitySelectionService capabilitySelectionService;
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService snapshots;
 
     protected AbstractVcsAiClientService(
             TokenEncryptionService tokenEncryptionService,
@@ -153,6 +155,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                             repository.workspace(), repository.repoSlug(),
                             pullRequest.baseCommit(), pullRequest.headCommit());
                 } catch (IOException rangeError) {
+                    org.rostilos.codecrow.vcsclient.VcsRateLimitException.rethrowIfRateLimited(rangeError);
                     log.warn("Commit-range PR diff failed for project={}, PR={}; "
                                     + "using provider-native PR diff: {}",
                             project.getId(), request.getPullRequestId(), rangeError.getMessage());
@@ -344,76 +347,28 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider(providerKey())
+                .withVcsQuotaIdentity(VcsClientProvider.quotaIdentity(repository.connection()))
                 .withProjectRules(effectiveConfig.getProjectRulesConfig().toEnabledRulesJson());
     }
 
-    private PrEnrichmentDataDto enrichFiles(
-            RepositoryInfo repository,
-            String commitHash,
-            List<String> changedFiles,
-            String operation) {
-        if (enrichmentService == null || changedFiles == null || changedFiles.isEmpty()) {
-            return PrEnrichmentDataDto.empty();
-        }
-
-        VcsClient vcsClient;
-        try {
-            vcsClient = vcsClientProvider.getClient(repository.connection());
-        } catch (Exception e) {
-            log.warn("Skipping {} enrichment because the VCS client is unavailable: {}",
-                    operation, e.getMessage());
-            return PrEnrichmentDataDto.empty();
-        }
-
-        PrEnrichmentDataDto enrichment = PrEnrichmentDataDto.empty();
-        if (enrichmentService.isEnrichmentEnabled()) {
-            try {
-                enrichment = enrichmentService.enrichPrFiles(
-                        vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
-            } catch (Exception e) {
-                log.warn("Structured enrichment failed for {}; trying content-only acquisition: {}",
-                        operation, e.getMessage());
-            }
-        }
-        if (enrichment.hasData()) return enrichment;
-
-        try {
-            return enrichmentService.fetchFileContentsOnly(
-                    vcsClient, repository.workspace(), repository.repoSlug(), commitHash, changedFiles);
-        } catch (Exception e) {
-            log.warn("Skipping {} file-content enrichment: {}", operation, e.getMessage());
-            return PrEnrichmentDataDto.empty();
-        }
-    }
-
     private CapabilityEnrichment prepareCapabilityEnrichment(
-            Project project,
-            RepositoryInfo repository,
-            String commit,
-            List<String> changedFiles,
-            String operation) {
-        if (capabilitySelectionService == null) {
-            return new CapabilityEnrichment(
-                    enrichFiles(repository, commit, changedFiles, operation),
-                    null);
-        }
-        try {
-            VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
-            var plan = capabilitySelectionService.plan(
-                    vcsClient, repository.workspace(), repository.repoSlug(), commit,
-                    changedFiles,
-                    project.getEffectiveConfig().analysisProfile());
-            PrEnrichmentDataDto enrichment = enrichFiles(
-                    repository, commit, plan.enrichmentPaths(), operation);
-            ProjectCapabilities capabilities = capabilitySelectionService.complete(
-                    plan, enrichment);
-            return new CapabilityEnrichment(enrichment, capabilities);
-        } catch (Exception exception) {
-            log.warn("Skipping project capability enrichment at commit {}: {}",
-                    commit, exception.getMessage());
-            return new CapabilityEnrichment(
-                    enrichFiles(repository, commit, changedFiles, operation),
-                    null);
+            Project project, RepositoryInfo repository, String commit,
+            List<String> changedFiles, String operation) {
+        try (var context = new org.rostilos.codecrow.vcsclient.VcsRequestContext(project.getId(), null, "source");
+             var source = snapshots.prepare(repository.connection(), repository.workspace(),
+                     repository.repoSlug(), commit, commit).orElse(null)) {
+            if (source == null) log.warn("Local source unavailable for {}; continuing with diff and reduced plugin evidence", operation);
+            var plan = capabilitySelectionService != null ? capabilitySelectionService.plan(
+                    source, commit, changedFiles, project.getEffectiveConfig().analysisProfile()) : null;
+            PrEnrichmentDataDto enrichment = source != null && enrichmentService != null
+                    ? enrichmentService.fetchFileContentsOnly(source, plan != null ? plan.enrichmentPaths() : changedFiles)
+                    : PrEnrichmentDataDto.empty();
+            return new CapabilityEnrichment(enrichment,
+                    plan != null ? capabilitySelectionService.complete(plan, enrichment) : null);
+        } catch (Exception failure) {
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("Source acquisition cancelled");
+            log.warn("Skipping {} source enrichment at commit {}: {}", operation, commit, failure.getMessage());
+            return new CapabilityEnrichment(PrEnrichmentDataDto.empty(), null);
         }
     }
 

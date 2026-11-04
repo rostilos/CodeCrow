@@ -32,6 +32,9 @@ import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileRelationshipDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
@@ -64,6 +67,7 @@ class QaDocCommandProcessorTest {
     @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private QaDocPublicPreviewService qaDocPublicPreviewService;
     @Mock private PrFileEnrichmentService enrichmentService;
+    @Mock private org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService snapshots;
     @Mock private org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService operationService;
     @Mock private org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService.Operation operation;
     @Mock private org.rostilos.codecrow.core.service.PrChangeSummaryService prChangeSummaryService;
@@ -117,6 +121,7 @@ class QaDocCommandProcessorTest {
                 qaDocPublicPreviewService,
                 enrichmentService
         , prChangeSummaryService, operationService);
+        ReflectionTestUtils.setField(processor, "snapshots", snapshots);
         lenient().when(operationService.open(any(), any(), anyString(), any())).thenReturn(operation);
         lenient().when(operation.commit(any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
 
@@ -179,7 +184,14 @@ class QaDocCommandProcessorTest {
         when(vcsClientProvider.getClient(connection)).thenReturn(vcs);
         when(vcs.getPullRequest("workspace", "repo", 7L)).thenReturn(new org.rostilos.codecrow.vcsclient.model.VcsPullRequest(7L, "title", "body", "feature", "main", "base", "abc123", "open", false, "url"));
         when(vcs.getCommitRangeDiff(eq("workspace"), eq("repo"), anyString(), eq("abc123"))).thenReturn(sourceAndMapDiff());
-        when(enrichmentService.isEnrichmentEnabled()).thenReturn(true);
+        var source = mock(org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService.PreparedSnapshot.class);
+        when(snapshots.prepare(connection, "workspace", "repo", "abc123", "abc123")).thenReturn(Optional.of(source));
+        var contents = new PrEnrichmentDataDto(List.of(FileContentDto.of("src/A.java", "class A {}")),
+                List.of(), List.of(), PrEnrichmentDataDto.EnrichmentStats.empty());
+        var enriched = new PrEnrichmentDataDto(contents.fileContents(), List.of(),
+                List.of(FileRelationshipDto.imports("src/A.java", "src/B.java", "B")), contents.stats());
+        when(enrichmentService.fetchFileContentsOnly(source, List.of("src/A.java"))).thenReturn(contents);
+        when(enrichmentService.enrichContents(contents, List.of("src/A.java"))).thenReturn(enriched);
         var previousPrDoc = new QaDocDocument(project, 7L);
         previousPrDoc.replaceContent(TASK_ID, null, "pr-a-old", GENERATED_QA_DOC);
         var state = new QaDocState(project, TASK_ID);
@@ -194,7 +206,10 @@ class QaDocCommandProcessorTest {
         var context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
         verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
         assertThat(context.getValue().deltaDiff()).contains("+source").doesNotContain("checkout.js.map");
-        verify(enrichmentService).enrichPrFiles(any(), eq("workspace"), eq("repo"), eq("abc123"), eq(List.of("src/A.java")));
+        assertThat(context.getValue().enrichmentData()).isSameAs(enriched);
+        verify(enrichmentService).fetchFileContentsOnly(any(), eq(List.of("src/A.java")));
+        verify(enrichmentService).enrichContents(contents, List.of("src/A.java"));
+        verify(vcs, never()).getFileContent(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test

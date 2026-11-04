@@ -1,8 +1,8 @@
 """
 Stage 3: Aggregation & final report — executive summary, optional MCP verification.
 """
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response, record_compute_decision
+from service.review.execution_scheduler import invoke_review_model
+from service.review.inference_usage import record_compute_decision
 import json
 import logging
 import os
@@ -434,12 +434,10 @@ async def _invoke_stage_3_report(
     allow_retry: bool = True,
     reasoning_effort: ReasoningEffort = ReasoningEffort.LOW,
 ) -> Dict[str, Any]:
-    async with review_model_slot("stage_3_aggregation"):
-        response = await llm.ainvoke(
-            prompt,
-            **reasoning_request_kwargs(llm, reasoning_effort),
-        )
-        record_model_response(response)
+    response = await invoke_review_model("stage_3_aggregation", llm.ainvoke,
+        prompt,
+        **reasoning_request_kwargs(llm, reasoning_effort),
+    )
     if (
         _response_finished_by_length(response)
         and allow_retry
@@ -449,15 +447,13 @@ async def _invoke_stage_3_report(
             "Stage 3 report exhausted its output; retrying once as a "
             "reasoning-free direct output request"
         )
-        async with review_model_slot("stage_3_aggregation"):
-            response = await fallback_llm.ainvoke(
-                prompt,
-                **reasoning_request_kwargs(
-                    fallback_llm,
-                    ReasoningEffort.NONE,
-                ),
-            )
-            record_model_response(response)
+        response = await invoke_review_model("stage_3_aggregation", fallback_llm.ainvoke,
+            prompt,
+            **reasoning_request_kwargs(
+                fallback_llm,
+                ReasoningEffort.NONE,
+            ),
+        )
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
 
 

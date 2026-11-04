@@ -503,7 +503,9 @@ public class AskCommandProcessor implements CommentCommandProcessor {
                 credentials.vcsProviderString(),
                 credentials.vcsBaseUrl(),
                 analysisContext,
-                context.issueReferences()
+                context.issueReferences(),
+                VcsClientProvider.quotaIdentity(vcsInfo.vcsConnection()),
+                org.slf4j.MDC.get("jobId")
             );
             
         } catch (GeneralSecurityException e) {

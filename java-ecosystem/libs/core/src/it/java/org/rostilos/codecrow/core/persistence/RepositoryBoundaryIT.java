@@ -43,6 +43,103 @@ class RepositoryBoundaryIT {
     @Autowired DataSource dataSource;
     @Autowired ReconcileTaskRepository reconcileTasks;
 
+    @Test
+    void partialStatusMigrationUpgradesExistingConstraintWithoutLosingAnalyses() throws Exception {
+        String schema = "partial_status_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement();
+             var source = getClass().getResourceAsStream("/db/migration/managed/V2.45.0__allow_partial_analysis_status.sql")) {
+            assertThat(source).isNotNull();
+            String migration = new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis (status text CONSTRAINT code_analysis_status_check "
+                        + "CHECK (status IN ('ACCEPTED','REJECTED','PENDING','ERROR')), comment text)");
+                sql.execute("INSERT INTO code_analysis VALUES ('ACCEPTED','existing result')");
+                sql.execute(migration);
+                for (AnalysisStatus status : AnalysisStatus.values()) {
+                    sql.execute("INSERT INTO code_analysis VALUES ('" + status.name() + "','new result')");
+                }
+                sql.execute(migration);
+                try (var rows = sql.executeQuery("SELECT comment FROM code_analysis WHERE comment='existing result'")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getString(1)).isEqualTo("existing result");
+                }
+                assertThatThrownBy(() -> sql.execute("INSERT INTO code_analysis VALUES ('UNKNOWN','invalid')"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("code_analysis_status_check");
+            } finally {
+                conn.setSchema("public");
+                sql.execute("DROP SCHEMA " + schema + " CASCADE");
+            }
+        }
+    }
+
+    @Test
+    void qaReferenceRepairPreservesContentAndScopesReferencesDuringDeletion() throws Exception {
+        String schema = "qa_reference_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement();
+             var concurrent = dataSource.getConnection(); var other = concurrent.createStatement();
+             var source = getClass().getResourceAsStream("/db/migration/managed/V2.46.0__retain_qa_content_without_deleted_analysis.sql")) {
+            assertThat(source).isNotNull();
+            String migration = new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema); concurrent.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis(id bigint PRIMARY KEY, project_id bigint, pr_number bigint)");
+                sql.execute("INSERT INTO code_analysis VALUES (1,7,88),(2,8,88),(3,7,89),(4,7,88)");
+                for (String table : java.util.List.of("qa_doc_document", "qa_doc_state")) {
+                    sql.execute("CREATE TABLE " + table + " (id bigint PRIMARY KEY, project_id bigint, pr_number bigint, "
+                            + "last_analysis_id bigint REFERENCES code_analysis(id) ON DELETE SET NULL, markdown_content text)");
+                    sql.execute("INSERT INTO " + table + " VALUES (1,7,88,1,'existing content')");
+                }
+                sql.execute(migration);
+                sql.execute(migration);
+                for (String table : java.util.List.of("qa_doc_document", "qa_doc_state")) {
+                    sql.execute("UPDATE " + table + " SET last_analysis_id=999, markdown_content='paid result' WHERE id=1");
+                    try (var row = sql.executeQuery("SELECT last_analysis_id,markdown_content FROM " + table + " WHERE id=1")) {
+                        assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                        assertThat(row.getString(2)).isEqualTo("paid result");
+                    }
+                    sql.execute("INSERT INTO " + table + " VALUES (2,7,88,2,'other project'),(3,7,88,1,'valid source')");
+                    try (var row = sql.executeQuery("SELECT last_analysis_id FROM " + table + " WHERE id=2")) {
+                        assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                    }
+                }
+                sql.execute("INSERT INTO qa_doc_document VALUES (4,7,88,3,'other PR')");
+                try (var row = sql.executeQuery("SELECT last_analysis_id FROM qa_doc_document WHERE id=4")) {
+                    assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                }
+                concurrent.setAutoCommit(false);
+                other.execute("SELECT id FROM code_analysis WHERE id=4 FOR UPDATE");
+                sql.execute("SET lock_timeout='1s'");
+                sql.execute("UPDATE qa_doc_document SET last_analysis_id=4, markdown_content='concurrent result' WHERE id=1");
+                concurrent.rollback(); concurrent.setAutoCommit(true);
+                try (var row = sql.executeQuery("SELECT last_analysis_id,markdown_content FROM qa_doc_document WHERE id=1")) {
+                    assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                    assertThat(row.getString(2)).isEqualTo("concurrent result");
+                }
+                conn.setAutoCommit(false);
+                sql.execute("UPDATE qa_doc_document SET last_analysis_id=1 WHERE id=3");
+                other.execute("SET lock_timeout='100ms'");
+                assertThatThrownBy(() -> other.execute("DELETE FROM code_analysis WHERE id=1"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("lock timeout");
+                conn.commit(); conn.setAutoCommit(true);
+                other.execute("DELETE FROM code_analysis WHERE id=1");
+                for (String table : java.util.List.of("qa_doc_document", "qa_doc_state")) {
+                    try (var row = sql.executeQuery("SELECT last_analysis_id,markdown_content FROM " + table + " WHERE id=3")) {
+                        assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                        assertThat(row.getString(2)).isEqualTo("valid source");
+                    }
+                }
+            } finally {
+                if (!concurrent.getAutoCommit()) concurrent.rollback();
+                if (!conn.getAutoCommit()) conn.rollback();
+                conn.setAutoCommit(true); conn.setSchema("public"); concurrent.setSchema("public");
+                sql.execute("DROP SCHEMA " + schema + " CASCADE");
+            }
+        }
+    }
+
     @Test @Transactional
     void onlyOneWorkerCanClaimPendingReconciliation() {
         var task = new ReconcileTask();

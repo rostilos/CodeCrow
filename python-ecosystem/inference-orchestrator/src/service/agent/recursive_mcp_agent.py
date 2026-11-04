@@ -1,6 +1,6 @@
 """MCP agent variant with bounded exploration and structured completion."""
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response, record_compute_decision
+from service.review.execution_scheduler import invoke_review_model
+from service.review.inference_usage import record_compute_decision
 
 import json
 import logging
@@ -377,10 +377,8 @@ class ModelRequestSettingsMiddleware(AgentMiddleware):
             request: ModelRequest,
             handler: Callable[[ModelRequest], Awaitable[Any]],
     ) -> Any:
-        async with review_model_slot(self._usage_stage):
-            response = await handler(self._prepare_request(request))
-            record_model_response(response)
-            return response
+        response = await invoke_review_model(self._usage_stage, handler, self._prepare_request(request))
+        return response
 
 
 class FinalResponseReserveMiddleware(AgentMiddleware):
@@ -1013,14 +1011,12 @@ class RecursiveMCPAgent(MCPAgent):
         # call for schema conversion. Reject it before it can become fabricated
         # structured output.
         reject_mcp_use_model_call_limit_output(raw_result)
-        async with review_model_slot(getattr(self, "_usage_stage", "mcp_agent") + "_structured_recovery"):
-            response = await super()._attempt_structured_output(
-                raw_result,
-                *args,
-                **kwargs,
-            )
-            record_model_response(response)
-            return response
+        response = await invoke_review_model(getattr(self, "_usage_stage", "mcp_agent") + "_structured_recovery", super()._attempt_structured_output,
+            raw_result,
+            *args,
+            **kwargs,
+        )
+        return response
 
     @staticmethod
     def _validated_stream_output(

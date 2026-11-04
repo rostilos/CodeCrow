@@ -1,8 +1,8 @@
 """
 Stage 0: Planning & Prioritization — analyze PR metadata and build a review plan.
 """
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.execution_scheduler import invoke_review_model
+from llm.provider_errors import raise_if_outcome_unknown
 import json
 import logging
 import os
@@ -257,6 +257,11 @@ async def execute_stage_0_planning(
                 logger.info("Stage 0 planning completed with structured output")
                 return result
         except Exception as e:
+            try:
+                raise_if_outcome_unknown(e)
+            except Exception:
+                logger.info("Stage 0 provider unavailable; using local plan without another model call: %s", e)
+                return _build_fallback_review_plan(request, processed_diff)
             logger.warning(
                 "Structured output failed for Stage 0: error_type=%s",
                 type(e).__name__,
@@ -265,12 +270,10 @@ async def execute_stage_0_planning(
         logger.info("Structured output skipped for Stage 0; using prompt JSON parsing")
 
     try:
-        async with review_model_slot("stage_0_planning"):
-            response = await llm.ainvoke(
-                prompt,
-                **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-            )
-            record_model_response(response)
+        response = await invoke_review_model("stage_0_planning", llm.ainvoke,
+            prompt,
+            **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+        )
         content = extract_llm_response_text(response)
         if not content.strip():
             logger.warning(

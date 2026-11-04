@@ -2,8 +2,7 @@
 JSON parsing, repair, and cleaning utilities for LLM responses.
 """
 from llm.provider_errors import raise_if_outcome_unknown
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.execution_scheduler import invoke_review_model
 import json
 import logging
 import os
@@ -158,7 +157,7 @@ async def parse_llm_response(
     ``retries`` repair calls for standalone callers that do not own a call budget.
     """
     last_error = None
-    
+
     # Initial cleaning attempt
     try:
         cleaned, data = load_json_with_local_repairs(content)
@@ -233,8 +232,8 @@ async def parse_llm_response(
             logger.info(f"Repairing JSON for {model_class.__name__}, attempt {attempt+1}")
             repaired = await repair_json_with_llm(
                 llm,
-                content, 
-                str(last_error), 
+                content,
+                str(last_error),
                 schema,
                 input_token_target=repair_target,
             )
@@ -250,7 +249,7 @@ async def parse_llm_response(
             raise_if_outcome_unknown(e)
             last_error = e
             logger.warning(f"Retry {attempt+1} failed: {e}")
-    
+
     raise ValueError(f"Failed to parse {model_class.__name__} after retries: {last_error}")
 
 
@@ -298,12 +297,10 @@ async def repair_json_with_llm(
         schema,
         max(1_000, input_token_target or JSON_REPAIR_INPUT_TOKEN_TARGET),
     )
-    async with review_model_slot("json_utils"):
-        response = await llm.ainvoke(
-            prompt,
-            **reasoning_request_kwargs(llm, ReasoningEffort.NONE),
-        )
-        record_model_response(response)
+    response = await invoke_review_model("json_utils", llm.ainvoke,
+        prompt,
+        **reasoning_request_kwargs(llm, ReasoningEffort.NONE),
+    )
     return extract_llm_response_text(response)
 
 
@@ -462,7 +459,7 @@ def clean_json_text(text: str) -> str:
     Clean markdown and extraneous text from JSON.
     """
     text = text.strip()
-    
+
     # Remove markdown code blocks
     if text.startswith("```"):
         lines = text.split("\n")
@@ -472,7 +469,7 @@ def clean_json_text(text: str) -> str:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-    
+
     # Also handle case where ``` appears mid-text
     if "```json" in text:
         start_idx = text.find("```json")
@@ -490,13 +487,13 @@ def clean_json_text(text: str) -> str:
             text = remaining[:end_idx].strip()
         else:
             text = remaining.strip()
-    
+
     # Find JSON object boundaries
     obj_start = text.find("{")
     obj_end = text.rfind("}")
     arr_start = text.find("[")
     arr_end = text.rfind("]")
-    
+
     # Determine if we have an object or array (whichever comes first)
     if obj_start != -1 and obj_end != -1:
         if arr_start == -1 or obj_start < arr_start:
@@ -515,5 +512,5 @@ def clean_json_text(text: str) -> str:
         # Only array found - log warning as Pydantic models expect objects
         logger.warning(f"JSON cleaning found array instead of object, this may fail parsing")
         text = text[arr_start:arr_end+1]
-    
+
     return text

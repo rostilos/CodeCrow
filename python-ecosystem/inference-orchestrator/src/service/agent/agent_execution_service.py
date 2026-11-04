@@ -1,8 +1,7 @@
 """Shared construction and execution lifecycle for prompt-scoped MCP agents."""
 
 from llm.provider_lifecycle import provider_execution_scope
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.execution_scheduler import invoke_review_model
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -189,13 +188,11 @@ class AgentModelSession:
         self._usage_stage = usage_stage
 
     async def ainvoke(self, messages: Sequence[Any]) -> Any:
-        async with review_model_slot(self._usage_stage):
-            response = await self._bound_model.ainvoke(
-                messages,
-                **self._invocation_kwargs,
-            )
-            record_model_response(response)
-            return response
+        response = await invoke_review_model(self._usage_stage, self._bound_model.ainvoke,
+            messages,
+            **self._invocation_kwargs,
+        )
+        return response
 
 
 class AgentExecutionService(Generic[AgentOutputT]):

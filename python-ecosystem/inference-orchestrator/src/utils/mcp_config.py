@@ -26,6 +26,8 @@ class MCPConfigBuilder:
         jvm_args: list[str] = ["-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-Xms16m"]
         # The MCP SDK drops ambient locale variables; Java then rejects Unicode paths.
         server_env: Dict[str, str] = {"LC_ALL": "C.UTF-8"}
+        if (jvm_props or {}).get("vcs.quota.identity") and os.environ.get("REDIS_URL"):
+            server_env["REDIS_URL"] = os.environ["REDIS_URL"]
 
         for key, value in (jvm_props or {}).items():
             text_value = str(value)
@@ -161,7 +163,9 @@ class MCPConfigBuilder:
          local_repo_target_branch: str = None,
          local_repo_revision: str = None,
          local_review_overlay_path: str = None,
-         local_mcp_only: bool = False) -> Dict[str, str]:
+         local_mcp_only: bool = False,
+         vcs_quota_identity: str = None,
+         vcs_job_id: str = None) -> Dict[str, str]:
         """
         Build JVM properties dictionary from request parameters.
 
@@ -216,6 +220,10 @@ class MCPConfigBuilder:
             jvm_props["vcs.provider"] = vcs_provider
         if vcs_base_url is not None:
             jvm_props["vcs.baseUrl"] = vcs_base_url
+        if vcs_quota_identity is not None:
+            jvm_props["vcs.quota.identity"] = vcs_quota_identity
+        if vcs_job_id is not None:
+            jvm_props["vcs.job.id"] = vcs_job_id
         if local_repo_path is not None:
             jvm_props["local.repo.path"] = local_repo_path
         if local_repo_target_branch is not None:

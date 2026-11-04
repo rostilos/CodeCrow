@@ -236,6 +236,7 @@ async def test_every_batch_receives_previous_output_and_retains_graph(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.parametrize('remaining,expected_batches', [(3300, 5), (160, 2)])
 async def test_scan_deadline_scales_with_batches_and_reserves_review_time(monkeypatch, remaining, expected_batches):
+    monkeypatch.setenv('LLM_PROVIDER_TIMEOUT_SECONDS', '600')
     clock = [0.0]
     timeouts = []
     @asynccontextmanager
@@ -259,7 +260,7 @@ async def test_scan_deadline_scales_with_batches_and_reserves_review_time(monkey
     result = await scan.scan_pr_changes(SimpleNamespace(ainvoke=invoke),
         request(rawDiff=''.join(diff(p) for p in paths), changedFiles=paths))
     assert len(calls) == expected_batches
-    assert timeouts == ([120] * 5 if remaining == 3300 else [80, 30])
+    assert timeouts == ([780] * 5 if remaining == 3300 else [80, 30])
     assert (result['semanticStatus'] == 'complete') is (expected_batches == 5)
     assert len(result['changeAreas'][0]['changes']) == min(61, 15 * expected_batches)
 
@@ -267,10 +268,11 @@ async def test_scan_deadline_scales_with_batches_and_reserves_review_time(monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize('capacity,expected', [(10, 34), (1, 24)])
 async def test_large_sequential_scan_reserves_parallel_review_time(monkeypatch, capacity, expected):
+    monkeypatch.setenv('LLM_PROVIDER_TIMEOUT_SECONDS', '600')
     clock = [0.0]
     @asynccontextmanager
     async def timeout(seconds):
-        assert 0 < seconds <= 120
+        assert 0 < seconds <= 780
         yield
     monkeypatch.setattr(scan, 'asyncio', SimpleNamespace(
         get_running_loop=lambda: SimpleNamespace(time=lambda: clock[0]), timeout=timeout))

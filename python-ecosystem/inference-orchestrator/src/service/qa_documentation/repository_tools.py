@@ -27,6 +27,8 @@ async def qa_repository_tools(llm, summary, context):
                     oAuthClient=context.get("oauth_client"), oAuthSecret=context.get("oauth_secret"),
                     access_token=context.get("access_token"), vcs_provider=context.get("vcs_provider"),
                     vcs_base_url=context.get("vcs_base_url"),
+                    vcs_quota_identity=repository.get("vcsQuotaIdentity"),
+                    vcs_job_id=repository.get("vcsJobId"),
                     local_repo_path=repository.get("localRepoPath"),
                     local_repo_target_branch=repository.get("localRepoTargetBranch"),
                     local_repo_revision=repository.get("localRepoRevision"),

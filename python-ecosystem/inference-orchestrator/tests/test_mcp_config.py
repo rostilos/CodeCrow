@@ -9,6 +9,19 @@ from unittest.mock import patch
 from utils.mcp_config import MCPConfigBuilder
 
 
+def test_quota_identity_and_cooldown_store_reach_child_without_command_line_credentials(monkeypatch):
+    redis_url = "redis://user:secret@localhost:6379/1"
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    props = MCPConfigBuilder.build_jvm_props(
+        project_id=7, pull_request_id=42, workspace="team", repo_slug="repo",
+        vcs_quota_identity="tenant-installation-hash", vcs_job_id="job-42")
+    args, env = MCPConfigBuilder.build_java_launch_options(props)
+    assert "-Dvcs.quota.identity=tenant-installation-hash" in args
+    assert "-Dvcs.job.id=job-42" in args
+    assert env["REDIS_URL"] == redis_url
+    assert all("secret" not in arg for arg in args)
+
+
 class TestBuildConfig:
 
     def test_basic_config(self):

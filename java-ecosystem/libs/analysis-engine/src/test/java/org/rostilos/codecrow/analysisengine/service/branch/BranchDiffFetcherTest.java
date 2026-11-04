@@ -11,11 +11,13 @@ import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.VcsRateLimitException;
 
 import java.io.IOException;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -39,6 +41,20 @@ class BranchDiffFetcherTest {
         req.commitHash = commitHash;
         req.projectId = 1L;
         return req;
+    }
+
+    @Test
+    void rateLimitedRangeDoesNotFanOutToIndividualCommits() throws Exception {
+        Branch branch = new Branch();
+        branch.setLastSuccessfulCommitHash("previous-success");
+        var commits = java.util.stream.IntStream.range(0, 50).mapToObj(i -> "commit-" + i).toList();
+        var failure = new VcsRateLimitException(403, "core", java.time.Instant.now().plusSeconds(3600), "req", false);
+        when(client.getCommitRangeDiff("ws", "repo", "old-head", "new-head")).thenThrow(failure);
+        assertThatThrownBy(() -> fetcher.fetchDiff(makeRequest("main", "new-head"), branch,
+                new CommitRangeContext(commits, "old-head", false), client, vcsRepoInfo, null, commits))
+                .isSameAs(failure);
+        verify(client).getCommitRangeDiff("ws", "repo", "old-head", "new-head");
+        verifyNoMoreInteractions(client);
     }
 
     // ── First analysis ───────────────────────────────────────────────────

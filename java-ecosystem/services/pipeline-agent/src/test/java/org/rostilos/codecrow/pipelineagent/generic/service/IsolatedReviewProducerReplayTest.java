@@ -142,6 +142,8 @@ class IsolatedReviewProducerReplayTest {
                     new PullRequestDiffPreparationService(
                             new AnalysisLimitEnforcer()));
 
+            producer.snapshots = new org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService(
+                    new org.rostilos.codecrow.analysisengine.service.BranchArchiveService(vcsClientProvider), vcsClientProvider);
             List<AiAnalysisRequest> requests = producer.buildAiAnalysisRequests(
                     project,
                     processRequest,
@@ -369,6 +371,18 @@ class IsolatedReviewProducerReplayTest {
                                     method.getName());
                         };
                     }
+                    if ("downloadRepositoryArchiveToFile".equals(method.getName())) {
+                        if (!headRevision.equals(arguments[2])) throw new IllegalArgumentException("unexpected archive revision");
+                        var destination = (java.nio.file.Path) arguments[3];
+                        try (var zip = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(destination))) {
+                            for (var entry : headFiles.entrySet()) {
+                                zip.putNextEntry(new java.util.zip.ZipEntry("repository/" + entry.getKey()));
+                                zip.write(entry.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                zip.closeEntry();
+                            }
+                        }
+                        return java.nio.file.Files.size(destination);
+                    }
                     if ("getFileContent".equals(method.getName())) {
                         String path = (String) arguments[2];
                         String revision = (String) arguments[3];
@@ -439,10 +453,7 @@ class IsolatedReviewProducerReplayTest {
 
         @Override
         public PrEnrichmentDataDto fetchFileContentsOnly(
-                VcsClient vcsClient,
-                String workspace,
-                String repoSlug,
-                String branchOrCommit,
+                org.rostilos.codecrow.vcsclient.RepositorySource source,
                 List<String> changedFiles) {
             return enrichment(changedFiles, headFiles);
         }

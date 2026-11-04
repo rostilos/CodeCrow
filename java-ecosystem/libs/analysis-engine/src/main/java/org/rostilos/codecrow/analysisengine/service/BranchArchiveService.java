@@ -40,6 +40,71 @@ public class BranchArchiveService {
     private final long maxArchiveEntrySizeBytes;
     private final long maxArchiveExtractedSizeBytes;
     private final int maxArchiveEntries;
+    private final ThreadLocal<Acquisition> currentAcquisition = new ThreadLocal<>();
+
+    /** One synchronous analysis owns its archives; failures are reused too, so later stages cannot retry them. */
+    public Acquisition openAcquisition(Long projectId) {
+        Acquisition scope = new Acquisition(projectId, currentAcquisition.get());
+        currentAcquisition.set(scope);
+        return scope;
+    }
+
+    public final class Acquisition implements AutoCloseable {
+        private final Long projectId;
+        private final Acquisition previous;
+        private final org.rostilos.codecrow.vcsclient.VcsRequestContext context;
+        private final Map<ArchiveKey, Path> archives = new HashMap<>();
+        private final Map<ArchiveKey, IOException> unavailable = new HashMap<>();
+
+        private Acquisition(Long projectId, Acquisition previous) {
+            this.projectId = projectId;
+            this.previous = previous;
+            this.context = new org.rostilos.codecrow.vcsclient.VcsRequestContext(projectId, null, null);
+        }
+
+        private Path acquire(VcsConnection connection, String workspace, String repo, String revision) throws IOException {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Archive acquisition cancelled");
+            if (previous != null && projectId != null && Objects.equals(projectId, previous.projectId)) {
+                return previous.acquire(connection, workspace, repo, revision);
+            }
+            Object connectionKey = connection.getId() == null ? connection : List.of(
+                    connection.getWorkspace() != null ? String.valueOf(connection.getWorkspace().getId()) : "unknown",
+                    connection.getId());
+            ArchiveKey key = new ArchiveKey(connectionKey, workspace, repo, revision);
+            if (unavailable.containsKey(key)) throw unavailable.get(key);
+            if (archives.containsKey(key)) return archives.get(key);
+            Path archive = Files.createTempFile("codecrow-branch-archive-", ".zip");
+            try (var stage = new org.rostilos.codecrow.vcsclient.VcsRequestContext(projectId, null, "archive")) {
+                log.info("vcs_archive project={} job={} provider={} transport={} attempt=1",
+                        projectId, org.slf4j.MDC.get("jobId"), connection.getProviderType(),
+                        connection.getProviderType() == org.rostilos.codecrow.core.model.vcs.EVcsProvider.BITBUCKET_CLOUD
+                                ? "git" : "http");
+                vcsClientProvider.getClient(connection).downloadRepositoryArchiveToFile(workspace, repo, revision, archive);
+                archives.put(key, archive);
+                return archive;
+            } catch (Exception failure) {
+                IOException diagnostic = failure instanceof IOException io ? io
+                        : new IOException("Repository archive unavailable", failure);
+                unavailable.put(key, diagnostic);
+                try { Files.deleteIfExists(archive); }
+                catch (IOException cleanup) { diagnostic.addSuppressed(cleanup); }
+                throw diagnostic;
+            }
+        }
+
+        @Override
+        public void close() {
+            if (previous == null) currentAcquisition.remove();
+            else currentAcquisition.set(previous);
+            for (Path archive : archives.values()) {
+                try { Files.deleteIfExists(archive); }
+                catch (IOException failure) { log.warn("Could not remove request archive {}", archive); }
+            }
+            context.close();
+        }
+    }
+
+    private record ArchiveKey(Object connection, String workspace, String repository, String revision) {}
 
     @Autowired
     public BranchArchiveService(VcsClientProvider vcsClientProvider) {
@@ -97,6 +162,15 @@ public class BranchArchiveService {
                 vcsConnection, workspace, repoSlug, branchOrCommit, neededFiles).contents();
     }
 
+    /** Apply the caller's body limit while extracting, before retaining any oversized source. */
+    public Map<String, String> downloadAndExtractFiles(
+            VcsConnection vcsConnection, String workspace, String repoSlug,
+            String branchOrCommit, Set<String> neededFiles, int maxFileSizeBytes
+    ) throws IOException {
+        return downloadSnapshot(vcsConnection, workspace, repoSlug, branchOrCommit,
+                neededFiles, Math.min(MAX_FILE_SIZE_BYTES, maxFileSizeBytes)).contents();
+    }
+
     /**
      * Downloads one repository snapshot and separately reports path presence
      * from text-content availability.
@@ -112,6 +186,14 @@ public class BranchArchiveService {
             String branchOrCommit,
             Set<String> neededFiles
     ) throws IOException {
+        return downloadSnapshot(vcsConnection, workspace, repoSlug, branchOrCommit,
+                neededFiles, MAX_FILE_SIZE_BYTES);
+    }
+
+    private ArchiveSnapshot downloadSnapshot(
+            VcsConnection vcsConnection, String workspace, String repoSlug,
+            String branchOrCommit, Set<String> neededFiles, long maxFileSizeBytes
+    ) throws IOException {
         Map<String, String> results = new LinkedHashMap<>();
         Set<String> presentFiles = new LinkedHashSet<>();
         downloadAndProcessArchive(
@@ -123,6 +205,7 @@ public class BranchArchiveService {
                         archiveFile,
                         neededFiles,
                         presentFiles,
+                        maxFileSizeBytes,
                         (relativePath, bytes) -> {
                             results.put(relativePath, new String(bytes, StandardCharsets.UTF_8));
                             return true;
@@ -205,6 +288,10 @@ public class BranchArchiveService {
             String branchOrCommit,
             ArchiveProcessor<T> processor
     ) throws IOException {
+        Acquisition acquisition = currentAcquisition.get();
+        if (acquisition != null) {
+            return processor.process(acquisition.acquire(vcsConnection, workspace, repoSlug, branchOrCommit));
+        }
         VcsClient client = vcsClientProvider.getClient(vcsConnection);
         Path tempFile = Files.createTempFile("codecrow-branch-archive-", ".zip");
 
@@ -240,6 +327,7 @@ public class BranchArchiveService {
             Path archiveFile,
             Set<String> neededFiles,
             Set<String> presentFiles,
+            long maxFileSizeBytes,
             ExtractedFileConsumer consumer
     ) throws IOException {
         Set<String> extractedFiles = new LinkedHashSet<>();
@@ -274,11 +362,11 @@ public class BranchArchiveService {
                 // The in-memory API must not retain an unbounded archive
                 // member. RAG uses extractFilesToDirectory below instead,
                 // which streams every accepted entry to disk.
-                ZipEntryContent content = readZipEntryBounded(zis, entryBudget);
+                ZipEntryContent content = readZipEntryBounded(zis, entryBudget, maxFileSizeBytes);
 
                 if (content.tooLarge()) {
                     log.debug("Skipping large file {} (more than {} bytes)",
-                            relativePath, MAX_FILE_SIZE_BYTES);
+                            relativePath, maxFileSizeBytes);
                     skippedLarge++;
                     zis.closeEntry();
                     continue;
@@ -452,7 +540,8 @@ public class BranchArchiveService {
 
     private ZipEntryContent readZipEntryBounded(
             ZipInputStream zis,
-            ArchiveEntryBudget entryBudget
+            ArchiveEntryBudget entryBudget,
+            long maxFileSizeBytes
     ) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream(8192);
         byte[] buffer = new byte[8192];
@@ -462,7 +551,7 @@ public class BranchArchiveService {
         while ((len = zis.read(buffer)) > 0) {
             entryBudget.consume(len);
             totalBytes += len;
-            if (totalBytes > MAX_FILE_SIZE_BYTES) {
+            if (totalBytes > maxFileSizeBytes) {
                 tooLarge = true;
                 continue;
             }

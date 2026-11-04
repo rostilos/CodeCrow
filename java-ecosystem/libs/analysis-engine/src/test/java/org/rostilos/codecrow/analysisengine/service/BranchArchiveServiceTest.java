@@ -39,7 +39,81 @@ class BranchArchiveServiceTest {
         service = new BranchArchiveService(vcsClientProvider);
     }
 
+    @Test
+    void oneExecutionReusesPinnedArchivesAndNestedQaButSeparatesProjectsAndRevisions() throws Exception {
+        var connection = mock(VcsConnection.class);
+        when(vcsClientProvider.getClient(connection)).thenReturn(vcsClient);
+        byte[] archive = createZip(Map.of("repo/src/App.java", "class App {}"));
+        var downloads = new java.util.ArrayList<Path>();
+        when(vcsClient.downloadRepositoryArchiveToFile(eq("ws"), eq("repo"), anyString(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    Path file = invocation.getArgument(3);
+                    downloads.add(file);
+                    Files.write(file, archive);
+                    return (long) archive.length;
+                });
+        try (var execution = service.openAcquisition(1L)) {
+            service.downloadSnapshot(connection, "ws", "repo", "source-sha", null);
+            try (var qa = service.openAcquisition(1L)) {
+                assertThat(service.downloadAndExtractFiles(connection, "ws", "repo", "source-sha", Set.of("src/App.java")))
+                        .containsEntry("src/App.java", "class App {}");
+            }
+            service.downloadSnapshot(connection, "ws", "repo", "target-sha", null);
+            try (var differentProject = service.openAcquisition(2L)) {
+                service.downloadSnapshot(connection, "ws", "repo", "source-sha", null);
+            }
+            assertThat(downloads).hasSize(3);
+            assertThat(downloads.get(0)).exists();
+        }
+        downloads.forEach(path -> assertThat(path).doesNotExist());
+    }
+
+    @Test
+    void failedArchiveIsNotRetriedByLaterStagesAndCancellationStartsNoDownload() throws Exception {
+        var connection = mock(VcsConnection.class);
+        when(vcsClientProvider.getClient(connection)).thenReturn(vcsClient);
+        when(vcsClient.downloadRepositoryArchiveToFile(anyString(), anyString(), anyString(), any(Path.class)))
+                .thenThrow(new IOException("archive unavailable"));
+        try (var execution = service.openAcquisition(1L)) {
+            for (int stage = 0; stage < 3; stage++) {
+                assertThatThrownBy(() -> service.downloadSnapshot(connection, "ws", "repo", "source-sha", null))
+                        .isInstanceOf(IOException.class);
+            }
+            Thread.currentThread().interrupt();
+            try {
+                assertThatThrownBy(() -> service.downloadSnapshot(connection, "ws", "repo", "target-sha", null))
+                        .isInstanceOf(java.io.InterruptedIOException.class);
+            } finally { Thread.interrupted(); }
+        }
+        verify(vcsClient, times(1)).downloadRepositoryArchiveToFile(anyString(), anyString(), anyString(), any(Path.class));
+    }
+
     // ── stripArchiveRoot ─────────────────────────────────────────────────
+
+    @Test
+    void callerByteLimitAppliesDuringExtractionAndDoesNotChangeCachedArchive() throws Exception {
+        var connection = new VcsConnection();
+        when(vcsClientProvider.getClient(connection)).thenReturn(vcsClient);
+        byte[] archive = createZip(Map.of(
+                "repo/oversized.java", "x".repeat(100_001),
+                "repo/exact.java", "x".repeat(100_000),
+                "repo/unicode.java", "é".repeat(50_001),
+                "repo/small.java", "class Small {}"));
+        when(vcsClient.downloadRepositoryArchiveToFile(eq("ws"), eq("repo"), eq("sha"), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    Files.write(invocation.getArgument(3), archive);
+                    return (long) archive.length;
+                });
+        var paths = Set.of("oversized.java", "exact.java", "unicode.java", "small.java");
+        try (var execution = service.openAcquisition(1L)) {
+            var limited = service.downloadAndExtractFiles(connection, "ws", "repo", "sha", paths, 100_000);
+            assertThat(limited).containsOnlyKeys("exact.java", "small.java");
+            assertThat(limited.get("exact.java")).hasSize(100_000);
+            assertThat(service.downloadAndExtractFiles(connection, "ws", "repo", "sha", paths))
+                    .containsKeys("oversized.java", "unicode.java");
+        }
+        verify(vcsClient).downloadRepositoryArchiveToFile(eq("ws"), eq("repo"), eq("sha"), any(Path.class));
+    }
 
     @Nested
     class StripArchiveRoot {

@@ -51,6 +51,7 @@ public class GitHubClientFactory {
                 .build();
 
         LOGGER.info("Created GitHub MCP client for {}/{}", owner, repo);
-        return new GitHubMcpClientImpl(httpClient, configuration, fileLimit);
+        return new GitHubMcpClientImpl(org.rostilos.codecrow.mcp.generic.McpRateLimitTransport.observe(
+                httpClient, "api.github.com", accessToken), configuration, fileLimit);
     }
 }

@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.pipelineagent.generic.processor.command;
 
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.analysisengine.aiclient.AiCommandClient;
 import org.rostilos.codecrow.core.service.PrChangeSummaryService;
 import org.rostilos.codecrow.analysisengine.aiclient.AiCommandClient.SummarizeRequest;
@@ -312,7 +313,9 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString(),
                 credentials.vcsBaseUrl(),
-                prChangeSummaryService.find(project.getId(), Long.parseLong(payload.pullRequestId()), payload.commitHash(), null)
+                prChangeSummaryService.find(project.getId(), Long.parseLong(payload.pullRequestId()), payload.commitHash(), null),
+                VcsClientProvider.quotaIdentity(vcsConnection),
+                org.slf4j.MDC.get("jobId")
             );
             
         } catch (GeneralSecurityException e) {

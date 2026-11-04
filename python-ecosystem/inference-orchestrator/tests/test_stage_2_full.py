@@ -889,7 +889,12 @@ class TestMergeStage2SemanticResults:
         assert "generationPromptDigest" not in prompt_provenance
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_optional_enrichment_shard_failure_fails_open(self, caplog):
+    @pytest.mark.parametrize("optional_results", [
+        [None, None],
+        [TimeoutError("structured response lost")],
+        [None, TimeoutError("raw response lost")],
+    ])
+    async def test_optional_enrichment_shard_failure_fails_open(self, caplog, optional_results):
         request = MagicMock()
         request.projectVcsRepoSlug = "repo"
         request.prTitle = "title"
@@ -927,7 +932,7 @@ class TestMergeStage2SemanticResults:
             patch(
                 "service.review.orchestrator.stage_2_cross_file."
                 "_invoke_stage_2_llm",
-                new=AsyncMock(side_effect=[None, None, core_result]),
+                new=AsyncMock(side_effect=[*optional_results, core_result]),
             ) as invoke,
             caplog.at_level("WARNING"),
         ):
@@ -940,7 +945,8 @@ class TestMergeStage2SemanticResults:
             )
 
         assert result == core_result
-        assert invoke.await_count == 3
+        assert invoke.await_count == len(optional_results) + 1
+        assert invoke.await_args_list[-1].args[1] == "core evidence"
         assert provenance["optionalEnrichmentShardFailures"] == "1"
         assert "failed open" in caplog.text
 

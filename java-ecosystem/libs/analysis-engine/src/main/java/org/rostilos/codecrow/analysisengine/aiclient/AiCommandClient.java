@@ -267,7 +267,9 @@ public class AiCommandClient {
             Integer maxAllowedTokens,
             String vcsProvider,
             String vcsBaseUrl,
-            Map<String, Object> prChangeSummary) {
+            Map<String, Object> prChangeSummary,
+            String vcsQuotaIdentity,
+            String vcsJobId) {
     }
 
     /**
@@ -296,7 +298,9 @@ public class AiCommandClient {
             String vcsProvider,
             String vcsBaseUrl,
             String analysisContext,
-            java.util.List<String> issueReferences) {
+            java.util.List<String> issueReferences,
+            String vcsQuotaIdentity,
+            String vcsJobId) {
     }
 
     /**
@@ -337,7 +341,9 @@ public class AiCommandClient {
             String accessToken,
             Integer maxAllowedTokens,
             String vcsProvider,
-            String vcsBaseUrl) {
+            String vcsBaseUrl,
+            String vcsQuotaIdentity,
+            String vcsJobId) {
     }
 
     /**

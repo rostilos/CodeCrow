@@ -42,6 +42,28 @@ import static org.mockito.Mockito.*;
 class AiAnalysisClientTest {
 
         @Test
+        void cancellationBeforeOrDuringPreparationNeverEnqueuesPaidWork() throws Exception {
+                Thread.currentThread().interrupt();
+                try {
+                        assertThatThrownBy(() -> client.performAnalysis(new TestAiAnalysisRequest()))
+                                .isInstanceOf(java.io.InterruptedIOException.class);
+                        verifyNoInteractions(queueService);
+                } finally { Thread.interrupted(); }
+                var mapper = spy(objectMapper);
+                doAnswer(invocation -> {
+                        Thread.currentThread().interrupt();
+                        return "{}";
+                }).when(mapper).writeValueAsString(any());
+                var cancellingClient = new AiAnalysisClient(restTemplate, queueService, mapper);
+                try {
+                        assertThatThrownBy(() -> cancellingClient.performAnalysis(new TestAiAnalysisRequest()))
+                                .isInstanceOf(IOException.class).hasCauseInstanceOf(java.io.InterruptedIOException.class);
+                        verify(queueService, never()).startJobLease(anyString());
+                        verify(queueService, never()).leftPush(anyString(), anyString());
+                } finally { Thread.interrupted(); }
+        }
+
+        @Test
         void lostCallerLeaseStopsPollingAndRevokesPaidExecution() {
                 when(queueService.renewJobLease(anyString())).thenReturn(false);
                 assertThatThrownBy(() -> client.performAnalysis(new TestAiAnalysisRequest()))

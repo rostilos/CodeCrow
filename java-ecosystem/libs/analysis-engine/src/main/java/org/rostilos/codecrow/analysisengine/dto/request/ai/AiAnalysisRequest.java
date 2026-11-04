@@ -60,6 +60,8 @@ public interface AiAnalysisRequest {
 
     default String getVcsBaseUrl() { return null; }
 
+    default String getVcsQuotaIdentity() { return null; }
+
     String getPrTitle();
 
     String getPrDescription();

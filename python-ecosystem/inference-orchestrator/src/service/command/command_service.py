@@ -586,6 +586,8 @@ class CommandService:
             max_allowed_tokens=request.maxAllowedTokens,
             vcs_provider=request.vcsProvider,
             vcs_base_url=request.vcsBaseUrl,
+            vcs_quota_identity=request.vcsQuotaIdentity,
+            vcs_job_id=request.vcsJobId,
         )
 
     def _build_jvm_props_for_ask(self, request: AskRequestDto) -> Dict[str, str]:
@@ -601,6 +603,8 @@ class CommandService:
             max_allowed_tokens=request.maxAllowedTokens,
             vcs_provider=request.vcsProvider,
             vcs_base_url=request.vcsBaseUrl,
+            vcs_quota_identity=request.vcsQuotaIdentity,
+            vcs_job_id=request.vcsJobId,
         )
 
     async def _search_code_for_ask(

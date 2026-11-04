@@ -56,7 +56,8 @@ public class BitbucketCloudClientFactory {
         BitbucketConfiguration bitbucketConfiguration = new BitbucketConfiguration(workspace, repoSlug);
 
         return new BitbucketCloudClientImpl(
-                okHttpClient,
+                org.rostilos.codecrow.mcp.generic.McpRateLimitTransport.observe(
+                        okHttpClient, "api.bitbucket.org", bearerToken),
                 bitbucketConfiguration,
                 0,
                 workspace,

@@ -5,6 +5,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessR
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.VcsRateLimitException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -44,6 +45,7 @@ public class BranchDiffFetcher {
                         return rawDiff;
                     }
                 } catch (Exception e) {
+            VcsRateLimitException.rethrowIfRateLimited(e);
                     log.warn("First analysis: PR #{} diff fetch failed, falling back to commit diff: {}",
                             prNumber, e.getMessage());
                 }
@@ -71,6 +73,7 @@ public class BranchDiffFetcher {
                     return rawDiff;
                 }
             } catch (Exception e) {
+            VcsRateLimitException.rethrowIfRateLimited(e);
                 log.warn("PR #{} diff fetch failed, falling back to range diff: {}", prNumber, e.getMessage());
             }
         }
@@ -101,7 +104,7 @@ public class BranchDiffFetcher {
 
     private String tryDagDiff(CommitRangeContext rangeCtx, BranchProcessRequest request,
                               VcsClient client,
-                              VcsRepoInfoImpl vcsRepoInfoImpl, List<String> unanalyzedCommits) {
+                              VcsRepoInfoImpl vcsRepoInfoImpl, List<String> unanalyzedCommits) throws IOException {
         if (rangeCtx.getDiffBase() == null || request.getCommitHash() == null
                 || rangeCtx.getDiffBase().equals(request.getCommitHash())) {
             return null;
@@ -120,6 +123,7 @@ public class BranchDiffFetcher {
                     unanalyzedCommits.size());
             return diff;
         } catch (IOException e) {
+            VcsRateLimitException.rethrowIfRateLimited(e);
             log.warn("Range diff failed (base {} may be unreachable), falling back: {}",
                     shortHash(rangeCtx.getDiffBase()), e.getMessage());
             return null;
@@ -128,7 +132,7 @@ public class BranchDiffFetcher {
 
     private String tryDeltaDiff(String lastSuccessfulCommit, BranchProcessRequest request,
                                 VcsClient client,
-                                VcsRepoInfoImpl vcsRepoInfoImpl) {
+                                VcsRepoInfoImpl vcsRepoInfoImpl) throws IOException {
         if (lastSuccessfulCommit == null || lastSuccessfulCommit.equals(request.getCommitHash())) {
             return null;
         }
@@ -145,6 +149,7 @@ public class BranchDiffFetcher {
                     shortHash(lastSuccessfulCommit), shortHash(request.getCommitHash()));
             return diff;
         } catch (IOException e) {
+            VcsRateLimitException.rethrowIfRateLimited(e);
             log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
                     shortHash(lastSuccessfulCommit), e.getMessage());
             return null;
@@ -152,7 +157,7 @@ public class BranchDiffFetcher {
     }
 
     private String tryAggregatedCommitDiffs(List<String> unanalyzedCommits,
-                                            VcsClient client, VcsRepoInfoImpl vcsRepoInfoImpl) {
+                                            VcsClient client, VcsRepoInfoImpl vcsRepoInfoImpl) throws IOException {
         int maxCommits = Math.min(unanalyzedCommits.size(), 50);
         log.info("Range diff unavailable — aggregating individual diffs for {} of {} unanalyzed commits",
                 maxCommits, unanalyzedCommits.size());
@@ -173,6 +178,7 @@ public class BranchDiffFetcher {
                     fetchedCount++;
                 }
             } catch (Exception e) {
+            VcsRateLimitException.rethrowIfRateLimited(e);
                 log.warn("Failed to fetch diff for commit {} (skipping): {}",
                         shortHash(hash), e.getMessage());
             }

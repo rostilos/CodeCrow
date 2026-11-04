@@ -135,7 +135,8 @@ public class WebhookAsyncProcessor {
         String placeholderCommentId = null;
         Project project = null;
         
-        try {
+        try (var vcsContext = new org.rostilos.codecrow.vcsclient.VcsRequestContext(
+                projectId, job.getExternalId().toString(), "webhook")) {
             if (job.getJobType() == JobType.QA_DOC_COMMAND && !jobService.claimQaJobForExecution(job)) return;
             if (job.getJobType() != JobType.QA_DOC_COMMAND && !jobService.claimWebhookJobForExecution(job)) return;
             // Load project in a short read-only transaction

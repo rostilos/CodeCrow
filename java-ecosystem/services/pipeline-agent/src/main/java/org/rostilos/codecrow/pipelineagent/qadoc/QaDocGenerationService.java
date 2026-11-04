@@ -127,7 +127,7 @@ public class QaDocGenerationService {
     private String generateWithRepositorySnapshot(Project project, QaDocGenerationContext ctx,
                                                    Map<String, Object> payload) throws IOException {
         LocalRepositorySnapshotService.PreparedSnapshot snapshot = null;
-        try {
+        try (var acquisition = snapshots.openAcquisition(project.getId())) {
             // Saved paths belong to a completed review; every QA operation owns fresh paths.
             if (ctx.prChangeSummary() != null || ctx.reviewSource() != null && !ctx.reviewSource().isEmpty()) {
                 ObjectNode summary = ctx.prChangeSummary() != null ? objectMapper.valueToTree(ctx.prChangeSummary()) : objectMapper.createObjectNode();
@@ -143,6 +143,8 @@ public class QaDocGenerationService {
                 var repo = project.getEffectiveVcsRepoInfo();
                 if (repo != null && repo.getVcsConnection() != null && ctx.sourceRevision() != null
                         && targetRevision != null && !targetRevision.isBlank()) {
+                    repository.put("vcsQuotaIdentity", VcsClientProvider.quotaIdentity(repo.getVcsConnection()));
+                    repository.put("vcsJobId", org.slf4j.MDC.get("jobId"));
                     var changed = new LinkedHashSet<String>();
                     var deleted = new LinkedHashSet<String>();
                     if (ctx.changedFilePaths() != null) changed.addAll(ctx.changedFilePaths());
@@ -167,16 +169,14 @@ public class QaDocGenerationService {
                             if (!file.skipped() && file.content() != null) contents.put(file.path(), file.content());
                         }
                     }
-                    var client = vcsClients.getClient(repo.getVcsConnection());
-                    for (String path : changed) {
-                        if (deleted.contains(path) || contents.containsKey(path)) continue;
-                        try {
-                            String content = client.getFileContent(repo.getRepoWorkspace(), repo.getRepoSlug(), path, ctx.sourceRevision());
-                            if (content != null) contents.put(path, content);
-                        } catch (Exception unavailable) {
-                            log.warn("QA proposed source unavailable for {} at {}; exact reads will report missing content",
-                                    path, ctx.sourceRevision());
-                        }
+                    var missing = new LinkedHashSet<>(changed);
+                    missing.removeAll(deleted);
+                    missing.removeAll(contents.keySet());
+                    try {
+                        contents.putAll(snapshots.readSourceFiles(repo.getVcsConnection(), repo.getRepoWorkspace(),
+                                repo.getRepoSlug(), ctx.sourceRevision(), missing, 5 * 1024 * 1024));
+                    } catch (Exception unavailable) {
+                        log.warn("QA proposed archive unavailable; continuing with saved source: {}", unavailable.getMessage());
                     }
                     String targetBranch = ctx.targetBranch() != null ? ctx.targetBranch()
                             : repository.path("localRepoTargetBranch").asText(null);
@@ -206,6 +206,7 @@ public class QaDocGenerationService {
      * Shared HTTP call to the inference-orchestrator's /qa-documentation endpoint.
      */
     private String callInferenceOrchestrator(Map<String, Object> payload) throws IOException {
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("QA submission cancelled");
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
                 .header("Content-Type", "application/json")
@@ -229,7 +230,8 @@ public class QaDocGenerationService {
             throw new IOException("QA doc generation response unavailable; not automatically retried: " + e.getMessage(), e);
         }
         if (response.statusCode() != 200) {
-            throw new IOException("Inference orchestrator returned " + response.statusCode() + "; not automatically retried");
+            throw new IOException("Inference orchestrator returned " + response.statusCode()
+                    + failureDiagnostics(response.body()) + "; not automatically retried");
         }
         String responseBody = response.body();
 
@@ -268,6 +270,27 @@ public class QaDocGenerationService {
             log.error("Failed to parse QA doc response (length={}): {}",
                     responseBody.length(), e.getMessage());
             throw new IOException("Inference orchestrator returned an invalid QA documentation response", e);
+        }
+    }
+
+    private String failureDiagnostics(String body) {
+        if (body == null || body.length() > 16_384) return "";
+        try {
+            JsonNode detail = objectMapper.readTree(body).path("detail");
+            if (!"qa_generation_failed".equals(detail.path("error").asText())) return "";
+            String errorId = detail.path("error_id").asText();
+            if (!errorId.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) return "";
+            String diagnostics = " (error_id=" + errorId;
+            String errorType = detail.path("error_type").asText();
+            if (errorType.matches("[A-Za-z_][A-Za-z0-9_]{0,99}")) diagnostics += ", error_type=" + errorType;
+            JsonNode status = detail.path("upstream_status");
+            if (status.isIntegralNumber() && status.asInt() >= 400 && status.asInt() <= 599) {
+                diagnostics += ", upstream_status=" + status.asInt();
+            }
+            return diagnostics + ")";
+        } catch (Exception ignored) {
+            // Older servers and proxies may return plain text; never expose their raw body.
+            return "";
         }
     }
 

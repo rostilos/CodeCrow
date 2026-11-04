@@ -201,7 +201,7 @@ public class BranchAnalysisProcessor {
 		List<String> unanalyzedCommits = Collections.emptyList();
 		AnalysisLockService.LockLease lockLease = null;
 
-		try {
+		try (var acquisition = localRepositorySnapshotService.openAcquisition(project.getId())) {
 			lockLease = analysisLockService.maintainLockLease(
 					lockKey.get(),
 					analysisLockService.getLeaseMinutes(AnalysisLockType.BRANCH_ANALYSIS));

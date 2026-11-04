@@ -27,48 +27,32 @@ import static org.mockito.Mockito.when;
 class LocalRepositorySnapshotServiceTest {
 
     @Test
-    void overlayRetainsCompleteInventoryAtThePinnedTargetRevision() throws Exception {
+    void sourceCompletionAcceptsImmutableArchiveContentsAndAppliesByteLimit() throws Exception {
+        var archive = mock(BranchArchiveService.class);
+        var provider = mock(VcsClientProvider.class);
+        var connection = mock(VcsConnection.class);
+        when(archive.downloadAndExtractFiles(connection, "team", "repo", "source-sha", java.util.Set.of("ok", "large"), 3))
+                .thenReturn(Map.of("ok", "a", "large", "éé"));
+        var service = new LocalRepositorySnapshotService(archive, provider, temporaryRoot);
+        assertThat(service.readSourceFiles(connection, "team", "repo", "source-sha", List.of("ok", "large"), 3))
+                .containsOnlyKeys("ok");
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void overlayDoesNotWalkRemoteTreeOrTreatArchiveOmissionsAsAbsence() throws Exception {
         VcsClientProvider provider = mock(VcsClientProvider.class);
-        VcsClient client = mock(VcsClient.class);
         VcsConnection connection = mock(VcsConnection.class);
-        when(provider.getClient(connection)).thenReturn(client);
-        when(client.listRepositoryFiles("team", "repo", "target-sha", Integer.MAX_VALUE))
-                .thenReturn(List.of("src/old.ts", "playwright.config.ts"));
         var service = new LocalRepositorySnapshotService(mock(BranchArchiveService.class), provider, temporaryRoot);
         try (var snapshot = service.prepareForReview(connection, "team", "repo", "main", "target-sha",
                 Map.of("src/new.ts", "new"), List.of("src/new.ts"), List.of()).orElseThrow()) {
             var manifest = new com.fasterxml.jackson.databind.ObjectMapper()
                     .readTree(snapshot.reviewOverlayPath().resolve("manifest.json").toFile());
             assertThat(manifest.path("targetRevision").asText()).isEqualTo("target-sha");
-            assertThat(manifest.path("targetFiles").toString())
-                    .isEqualTo("[\"playwright.config.ts\",\"src/old.ts\"]");
-            assertThat(Files.readString(snapshot.reviewOverlayPath().resolve("files/src/new.ts")))
-                    .isEqualTo("new");
+            assertThat(manifest.path("targetFiles").isNull()).isTrue();
+            assertThat(Files.readString(snapshot.reviewOverlayPath().resolve("files/src/new.ts"))).isEqualTo("new");
         }
-        verify(client).listRepositoryFiles("team", "repo", "target-sha", Integer.MAX_VALUE);
-    }
-
-    @Test
-    void failedUnsupportedOrMalformedInventoryKeepsTheSnapshotAndOverlay() throws Exception {
-        for (int scenario = 0; scenario < 3; scenario++) {
-            VcsClientProvider provider = mock(VcsClientProvider.class);
-            VcsClient client = mock(VcsClient.class);
-            VcsConnection connection = mock(VcsConnection.class);
-            when(provider.getClient(connection)).thenReturn(client);
-            var listing = when(client.listRepositoryFiles("team", "repo", "target-sha", Integer.MAX_VALUE));
-            if (scenario == 0) listing.thenThrow(new IOException("tree request failed"));
-            else if (scenario == 1) listing.thenThrow(new UnsupportedOperationException("no inventory"));
-            else listing.thenReturn(List.of("src/valid.ts", "../outside"));
-            var service = new LocalRepositorySnapshotService(mock(BranchArchiveService.class), provider, temporaryRoot);
-            try (var snapshot = service.prepareForReview(connection, "team", "repo", "main", "target-sha",
-                    Map.of("src/new.ts", "new"), List.of("src/new.ts"), List.of()).orElseThrow()) {
-                var manifest = new com.fasterxml.jackson.databind.ObjectMapper()
-                        .readTree(snapshot.reviewOverlayPath().resolve("manifest.json").toFile());
-                assertThat(manifest.path("targetFiles").isNull()).isTrue();
-                assertThat(Files.readString(snapshot.reviewOverlayPath().resolve("files/src/new.ts")))
-                        .isEqualTo("new");
-            }
-        }
+        verifyNoInteractions(provider);
     }
 
     @Test

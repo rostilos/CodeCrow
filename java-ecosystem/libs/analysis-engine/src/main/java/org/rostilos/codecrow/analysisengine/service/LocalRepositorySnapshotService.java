@@ -46,6 +46,21 @@ public class LocalRepositorySnapshotService {
     private final VcsClientProvider vcsClientProvider;
     private final Path temporaryRoot;
 
+    public BranchArchiveService.Acquisition openAcquisition(Long projectId) {
+        return archiveService.openAcquisition(projectId);
+    }
+
+    public Map<String, String> readSourceFiles(VcsConnection connection, String workspace,
+                                              String repository, String revision,
+                                              Collection<String> paths, int maxBytes) throws IOException {
+        if (paths == null || paths.isEmpty()) return Map.of();
+        Map<String, String> contents = new LinkedHashMap<>(archiveService.downloadAndExtractFiles(
+                connection, workspace, repository, revision, new LinkedHashSet<>(paths), maxBytes));
+        contents.entrySet().removeIf(entry -> entry.getValue().getBytes(
+                java.nio.charset.StandardCharsets.UTF_8).length > maxBytes);
+        return contents;
+    }
+
     @Autowired
     public LocalRepositorySnapshotService(
             BranchArchiveService archiveService,
@@ -182,7 +197,7 @@ public class LocalRepositorySnapshotService {
             }
 
             snapshotDirectory = Files.createTempDirectory(temporaryRoot, SNAPSHOT_PREFIX);
-            archiveService.downloadAndExtractSnapshotToDirectory(
+            var archiveSnapshot = archiveService.downloadAndExtractSnapshotToDirectory(
                     connection,
                     workspace,
                     repoSlug,
@@ -197,7 +212,7 @@ public class LocalRepositorySnapshotService {
                             changedFiles,
                             deletedFiles,
                             targetRevision,
-                            readTargetInventory(connection, workspace, repoSlug, targetRevision));
+                            null);
                 } catch (Exception overlayFailure) {
                     deleteTree(reviewOverlayDirectory);
                     reviewOverlayDirectory = null;
@@ -221,7 +236,8 @@ public class LocalRepositorySnapshotService {
                     snapshotDirectory,
                     targetBranch,
                     targetRevision,
-                    reviewOverlayDirectory));
+                    reviewOverlayDirectory,
+                    archiveSnapshot != null ? archiveSnapshot.presentFiles() : Set.of()));
         } catch (Exception failure) {
             log.warn(
                     "Local MCP repository snapshot unavailable for {}/{} target={}; continuing with provider-backed tools: {}",
@@ -232,25 +248,6 @@ public class LocalRepositorySnapshotService {
             deleteTree(snapshotDirectory);
             deleteTree(reviewOverlayDirectory);
             return Optional.empty();
-        }
-    }
-
-    private List<String> readTargetInventory(
-            VcsConnection connection, String workspace, String repoSlug, String revision
-    ) {
-        try {
-            List<String> paths = vcsClientProvider.getClient(connection)
-                    .listRepositoryFiles(workspace, repoSlug, revision, Integer.MAX_VALUE);
-            Set<String> normalized = new LinkedHashSet<>();
-            for (String path : paths) {
-                normalized.add(normalizeRepositoryPath(path)
-                        .orElseThrow(() -> new IOException("Invalid target inventory path")));
-            }
-            return normalized.stream().sorted().toList();
-        } catch (Exception unavailable) {
-            log.info("Target file inventory unavailable for {}/{} @ {}; retaining provider fallback: {}",
-                    workspace, repoSlug, shortRevision(revision), unavailable.getMessage());
-            return null;
         }
     }
 
@@ -378,26 +375,43 @@ public class LocalRepositorySnapshotService {
         }
     }
 
-    public static final class PreparedSnapshot implements AutoCloseable {
+    public static final class PreparedSnapshot implements AutoCloseable, org.rostilos.codecrow.vcsclient.RepositorySource {
         private final Path path;
         private final String targetBranch;
         private final String revision;
         private final Path reviewOverlayPath;
+        private final Set<String> presentFiles;
 
         private PreparedSnapshot(
                 Path path,
                 String targetBranch,
                 String revision,
-                Path reviewOverlayPath
+                Path reviewOverlayPath,
+                Set<String> presentFiles
         ) {
             this.path = path;
             this.targetBranch = targetBranch;
             this.revision = revision;
             this.reviewOverlayPath = reviewOverlayPath;
+            this.presentFiles = Set.copyOf(presentFiles);
         }
 
         public Path path() {
             return path;
+        }
+
+        @Override
+        public List<String> paths() { return presentFiles.stream().sorted().toList(); }
+
+        @Override
+        public String readFile(String relativePath, int maxBytes) throws IOException {
+            String normalized = normalizeRepositoryPath(relativePath)
+                    .orElseThrow(() -> new IOException("Invalid repository source path"));
+            Path file = path.resolve(normalized).normalize();
+            if (!file.startsWith(path) || !Files.isRegularFile(file)) return null;
+            if (!file.toRealPath().startsWith(path.toRealPath())) throw new IOException("Repository source escapes snapshot");
+            if (Files.size(file) > maxBytes) return null;
+            return Files.readString(file);
         }
 
         public String targetBranch() {

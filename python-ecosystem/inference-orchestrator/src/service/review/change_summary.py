@@ -14,9 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
 from llm.reasoning_policy import ReasoningEffort, reasoning_request_kwargs, output_token_request_kwargs, review_output_token_limit
 from model.dtos import ReviewRequestDto
-from service.review.execution_scheduler import review_model_slot, optional_work_budget
+from service.review.execution_scheduler import invoke_review_model, optional_work_budget, review_model_call_budget
 from service.runtime_capacity import review_call_concurrency
-from service.review.inference_usage import record_model_response
 from service.review.orchestrator.json_utils import parse_llm_response, resolve_structured_output, supports_structured_output
 from service.review.orchestrator.structured_output import invoke_structured_output
 from utils.diff_processor import ProcessedDiff, process_complete_diff
@@ -407,7 +406,8 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
     )), min(40_000, max(2_000, token_target * 2 // 3)))
     # Reserve parallel file-review waves and two downstream check windows, not
     # half the job regardless of how much of its remaining work can overlap.
-    scan_budget = max(180.0, 120.0 * len(batches))
+    batch_budget = review_model_call_budget(llm)
+    scan_budget = max(180.0, batch_budget * len(batches))
     parallelism = max(1, min(review_parallelism, review_call_concurrency()))
     review_reserve = 120.0 * (math.ceil(len(batches) / parallelism) + 2)
     available = optional_work_budget(scan_budget + review_reserve)
@@ -444,7 +444,7 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
         batch_paths = {record['path'] for record in batch}
         output_model = _batch_output_model(record['path'] for record in batch)
         try:
-            async with asyncio.timeout(min(120.0, remaining)):
+            async with asyncio.timeout(min(batch_budget, remaining)):
                 await graph.collect(record['path'] for record in batch)
                 graph_context = graph.render()
                 known_paths = set(by_path) | {n['path'] for n in graph_context['nodes'] if n.get('path')}
@@ -536,10 +536,8 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
                     )
                     result = await resolve_structured_output(invocation, CumulativeChanges, llm)
                 else:
-                    async with review_model_slot("stage_0_change_scan"):
-                        response = await llm.ainvoke(prompt, **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-                                                    **output_token_request_kwargs(llm, review_output_token_limit(llm)))
-                        record_model_response(response)
+                    response = await invoke_review_model("stage_0_change_scan", llm.ainvoke, prompt, **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+                                                **output_token_request_kwargs(llm, review_output_token_limit(llm)))
                     result = await parse_llm_response(
                         extract_llm_response_text(response), output_model, llm, max_provider_repairs=0,
                     )

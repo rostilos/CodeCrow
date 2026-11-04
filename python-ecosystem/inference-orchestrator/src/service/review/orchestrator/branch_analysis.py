@@ -1,8 +1,8 @@
 """
 Branch analysis and reconciliation execution.
 """
-from service.review.execution_scheduler import review_model_slot
-from service.review.inference_usage import record_model_response
+from service.review.execution_scheduler import invoke_review_model
+from llm.provider_errors import raise_if_outcome_unknown
 import logging
 from typing import Any, Callable, Dict, Optional
 
@@ -120,6 +120,7 @@ async def execute_branch_reconciliation_direct(
                 logger.info(f"Direct reconciliation: {len(issues)} issue decisions returned")
                 return {"issues": issues, "comment": result.comment or "Branch reconciliation completed."}
         except Exception as structured_err:
+            raise_if_outcome_unknown(structured_err)
             logger.warning(
                 "Structured output failed for reconciliation; falling back: "
                 "error_type=%s",
@@ -129,12 +130,10 @@ async def execute_branch_reconciliation_direct(
         logger.info("Structured output skipped for reconciliation; using prompt JSON parsing")
 
     try:
-        async with review_model_slot("branch_analysis"):
-            response = await llm.ainvoke(
-                prompt,
-                **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
-            )
-            record_model_response(response)
+        response = await invoke_review_model("branch_analysis", llm.ainvoke,
+            prompt,
+            **reasoning_request_kwargs(llm, ReasoningEffort.LOW),
+        )
         content = extract_llm_response_text(response)
 
         if not content.strip():

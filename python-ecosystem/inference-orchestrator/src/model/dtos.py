@@ -67,6 +67,8 @@ class ReviewGenerationCandidateDto(BaseModel):
 
 
 class ReviewRequestDto(BaseModel):
+    vcsJobId: Optional[str] = Field(default=None, description="Host job identity for provider request accounting")
+    vcsQuotaIdentity: Optional[str] = Field(default=None, description="Host-issued provider cooldown identity; contains no credentials")
     projectId: int
     projectVcsWorkspace: str
     projectVcsRepoSlug: str
@@ -320,6 +322,8 @@ class ReviewResponseDto(BaseModel):
 
 
 class SummarizeRequestDto(BaseModel):
+    vcsQuotaIdentity: Optional[str] = None
+    vcsJobId: Optional[str] = None
     prChangeSummary: Optional[Dict[str, Any]] = None
     """Request model for PR summarization command."""
     projectId: int
@@ -352,6 +356,8 @@ class SummarizeResponseDto(BaseModel):
 
 
 class AskRequestDto(BaseModel):
+    vcsQuotaIdentity: Optional[str] = None
+    vcsJobId: Optional[str] = None
     """Request model for ask command."""
     projectId: int
     projectVcsWorkspace: str

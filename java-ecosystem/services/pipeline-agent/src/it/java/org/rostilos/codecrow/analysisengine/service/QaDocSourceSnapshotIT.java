@@ -31,9 +31,10 @@ class QaDocSourceSnapshotIT {
 
     private void exercise(EVcsProvider provider, boolean fail, boolean savedSummary) throws Exception {
         var archives = mock(BranchArchiveService.class); var clients = mock(VcsClientProvider.class);
-        var vcs = mock(VcsClient.class); var connection = mock(VcsConnection.class);
-        when(connection.getProviderType()).thenReturn(provider); when(clients.getClient(connection)).thenReturn(vcs);
-        when(vcs.getFileContent("workspace", "repo", "src/A.java", "reviewed-head")).thenReturn("reviewed proposed content");
+        var connection = mock(VcsConnection.class);
+        when(connection.getProviderType()).thenReturn(provider);
+        when(archives.downloadAndExtractFiles(connection, "workspace", "repo", "reviewed-head", Set.of("src/A.java"), 5 * 1024 * 1024))
+                .thenReturn(Map.of("src/A.java", "reviewed proposed content"));
         Path scratch = Files.createDirectories(Path.of("target", "qa-source-snapshot-it"));
         var snapshots = new LocalRepositorySnapshotService(archives, clients, scratch);
         doAnswer(inv -> { Files.writeString(((Path) inv.getArgument(5)).resolve("unchanged.java"), "target content"); return null; })
@@ -76,9 +77,8 @@ class QaDocSourceSnapshotIT {
             else assertThat(service.generateQaDocumentation(project, 7L, 0, 2, Map.of(), ctx)).isEqualTo("QA coverage");
             assertThat(source.get()).isNotNull().doesNotExist(); assertThat(overlay.get()).isNotNull().doesNotExist();
             assertThat(savedBinding.get("localRepoPath")).isEqualTo("/deleted/review");
-            verify(vcs).getFileContent("workspace", "repo", "src/A.java", "reviewed-head");
-            verify(vcs, never()).getFileContent(anyString(), anyString(), eq("src/deleted.java"), anyString());
-            verify(vcs, never()).getLatestCommitHash(anyString(), anyString(), anyString());
+            verify(archives).downloadAndExtractFiles(connection, "workspace", "repo", "reviewed-head", Set.of("src/A.java"), 5 * 1024 * 1024);
+            verifyNoInteractions(clients);
         }
     }
 }

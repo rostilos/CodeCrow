@@ -54,6 +54,8 @@ class TestEmitEvent:
 class TestBuildJvmPropsForSummarize:
     def test_returns_dict(self, service):
         request = MagicMock(
+            vcsQuotaIdentity="tenant-installation",
+            vcsJobId="command-job",
             projectId=1,
             pullRequestId=42,
             projectVcsWorkspace="ws",
@@ -66,6 +68,8 @@ class TestBuildJvmPropsForSummarize:
         )
         result = service._build_jvm_props_for_summarize(request)
         assert isinstance(result, dict)
+        assert result["vcs.quota.identity"] == "tenant-installation"
+        assert result["vcs.job.id"] == "command-job"
 
 
 # ── _build_jvm_props_for_ask ─────────────────────────────────────
@@ -73,6 +77,8 @@ class TestBuildJvmPropsForSummarize:
 class TestBuildJvmPropsForAsk:
     def test_returns_dict(self, service):
         request = MagicMock(
+            vcsQuotaIdentity="tenant-installation",
+            vcsJobId="command-job",
             projectId=1,
             pullRequestId=42,
             projectVcsWorkspace="ws",
@@ -85,6 +91,8 @@ class TestBuildJvmPropsForAsk:
         )
         result = service._build_jvm_props_for_ask(request)
         assert isinstance(result, dict)
+        assert result["vcs.quota.identity"] == "tenant-installation"
+        assert result["vcs.job.id"] == "command-job"
 
 
 # ── _build_platform_jvm_props ────────────────────────────────────
