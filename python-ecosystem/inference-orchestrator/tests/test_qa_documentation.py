@@ -420,85 +420,27 @@ class TestIndependentTestCases:
         assert not QaDocOrchestrator._has_complete_shareable_sections(invalid)
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_repairs_the_complete_document_when_sentinels_are_missing(self):
-        response = MagicMock(content="""
-            # Custom QA summary
-            The checkout flow changed.
-
-            <!-- codecrow-test-cases:start -->
-            ### Тестові сценарії
-            <!-- codecrow-test-cases:content -->
-            **Checkout succeeds (HIGH)**
-            - **Expected Result:** Confirmation appears
-            <!-- codecrow-test-cases:end -->
-
-            ## 4. Edge Cases
-            Try an expired card.
-
-            <!-- codecrow-environment:start -->
-            ### Середовище
-            <!-- codecrow-environment:content -->
-            No special setup is required.
-            <!-- codecrow-environment:end -->
-        """)
+    @pytest.mark.parametrize("document", [
+        "# QA guide\n\n## Tests\n**Checkout succeeds** (HIGH)\nConfirm the order appears.",
+        "<!-- codecrow-test-cases:start -->\n### Tests\n"
+        "<!-- codecrow-test-cases:content -->\n**Checkout succeeds** (HIGH)\n"
+        "<!-- codecrow-test-cases:end -->",
+        "<!-- codecrow-test-cases:start -->\n<!-- codecrow-test-cases:start -->\n"
+        "### Tests\n**Checkout succeeds** (HIGH)",
+    ])
+    async def test_preserves_unshareable_content_without_repair_calls(self, document, caplog):
         llm = MagicMock()
-        llm.ainvoke = AsyncMock(return_value=response)
-        orchestrator = QaDocOrchestrator(llm=llm)
-        placeholders = {
-            "output_language": "English",
-            "pr_number": "12",
-            "project_name": "Project",
-            "pr_title": "Checkout",
-            "task_key": "QA-12",
-            "task_summary": "Test checkout",
-            "source_branch": "feature",
-            "target_branch": "main",
-            "task_context": "",
-            "analysis_summary": "Checkout behavior changed",
-            "diff": "+ changed behavior",
-        }
+        llm.ainvoke = AsyncMock(side_effect=AssertionError("formatting must not trigger paid work"))
+        events = []
+        orchestrator = QaDocOrchestrator(llm=llm, event_callback=events.append)
 
-        repaired = await orchestrator._ensure_shareable_sections(
-            "# Custom QA summary\n\nThe checkout flow changed.",
-            placeholders,
-        )
+        result = await orchestrator._ensure_shareable_sections(document, {})
 
-        assert repaired.startswith("# Custom QA summary")
-        assert "<!-- codecrow-test-cases:content -->" in repaired
-        assert "<!-- codecrow-environment:content -->" in repaired
-        assert "**Checkout succeeds** (HIGH)" in repaired
-        assert "## 4. Edge Cases" in repaired
-        repair_prompt = llm.ainvoke.await_args.args[0][1]["content"]
-        assert "# Custom QA summary" in repair_prompt
-        assert "Each of the six markers must occur exactly once" in repair_prompt
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_rejects_a_repair_without_both_complete_blocks(self):
-        llm = MagicMock()
-        llm.ainvoke = AsyncMock(return_value=MagicMock(content="""
-            <!-- codecrow-test-cases:start -->
-            ### Tests
-            <!-- codecrow-test-cases:content -->
-            **Checkout succeeds** (HIGH)
-            <!-- codecrow-test-cases:end -->
-        """))
-        orchestrator = QaDocOrchestrator(llm=llm)
-        placeholders = {
-            "output_language": "English",
-            "pr_number": "12",
-            "project_name": "Project",
-            "pr_title": "Checkout",
-            "task_key": "QA-12",
-            "task_summary": "Test checkout",
-            "source_branch": "feature",
-            "target_branch": "main",
-            "task_context": "",
-            "analysis_summary": "Checkout behavior changed",
-            "diff": "+ changed behavior",
-        }
-
-        with pytest.raises(ValueError, match="missing complete test-case or environment"):
-            await orchestrator._ensure_shareable_sections("# Custom QA summary", placeholders)
+        assert result == document
+        assert not orchestrator._has_complete_shareable_sections(result)
+        llm.ainvoke.assert_not_awaited()
+        assert "public preview unavailable" in caplog.text
+        assert any(event.get("stage") == "qa_preview_unavailable" for event in events)
 
 
 # ── QaDocOrchestrator._build_placeholders ────────────────────────

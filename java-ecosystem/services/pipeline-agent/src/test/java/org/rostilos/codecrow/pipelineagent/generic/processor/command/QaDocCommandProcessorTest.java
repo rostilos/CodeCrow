@@ -138,6 +138,9 @@ class QaDocCommandProcessorTest {
         )).thenReturn(persistedDocument);
         lenient().when(qaDocPublicPreviewService.createPreviewUrl(any()))
                 .thenReturn("https://app.codecrow.example/share#token=ccs_test-token");
+        lenient().when(qaDocPublicPreviewService.buildPrivateTaskComment(any(), anyLong()))
+                .thenReturn("<!-- codecrow-qa-autodoc -->\n\n[View QA documentation (sign-in required)]"
+                        + "(https://app.codecrow.example/dashboard/acme/projects/checkout?prNumber=7&subTab=qa-doc)");
         lenient().when(qaDocPublicPreviewService.buildTaskComment(anyString(), anyString()))
                 .thenReturn("<!-- codecrow-qa-autodoc -->\n\n"
                         + "### 1. Change Summary\nLogin validation changed.\n\n"
@@ -151,6 +154,67 @@ class QaDocCommandProcessorTest {
     }
 
     // ── Helpers ──
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(EVcsProvider.class)
+    void unmarkedGuideIsSavedAndDeliveredPrivatelyWithoutAnotherGeneration(EVcsProvider provider) throws IOException {
+        setupHappyPath();
+        String guide = "# QA guide\n\n**Check login** (HIGH)\nVerify invalid passwords show an error.";
+        when(qaDocGenerationService.generateQaDocumentation(any(), anyLong(), anyInt(), anyInt(), anyMap(), any()))
+                .thenReturn(guide);
+        var shares = mock(org.rostilos.codecrow.publicshare.service.PublicShareLinkService.class);
+        var settings = mock(org.rostilos.codecrow.core.service.SiteSettingsProvider.class);
+        when(settings.getBaseUrlSettings()).thenReturn(new org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO(
+                "https://api.example", "https://app.example/", "https://hooks.example"));
+        project.setNamespace("checkout"); project.getWorkspace().setSlug("acme");
+        ReflectionTestUtils.setField(processor, "qaDocPublicPreviewService", new QaDocPublicPreviewService(shares, settings));
+        var payload = new WebhookPayload(provider, "qa_documentation", "repo-id", "my-repo", "my-org",
+                PR_ID, "feature/PROJ-123", "main", "abc123", null);
+
+        var result = processor.process(payload, project, eventConsumer, Map.of());
+
+        assertThat(result.success()).isTrue();
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), any());
+        verify(qaDocDocumentService).upsertLatestDocument(eq(project), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(guide));
+        var comment = ArgumentCaptor.forClass(String.class);
+        verify(taskManagementClient).postComment(eq(TASK_ID), comment.capture());
+        assertThat(comment.getValue()).contains("sign-in required", "/dashboard/acme/projects/checkout?prNumber=7&subTab=qa-doc")
+                .doesNotContain("Check login", "invalid passwords", "/share", "token=");
+        assertThat(capturedEvents).anyMatch(event -> "qa_preview_unavailable".equals(event.get("state")));
+        verify(qaDocStateRepository).save(any());
+        verifyNoInteractions(shares);
+    }
+
+    @Test
+    void explicitHandoffRetryReusesUnmarkedGuideAfterALostPublicationResponse() throws IOException {
+        setupHappyPath();
+        String guide = "# QA guide\n\n**Check login** (HIGH)\nVerify invalid passwords show an error.";
+        when(qaDocGenerationService.generateQaDocumentation(any(), anyLong(), anyInt(), anyInt(), anyMap(), any()))
+                .thenReturn(guide);
+        var saved = new QaDocDocument(project, 7L);
+        saved.replaceContent(TASK_ID, null, "abc123", guide); saved.setId(701L);
+        when(qaDocDocumentService.upsertLatestDocument(any(), anyLong(), anyString(), any(), any(), eq(guide)))
+                .thenReturn(saved);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L))
+                .thenReturn(Optional.empty(), Optional.of(saved));
+        String privateComment = "<!-- codecrow-qa-autodoc -->\n\nSign in to CodeCrow to read the saved guide.";
+        when(qaDocPublicPreviewService.buildPrivateTaskComment(project, 7L)).thenReturn(privateComment);
+        when(taskManagementClient.postComment(TASK_ID, privateComment)).thenThrow(new IOException("response lost"));
+        var payload = createPayload("feature/PROJ-123");
+
+        assertThat(processor.process(payload, project, eventConsumer, Map.of()).success()).isFalse();
+        verify(qaDocStateRepository, never()).save(any());
+        when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString())).thenReturn(Optional.of(
+                new TaskComment("accepted-comment", "bot", privateComment, OffsetDateTime.now(), null)));
+
+        assertThat(processor.process(payload, project, eventConsumer, Map.of()).success()).isTrue();
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), any());
+        verify(qaDocDocumentService).upsertLatestDocument(any(), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(guide));
+        verify(taskManagementClient).postComment(TASK_ID, privateComment);
+        verify(taskManagementClient).updateComment(TASK_ID, "accepted-comment", privateComment);
+        verify(qaDocPublicPreviewService, never()).createPreviewUrl(any());
+        verify(qaDocStateRepository).save(any());
+    }
 
     private static String sourceAndMapDiff() {
         return "diff --git a/src/A.java b/src/A.java\n--- a/src/A.java\n+++ b/src/A.java\n@@ -1 +1 @@\n-old\n+source\n"
@@ -1031,7 +1095,7 @@ class QaDocCommandProcessorTest {
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
 
             assertThat(result.success()).isFalse();
-            assertThat(result.message()).contains("secure public preview");
+            assertThat(result.message()).contains("could not be saved");
             // Should not attempt to look up analysis when PR number is null
             verify(codeAnalysisService, never()).getPreviousVersionCodeAnalysis(anyLong(), anyLong());
         }

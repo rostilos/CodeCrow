@@ -1,5 +1,6 @@
 """QA failures remain attributable and cannot restart uncertain paid work."""
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -57,6 +58,37 @@ def run_args():
                 delta_diff=None, enrichment_data=None, previous_documentation=None, is_same_pr_rerun=False,
                 diff="diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+new\n" + " context\n" * 1_000,
                 changed_file_paths=["a.py"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["BASE", "RAW", "CUSTOM"])
+async def test_usable_unmarked_document_returns_success_without_paid_format_repair(monkeypatch, caplog, mode):
+    document = "# QA guide\n\n## Checkout\n**Place an order** (HIGH)\nVerify the order appears after payment."
+    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+        SimpleNamespace(content="YES"), SimpleNamespace(content=document),
+    ]))
+    monkeypatch.setattr(QaDocumentationService, "_create_llm", lambda *args, **kwargs: llm)
+
+    @asynccontextmanager
+    async def no_repository_tools(*args):
+        yield None
+
+    monkeypatch.setattr("service.qa_documentation.repository_tools.qa_repository_tools", no_repository_tools)
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/qa-documentation", json={
+            "project_id": 402, "project_name": "repo", "pr_number": 10172,
+            "template_mode": mode, "custom_template": "Describe checkout testing",
+            "diff": "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["documentation_needed"] is True
+    assert response.json()["documentation"].startswith(document)
+    assert response.json()["template_mode_used"] == mode
+    assert llm.ainvoke.await_count == 2  # Relevance and generation only.
+    assert "public preview unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

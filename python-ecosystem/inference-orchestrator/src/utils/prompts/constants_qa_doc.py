@@ -616,58 +616,6 @@ The result must be a COMPLETE, standalone QA testing guide — not just the chan
 Generate the updated document now. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
 
 
-QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT = """Repair the sentinel structure of this COMPLETE QA testing guide.
-Write user-facing text in **{output_language}**, but preserve the guide's content,
-coverage, ordering, localized headings, and level of detail. Return the complete guide,
-not an explanation and not only the repaired sections.
-
-PR #{pr_number} in {project_name}: {pr_title}
-Task: {task_key} — {task_summary}
-Branch: {source_branch} → {target_branch}
-
-{task_context}
-
-Analysis summary:
-{analysis_summary}
-
-PR diff:
-```
-{diff}
-```
-
-Existing guide:
----
-{documentation}
----
-
-Required exact structure for test cases:
-<!-- codecrow-test-cases:start -->
-### Localized test-case section heading
-<!-- codecrow-test-cases:content -->
-**Scenario Name** (HIGH)
-- **Preconditions:** Required setup
-- **Steps:**
-  1. Tester action
-- **Expected Result:** Observable result
-<!-- codecrow-test-cases:end -->
-
-Required exact structure for environment/setup notes:
-<!-- codecrow-environment:start -->
-### Localized environment/setup section heading
-<!-- codecrow-environment:content -->
-All setup requirements, or an explicit statement that no special setup is required.
-<!-- codecrow-environment:end -->
-
-Each of the six markers must occur exactly once and in the shown order. Move all test
-scenarios into the test-case block and all environment/setup notes into the environment
-block. Do not duplicate either kind of content elsewhere. Preserve every unrelated
-section before, between, and after these blocks. The test-case body must contain one or
-more concrete scenarios with HIGH, MEDIUM, or LOW priority.
-
-Never include file names, code symbols, SQL, endpoints, commands, configuration files,
-code snippets, or implementation-stack details."""
-
-
 # ---------------------------------------------------------------------------
 # Update preamble — injected when previous QA documentation already exists
 # for the same task from earlier PRs. The LLM merges old + new into one doc.

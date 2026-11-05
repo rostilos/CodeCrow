@@ -258,7 +258,7 @@ class TestQaPackedStages:
         )
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_single_pass_and_repair_pack_all_records(self):
+    async def test_single_pass_packs_all_records_without_paid_format_repair(self):
         llm = MagicMock()
         llm.ainvoke = AsyncMock(return_value=MagicMock(
             content=_valid_document(),
@@ -283,17 +283,9 @@ class TestQaPackedStages:
         assert "QA_COVERAGE_DIAGNOSTIC" not in single_pass_prompts
 
         llm.ainvoke.reset_mock()
-        repair_marker = "REPAIR_GUIDE_UNIQUE"
-        repaired = await orchestrator._ensure_shareable_sections(
-            (repair_marker + "😀 ") * 8_000,
-            _placeholders(),
-        )
-        repair_prompts = _all_prompt_text(llm)
+        original = ("RETAIN_GUIDE_UNIQUE😀 " * 8_000)
+        retained = await orchestrator._ensure_shareable_sections(original, _placeholders())
 
-        assert orchestrator._has_complete_shareable_sections(repaired)
-        assert llm.ainvoke.await_count > 1
-        assert "QA_COVERAGE_DIAGNOSTIC" not in repair_prompts
-        assert all(
-            orchestrator.estimate_rendered_input_tokens(call.args[0]) <= 7_000
-            for call in llm.ainvoke.await_args_list
-        )
+        assert retained == original
+        assert not orchestrator._has_complete_shareable_sections(retained)
+        llm.ainvoke.assert_not_awaited()

@@ -40,7 +40,6 @@ from utils.prompts.constants_qa_doc import (
     QA_STAGE_3_AGGREGATION_PROMPT,
     QA_STAGE_3_DELTA_PROMPT,
     QA_STAGE_3_PREVIOUS_DOC_SECTION,
-    QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -1549,97 +1548,16 @@ class QaDocOrchestrator(BaseOrchestrator):
         documentation: str,
         placeholders: Dict[str, str],
     ) -> str:
-        """Require exact, language-independent boundaries for both shareable sections."""
+        """Normalize known formatting without discarding an already generated guide."""
         documentation = self._normalize_scenario_priorities(documentation)
-        if self._has_complete_shareable_sections(documentation):
-            return documentation
-
-        repair_placeholders = dict(placeholders)
-        repair_placeholders["documentation"] = documentation
-
-        logger.warning(
-            "QA doc violated the shareable-section sentinel contract; "
-            "running structural repair generation"
-        )
-        prompt = QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT.format(**repair_placeholders)
-        system_prompt = QA_DOC_SYSTEM_PROMPT.format(
-            output_language=repair_placeholders.get("output_language", "English")
-        )
-        complete_messages = self._messages(system_prompt, prompt)
-        if self.prompt_fits(complete_messages):
-            response = await self.llm.ainvoke(complete_messages)
-            repaired = self._extract_text(response).strip()
-        else:
-            shard_placeholders, records = self._shared_records(
-                repair_placeholders,
-                ("task_context", "analysis_summary"),
+        if not self._has_complete_shareable_sections(documentation):
+            message = (
+                "QA public preview unavailable: incomplete section markers; "
+                "preserving the guide for authenticated access without a model repair"
             )
-            shard_placeholders["diff"] = (
-                "[Complete diff is assigned once in QA semantic records.]"
-            )
-            records.extend(self._diff_records(
-                str(repair_placeholders.get("diff") or ""),
-                key_prefix="sentinel-repair:diff",
-                section="shared:diff",
-            ))
-            documentation_record = self._text_record(
-                "sentinel-repair:documentation",
-                "documentation",
-                documentation,
-            )
-            records.append(documentation_record)
-            shard_system = QA_DOC_SYSTEM_PROMPT.format(
-                output_language=shard_placeholders.get(
-                    "output_language",
-                    "English",
-                )
-            )
-
-            def render_packet(
-                packet: Sequence[QaSemanticRecord],
-            ) -> List[Dict[str, str]]:
-                packet_placeholders = dict(shard_placeholders)
-                for field in ("task_context", "analysis_summary", "diff"):
-                    packet_placeholders[field] = self._record_text(
-                        packet,
-                        f"shared:{field}",
-                        empty=(
-                            f"No {field} record is assigned to this repair shard."
-                        ),
-                    )
-                packet_placeholders["documentation"] = self._record_text(
-                    packet,
-                    "documentation",
-                    empty=(
-                        "No guide fragment is assigned to this repair shard; "
-                        "another shard owns it."
-                    ),
-                )
-                packet_prompt = QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT.format(
-                    **packet_placeholders
-                )
-                return self._messages(shard_system, packet_prompt)
-
-            repaired_documents = await self._invoke_required_document_records(
-                records,
-                render_packet,
-                label="QA sentinel repair",
-            )
-            repaired = (
-                await self._synthesize_qa_documents(
-                    repaired_documents,
-                    placeholders,
-                    label="QA sentinel repair",
-                )
-            ).strip()
-        if not repaired:
-            raise ValueError("QA documentation sentinel repair returned no content")
-        repaired = self._normalize_scenario_priorities(repaired)
-        if not self._has_complete_shareable_sections(repaired):
-            raise ValueError(
-                "QA documentation is missing complete test-case or environment sentinel sections"
-            )
-        return repaired
+            logger.warning(message)
+            emit_status(self.event_callback, "qa_preview_unavailable", message)
+        return documentation
 
     @classmethod
     def _normalize_scenario_priorities(cls, documentation: str) -> str:

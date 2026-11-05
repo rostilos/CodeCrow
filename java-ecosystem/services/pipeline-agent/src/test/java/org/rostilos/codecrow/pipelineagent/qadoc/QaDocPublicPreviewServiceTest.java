@@ -12,6 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class QaDocPublicPreviewServiceTest {
 
@@ -99,5 +100,25 @@ class QaDocPublicPreviewServiceTest {
                         () -> service.createPreviewUrl(document))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("test-case and environment sections");
+        verifyNoInteractions(publicShares);
+    }
+
+    @Test
+    void privateFallbackLinksToTheExistingAuthenticatedQaTabWithoutIssuingAPublicCredential() {
+        PublicShareLinkService publicShares = mock(PublicShareLinkService.class);
+        SiteSettingsProvider settings = mock(SiteSettingsProvider.class);
+        when(settings.getBaseUrlSettings()).thenReturn(
+                new BaseUrlSettingsDTO("https://api.example", "https://app.example/", "https://hooks.example"));
+        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
+        workspace.setSlug("acme");
+        var project = new org.rostilos.codecrow.core.model.project.Project();
+        project.setWorkspace(workspace); project.setNamespace("checkout");
+
+        String comment = new QaDocPublicPreviewService(publicShares, settings).buildPrivateTaskComment(project, 10172L);
+
+        assertThat(comment).contains(QaAutoDocListener.COMMENT_MARKER, "sign-in required",
+                "https://app.example/dashboard/acme/projects/checkout?prNumber=10172&subTab=qa-doc")
+                .doesNotContain("/share", "token=");
+        verifyNoInteractions(publicShares);
     }
 }

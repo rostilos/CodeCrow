@@ -29,6 +29,7 @@ import org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocHandoffRetryPolicy;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
+import org.rostilos.codecrow.core.service.qadoc.QaDocContentParser;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
@@ -420,20 +421,28 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             }
             if (persistedDocument.isEmpty()) {
                 return WebhookResult.error(
-                        "QA documentation was generated but its secure public preview could not be created.");
+                        "QA documentation was generated but could not be saved.");
             }
 
-            String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());
+            String commentBody;
+            if (QaDocContentParser.hasCompleteShareableSections(qaDocument)) {
+                String previewUrl = qaDocPublicPreviewService.createPreviewUrl(persistedDocument.get());
+                commentBody = qaDocPublicPreviewService.buildTaskComment(qaDocument, previewUrl);
+            } else {
+                log.warn("QA document saved with incomplete section markers: project={}, pr={}; using authenticated link",
+                        project.getId(), prNumber);
+                eventConsumer.accept(Map.of("type", "warning", "state", "qa_preview_unavailable",
+                        "message", "QA guide saved; public preview unavailable due to section formatting. Sign in to CodeCrow to view it."));
+                commentBody = qaDocPublicPreviewService.buildPrivateTaskComment(project, prNumber);
+            }
 
             eventConsumer.accept(Map.of(
                     "type", "status",
                     "state", "posting_comment",
-                    "message", "Posting QA-document preview links to " + taskId + "..."
+                    "message", "Posting QA documentation links to " + taskId + "..."
             ));
 
-            // 8. Keep the compact QA guide in Jira, replacing the test-case and
-            // environment/setup bodies with their public-preview URLs.
-            String commentBody = qaDocPublicPreviewService.buildTaskComment(qaDocument, previewUrl);
+            // Unmarked content stays behind workspace authorization, never in the public preview.
             TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
             String action;
 
