@@ -91,7 +91,7 @@ public final class ComposerAuditPlugin implements ReviewCheckPlugin {
                 try {
                     payload.put("auth", context.source().read(context.headRevision(), root + "auth.json"));
                 } catch (IOException unavailableAuth) {
-                    diagnostics.add("auth-unavailable: continuing without repository credentials");
+                    diagnostics.add("auth-unavailable: repository auth.json could not be read; Composer may use inline credentials");
                 }
                 HttpRequest request = HttpRequest.newBuilder(endpoint)
                         .timeout(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())))

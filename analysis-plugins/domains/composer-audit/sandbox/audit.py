@@ -77,26 +77,47 @@ def repositories(manifest, diagnostics):
     if not isinstance(entries, list):
         raise ValueError("Invalid repositories")
     result = []
-    for entry in entries:
+    non_advisory = 0
+    for index, entry in enumerate(entries, 1):
         if entry in ({"packagist": False}, {"packagist.org": False}):
             result.append(entry)
             continue
-        if not isinstance(entry, dict) or entry.get("type") != "composer":
-            diagnostics.append("repository-omitted: only HTTPS Composer advisory repositories are supported")
+        if not isinstance(entry, dict):
+            diagnostics.append(f"repository-omitted: entry {index} is not a repository object")
+            continue
+        if entry.get("type") != "composer":
+            non_advisory += 1
             continue
         url = entry.get("url")
-        parsed = urlsplit(url) if isinstance(url, str) else None
-        if (not parsed or parsed.scheme != "https" or not parsed.hostname
-                or parsed.username or parsed.password or parsed.port not in (None, 443)):
-            diagnostics.append("repository-omitted: repository URL is not a credential-free HTTPS endpoint")
+        # Composer's https? scheme selects HTTPS when OpenSSL is available in this worker.
+        if isinstance(url, str) and url.startswith("https?://"):
+            url = "https://" + url[len("https?://"):]
+        try:
+            parsed = urlsplit(url) if isinstance(url, str) else None
+            if not parsed or not parsed.hostname:
+                reason = "missing URL scheme or hostname"
+            elif parsed.scheme != "https":
+                reason = "HTTPS is required; credentials cannot enable an insecure or local transport"
+            elif parsed.port not in (None, 443):
+                reason = "the sandbox permits HTTPS on port 443 only"
+            else:
+                reason = None
+        except ValueError:
+            reason = "malformed repository URL or port"
+        if reason:
+            diagnostics.append(f"repository-omitted: entry {index}: {reason}")
             continue
+        # Composer handles inline HTTP basic auth as well as the request's auth.json.
         result.append({"type": "composer", "url": url})
+    if non_advisory:
+        diagnostics.append(f"repository-non-advisory: {non_advisory} non-Composer repositories do not provide advisory feeds; "
+                           "their changed locked packages are still checked against the available advisory sources")
     return result
 
 
 def auth_config(raw, diagnostics):
     if raw is None:
-        diagnostics.append("auth-missing: auditing without private repository credentials")
+        diagnostics.append("auth-missing: auth.json is absent; Composer can still use inline repository credentials")
         return None
     try:
         auth = document(raw)
@@ -130,7 +151,7 @@ def auth_config(raw, diagnostics):
                     raise ValueError("Invalid credential")
         return auth
     except (ValueError, TypeError):
-        diagnostics.append("auth-invalid: ignoring malformed auth.json and continuing without credentials")
+        diagnostics.append("auth-invalid: ignoring malformed auth.json; Composer can still use inline repository credentials")
         return None
 
 

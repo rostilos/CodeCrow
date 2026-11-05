@@ -104,8 +104,49 @@ class AuditTest(unittest.TestCase):
         entries=repositories({'repositories':[{'type':'path','url':'/app'},
              {'type':'composer','url':'http://localhost'}, {'type':'composer','url':'https://user:secret@example.com'},
              {'type':'composer','url':'https://repo.example','options':{'ssl':{'verify_peer':False}}}]},diagnostics)
-        self.assertEqual([{'type':'composer','url':'https://repo.example'}],entries)
-        self.assertEqual(3,len(diagnostics))
+        self.assertEqual([{'type':'composer','url':'https://user:secret@example.com'},
+                          {'type':'composer','url':'https://repo.example'}],entries)
+        self.assertEqual(2,len(diagnostics))
+        self.assertNotIn('secret',json.dumps(diagnostics))
+
+    def test_native_https_auth_forms_and_project_auth_reach_composer(self):
+        urls=['https://fixture%40example.invalid:fixture%3Asecret@repo.example.invalid',
+              'https?://repo.example.invalid/path']
+        auth={'http-basic':{'repo.example.invalid':{'username':'fixture','password':'fixture-secret'}}}
+        def runner(directory):
+            manifest=json.loads((directory/'composer.json').read_text())
+            self.assertEqual([{'type':'composer','url':urls[0]},
+                              {'type':'composer','url':'https://repo.example.invalid/path'}],manifest['repositories'])
+            self.assertEqual(auth,json.loads((directory/'auth.json').read_text()))
+            return 1, json.dumps({'advisories':{'a/new':[advisory()]}}).encode(), b''
+        result=self.run_audit(payload([], [package('a/new')], auth=json.dumps(auth),
+            headManifest=json.dumps({'repositories':[{'type':'composer','url':url} for url in urls]})),runner)
+        self.assertEqual(1,len(result['findings']))
+        self.assertFalse(any('omitted' in item for item in result['diagnostics']))
+        self.assertNotIn('fixture',json.dumps(result))
+
+    def test_malformed_repository_is_omitted_without_losing_other_sources(self):
+        diagnostics=[]
+        bad=['https://fixture:secret@host:bad', 'https://[broken', 'http://host',
+             'https://host:8443', 'host/path']
+        entries=repositories({'repositories':[{'type':'composer','url':url} for url in bad]
+                             +[{'type':'composer','url':'https://good.example'}]},diagnostics)
+        self.assertEqual([{'type':'composer','url':'https://good.example'}],entries)
+        self.assertEqual(len(bad),len(diagnostics))
+        self.assertIn('entry 1: malformed',diagnostics[0])
+        self.assertIn('HTTPS is required',diagnostics[2])
+        self.assertIn('port 443 only',diagnostics[3])
+        self.assertNotIn('secret',json.dumps(diagnostics))
+
+    def test_non_advisory_repositories_have_one_informational_diagnostic(self):
+        diagnostics=[]
+        entries=repositories({'repositories':[{'type':kind,'url':'secret'}
+                             for kind in ('vcs','git','path','package','artifact')]},diagnostics)
+        self.assertEqual([],entries)
+        self.assertEqual(1,len(diagnostics))
+        self.assertIn('repository-non-advisory: 5',diagnostics[0])
+        self.assertIn('changed locked packages are still checked',diagnostics[0])
+        self.assertNotIn('secret',json.dumps(diagnostics))
 
     def test_no_changes_and_missing_lock_do_not_invoke_cli(self):
         def forbidden(_): self.fail('CLI must not run')
