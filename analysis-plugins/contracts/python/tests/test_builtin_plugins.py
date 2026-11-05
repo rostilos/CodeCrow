@@ -401,6 +401,7 @@ def test_discovers_and_selects_php_and_magento_deterministically():
     capabilities = ProjectSelector(catalog.registry).select(_facts())
 
     assert set(catalog.registry.ordered_ids) == {
+        "composer-audit",
         "pnpm",
         "babel",
         "localization",
@@ -413,7 +414,7 @@ def test_discovers_and_selects_php_and_magento_deterministically():
         "quarkus", "rails", "ruby", "spring", "rust", "scala", "tsx",
         "typescript",
     }
-    assert capabilities.repository_plugins == ("json", "php", "magento")
+    assert capabilities.repository_plugins == ("composer-audit", "json", "php", "magento")
     assert capabilities.file_plugins == {
         "app/code/Acme/Checkout/Controller/Index/Save.php": ("php",),
         "app/etc/config.php": ("php",),
@@ -433,7 +434,7 @@ def test_magento_is_not_selected_for_an_unrelated_composer_php_repository():
 
     capabilities = ProjectSelector(catalog.registry).select(facts)
 
-    assert capabilities.repository_plugins == ("json", "php")
+    assert capabilities.repository_plugins == ("composer-audit", "json", "php")
 
 
 def test_manual_magento_selection_is_authoritative_without_markers():
@@ -472,7 +473,7 @@ def test_auto_detection_correlates_magento_markers_at_an_arbitrary_nested_root()
 
     capabilities = ProjectSelector(catalog.registry).select(facts)
 
-    assert capabilities.repository_plugins == ("json", "php", "magento")
+    assert capabilities.repository_plugins == ("composer-audit", "json", "php", "magento")
     assert "root:magento/src/etc" in capabilities.detection_evidence["magento"]
 
 
@@ -855,7 +856,7 @@ def test_magento_selects_installed_application_without_direct_framework_requirem
         marker_contents={"composer.json": '{"require":{"magento/product-community-edition":"*"}}'},
     )
 
-    assert ProjectSelector(catalog.registry).select(facts).repository_plugins == ("json", "php", "magento")
+    assert ProjectSelector(catalog.registry).select(facts).repository_plugins == ("composer-audit", "json", "php", "magento")
 
 
 def test_magento_selects_standalone_and_nested_module_workspaces():
@@ -873,8 +874,8 @@ def test_magento_selects_standalone_and_nested_module_workspaces():
         ),
     )
 
-    assert ProjectSelector(catalog.registry).select(standalone).repository_plugins == ("json", "php", "magento")
-    assert ProjectSelector(catalog.registry).select(nested).repository_plugins == ("json", "php", "magento")
+    assert ProjectSelector(catalog.registry).select(standalone).repository_plugins == ("composer-audit", "json", "php", "magento")
+    assert ProjectSelector(catalog.registry).select(nested).repository_plugins == ("composer-audit", "json", "php", "magento")
 
 
 def test_magento_selects_standalone_and_monorepo_theme_workspaces():
@@ -898,10 +899,10 @@ def test_magento_selects_standalone_and_monorepo_theme_workspaces():
 
     assert ProjectSelector(catalog.registry).select(
         standalone
-    ).repository_plugins == ("json", "php", "magento")
+    ).repository_plugins == ("composer-audit", "json", "php", "magento")
     assert ProjectSelector(catalog.registry).select(
         monorepo
-    ).repository_plugins == ("json", "php", "magento")
+    ).repository_plugins == ("composer-audit", "json", "php", "magento")
     assert "magento" not in ProjectSelector(catalog.registry).select(
         incomplete
     ).repository_plugins

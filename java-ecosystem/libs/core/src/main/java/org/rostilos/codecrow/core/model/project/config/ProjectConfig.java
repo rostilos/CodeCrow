@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSetter;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -104,6 +105,17 @@ public class ProjectConfig {
     private TaskManagementConfig taskManagement;
     @JsonProperty("qaAutoDoc")
     private QaAutoDocConfig qaAutoDoc;
+
+    @JsonProperty("reviewChecks")
+    private Map<String, Boolean> reviewChecks;
+
+    public Map<String, Boolean> reviewChecks() {
+        return reviewChecks == null ? Map.of() : reviewChecks;
+    }
+
+    public void setReviewChecks(Map<String, Boolean> reviewChecks) {
+        this.reviewChecks = reviewChecks == null ? Map.of() : Map.copyOf(reviewChecks);
+    }
 
     public ProjectConfig() {
         this.useLocalMcp = false;
@@ -494,7 +506,8 @@ public class ProjectConfig {
                 Objects.equals(analysisProfile(), that.analysisProfile()) &&
                 Objects.equals(projectRules, that.projectRules) &&
                 Objects.equals(taskManagement, that.taskManagement) &&
-                Objects.equals(qaAutoDoc, that.qaAutoDoc);
+                Objects.equals(qaAutoDoc, that.qaAutoDoc) &&
+                Objects.equals(reviewChecks(), that.reviewChecks());
     }
 
     @Override
@@ -502,7 +515,7 @@ public class ProjectConfig {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
                 commentCommands, maxAnalysisTokenLimit, analysisLimits, analysisScope,
-                analysisProfile(), projectRules, taskManagement, qaAutoDoc);
+                analysisProfile(), projectRules, taskManagement, qaAutoDoc, reviewChecks());
     }
 
     @Override

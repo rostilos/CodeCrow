@@ -456,6 +456,19 @@ public class GitHubClient implements VcsClient {
     }
     
     @Override
+    public String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        String spec = URLEncoder.encode(baseCommit + "..." + headCommit, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/compare/" + spec + "?per_page=1";
+        Request request = new Request.Builder().url(url).header(ACCEPT_HEADER, "application/vnd.github+json").get().build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) throw new IOException("Merge-base lookup failed");
+            String hash = objectMapper.readTree(response.body().string()).path("merge_base_commit").path("sha").asText(null);
+            if (hash == null || hash.isBlank()) throw new IOException("Merge-base revision is unavailable");
+            return hash;
+        }
+    }
+
+    @Override
     public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
         // Use raw content endpoint to get actual file content (not base64-encoded JSON)
         // The Accept header tells GitHub to return raw file content

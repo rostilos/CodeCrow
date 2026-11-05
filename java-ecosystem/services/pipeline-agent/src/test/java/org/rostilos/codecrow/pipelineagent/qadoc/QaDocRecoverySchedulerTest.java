@@ -49,10 +49,22 @@ class QaDocRecoverySchedulerTest {
         verify(jobs,never()).claimQaJobForExecution(any()); verify(jobs,never()).failJob(any(),anyString());
     }
     @Test void missingCompletionEventQueuesPersistedIntent() {
-        var analysis=new CodeAnalysis(); var project=new Project(); ReflectionTestUtils.setField(project,"id",1L);
-        analysis.setProject(project); ReflectionTestUtils.setField(analysis,"id",3L);
+        var analysis=mock(CodeAnalysisRepository.PendingQaDocumentation.class);
+        when(analysis.getProjectId()).thenReturn(1L); when(analysis.getId()).thenReturn(3L);
         when(analyses.findPendingQaDocumentation(any())).thenReturn(List.of(analysis));
         scheduler(Runnable::run).recover(); verify(queue).enqueue(1L,3L);
+    }
+    @Test void failedIntentDoesNotPreventTheNextProjectFromBeingQueued() {
+        var first=mock(CodeAnalysisRepository.PendingQaDocumentation.class);
+        var second=mock(CodeAnalysisRepository.PendingQaDocumentation.class);
+        when(first.getProjectId()).thenReturn(1L); when(first.getId()).thenReturn(3L);
+        when(second.getProjectId()).thenReturn(2L); when(second.getId()).thenReturn(4L);
+        when(analyses.findPendingQaDocumentation(any())).thenReturn(List.of(first,second));
+        when(queue.enqueue(1L,3L)).thenThrow(new IllegalStateException("database unavailable"));
+        scheduler(Runnable::run).recover();
+        verify(analyses).findPendingQaDocumentation(org.springframework.data.domain.PageRequest.of(0,50));
+        verify(queue).enqueue(1L,3L); verify(queue).enqueue(2L,4L);
+        verifyNoInteractions(command,webhooks);
     }
     @ParameterizedTest @EnumSource(EVcsProvider.class)
     void manualRecoveryReplaysSavedActorThroughAuthorizationHandler(EVcsProvider provider) throws Exception {

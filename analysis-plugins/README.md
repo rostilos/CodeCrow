@@ -319,3 +319,16 @@ configuration XML remains architecture input, but a malformed file or one with a
 DTD/entity declaration is quarantined from the architecture snapshot instead of
 failing the repository index. Other valid plugin inputs continue to contribute
 deterministic context. Runtime/plugin contract failures remain fatal.
+
+The optional `composer-audit` domain plugin implements the neutral Java
+`ReviewCheckPlugin` contract. A fresh PR result can receive deterministic security
+findings before persistence without importing a concrete contributor into the
+host. Changed Composer roots are compared at pinned base/head revisions and a
+separate, capability-dropped CLI container executes a checksum-verified
+`composer.phar`. It has no application volumes or credentials and blocks private
+network egress. Missing plugins/workers, malformed auth or inputs, timeouts and
+unreachable repositories leave core review available with diagnostics. The
+project's `reviewChecks` map can disable a contributor; Composer audit defaults
+to enabled for matching changed markers. It adds no model calls. Full ownership,
+selection and failure details live in the public developer plugin architecture
+and configuration pages.

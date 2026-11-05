@@ -45,7 +45,8 @@ public record ProjectDTO(
         String sourceRoot,
         ProjectRulesConfigDTO projectRulesConfig,
         TaskManagementConfigDTO taskManagementConfig,
-        QaAutoDocConfigDTO qaAutoDocConfig) {
+        QaAutoDocConfigDTO qaAutoDocConfig,
+        java.util.Map<String, Boolean> reviewChecks) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
         String vcsConnectionType = null;
@@ -197,7 +198,8 @@ public record ProjectDTO(
                 config != null ? config.analysisProfile().sourceRoot() : null,
                 projectRulesConfigDTO,
                 taskManagementConfigDTO,
-                qaAutoDocConfigDTO);
+                qaAutoDocConfigDTO,
+                config != null ? config.reviewChecks() : java.util.Map.of());
     }
 
     public record DefaultBranchStats(

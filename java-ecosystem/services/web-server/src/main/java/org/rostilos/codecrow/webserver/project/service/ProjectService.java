@@ -824,7 +824,7 @@ public class ProjectService implements IProjectService {
             InstallationMethod installationMethod,
             Integer maxAnalysisTokenLimit,
             Boolean useMcpTools,
-            Boolean taskContextAnalysisEnabled) {
+            Boolean taskContextAnalysisEnabled, java.util.Map<String, Boolean> reviewChecks) {
         Project project = configurationProjectForUpdate(workspaceId, projectId);
 
         ProjectConfig currentConfig = project.getConfiguration();
@@ -859,6 +859,7 @@ public class ProjectService implements IProjectService {
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit,
                 newTaskContextAnalysis);
         preserveProjectConfigExtensions(newConfig, currentConfig);
+        if (reviewChecks != null) newConfig.setReviewChecks(reviewChecks);
         project.setConfiguration(newConfig);
         return projectRepository.save(project);
     }
@@ -970,6 +971,7 @@ public class ProjectService implements IProjectService {
         target.setProjectRules(source.projectRules());
         target.setTaskManagement(source.taskManagement());
         target.setQaAutoDoc(source.qaAutoDoc());
+        target.setReviewChecks(source.reviewChecks());
         target.setAnalysisLimits(source.analysisLimits());
         target.setAnalysisScope(source.analysisScope());
         target.setAnalysisProfile(source.analysisProfile());

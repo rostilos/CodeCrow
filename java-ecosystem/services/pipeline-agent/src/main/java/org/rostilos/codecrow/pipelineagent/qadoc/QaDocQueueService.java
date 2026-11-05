@@ -56,9 +56,9 @@ public class QaDocQueueService {
         // Terminal failures need an explicit command; replaying them can repeat paid generation.
         if (!queued && !abandoned) return false;
         if (job.getTriggerSource() == JobTriggerSource.CHAINED && job.getInputAnalysisId() != null) {
-            var source = analyses.findByIdAndProjectId(job.getInputAnalysisId(), job.getProject().getId()).orElse(null);
-            if (source != null && source.getSourceBranchName() != null
-                    && locks.existsActiveLock(job.getProject().getId(), source.getSourceBranchName(),
+            var sourceBranch = analyses.findSourceBranchForQa(job.getInputAnalysisId(), job.getProject().getId()).orElse(null);
+            if (sourceBranch != null
+                    && locks.existsActiveLock(job.getProject().getId(), sourceBranch,
                             AnalysisLockType.PR_ANALYSIS, now)) return false;
         }
         if (abandoned && locks.existsActiveLock(job.getProject().getId(),"qa-pr:" + job.getPrNumber(),

@@ -2,7 +2,6 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.job.*;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
@@ -39,7 +38,7 @@ class QaDocQueueServiceTest {
         var locks = mock(AnalysisLockRepository.class);
         var service = new QaDocQueueService(analyses, repository, logs, locks, mock(JobService.class));
         var now = OffsetDateTime.now();
-        var job = mock(Job.class); var project = mock(Project.class); var analysis = mock(CodeAnalysis.class);
+        var job = mock(Job.class); var project = mock(Project.class);
         when(repository.findByIdForUpdate(7L)).thenReturn(Optional.of(job));
         when(job.getJobType()).thenReturn(JobType.QA_DOC_COMMAND);
         when(job.getTriggerSource()).thenReturn(JobTriggerSource.CHAINED);
@@ -47,11 +46,12 @@ class QaDocQueueServiceTest {
         when(job.getUpdatedAt()).thenReturn(now.minusHours(1));
         when(job.getProject()).thenReturn(project); when(project.getId()).thenReturn(1L);
         when(job.getInputAnalysisId()).thenReturn(42L);
-        when(analyses.findByIdAndProjectId(42L, 1L)).thenReturn(Optional.of(analysis));
-        when(analysis.getSourceBranchName()).thenReturn("feature");
+        when(analyses.findSourceBranchForQa(42L, 1L)).thenReturn(Optional.of("feature"));
         when(locks.existsActiveLock(1L, "feature", AnalysisLockType.PR_ANALYSIS, now)).thenReturn(true);
         assertThat(service.prepareRetry(7L, now)).isFalse();
         verify(repository, never()).save(any());
+        verify(analyses).findSourceBranchForQa(42L, 1L);
+        verifyNoMoreInteractions(analyses);
         verifyNoInteractions(logs);
     }
 }

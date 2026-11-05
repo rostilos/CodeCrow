@@ -192,6 +192,7 @@ def test_cross_runtime_plugin_projection_is_validated_before_review_context():
     resolved = plugin_context.resolve_project_capabilities(request)
 
     assert resolved.repository_plugins == (
+        "composer-audit",
         "json",
         "php",
     )

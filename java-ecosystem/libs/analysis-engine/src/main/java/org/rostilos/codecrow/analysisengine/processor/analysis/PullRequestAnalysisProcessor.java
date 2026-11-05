@@ -96,6 +96,9 @@ public class PullRequestAnalysisProcessor {
     @Autowired(required = false)
     private CodeAnalysisIssueRepository codeAnalysisIssueRepository;
 
+    @Autowired(required = false)
+    private org.rostilos.codecrow.analysisengine.service.ReviewCheckService reviewCheckService;
+
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
             CodeAnalysisService codeAnalysisService,
@@ -332,6 +335,12 @@ public class PullRequestAnalysisProcessor {
                         "message", "Prompt dry run completed without publishing an analysis",
                         "promptArtifact", artifact != null ? artifact : Map.of()));
                 return aiResponse;
+            }
+
+            if (reviewCheckService != null) {
+                aiResponse = reviewCheckService.enrich(project, aiRequest, aiResponse,
+                        event -> emitEvent(consumer, event));
+                requireConfirmedLease(lockLease);
             }
 
             // === Extract file contents from enrichment data for line hash computation ===

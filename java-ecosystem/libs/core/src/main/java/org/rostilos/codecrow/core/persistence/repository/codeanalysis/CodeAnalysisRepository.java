@@ -15,6 +15,11 @@ import java.util.Optional;
 
 @Repository
 public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long> {
+    interface PendingQaDocumentation {
+        Long getId();
+        Long getProjectId();
+    }
+
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
             "AND (:prNumber IS NULL OR a.prNumber = :prNumber) " +
             "AND (:commitHash IS NULL OR a.commitHash = :commitHash) " +
@@ -32,9 +37,13 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     @Query("UPDATE CodeAnalysis a SET a.qaDocumentationPending = false WHERE a.id = :id AND a.project.id = :projectId")
     void consumeQaIntent(@Param("projectId") Long projectId, @Param("id") Long id);
 
-    @Query("SELECT a FROM CodeAnalysis a JOIN FETCH a.project WHERE a.qaDocumentationPending = true ORDER BY a.id")
-    java.util.List<CodeAnalysis> findPendingQaDocumentation(org.springframework.data.domain.Pageable page);
+    // Polling must not buffer a batch of saved review payloads just to discover work.
+    @Query("SELECT a.id AS id, a.project.id AS projectId FROM CodeAnalysis a "
+            + "WHERE a.qaDocumentationPending = true ORDER BY a.id")
+    List<PendingQaDocumentation> findPendingQaDocumentation(Pageable page);
 
+    @Query("SELECT a.sourceBranchName FROM CodeAnalysis a WHERE a.id = :id AND a.project.id = :projectId")
+    Optional<String> findSourceBranchForQa(@Param("id") Long id, @Param("projectId") Long projectId);
 
     List<CodeAnalysis> findByProjectIdOrderByCreatedAtDesc(Long projectId);
 
@@ -46,8 +55,15 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
 
     Optional<CodeAnalysis> findByProjectIdAndPrNumberAndPrVersion(Long projectId, Long prNumber, int prVersion);
 
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(Long projectId, String commitHash, Long prNumber) {
+        var analysis = findReviewWithoutIssues(projectId, commitHash, prNumber);
+        // Load the collection separately so large saved source is not repeated for every issue.
+        analysis.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analysis;
+    }
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
             "project",
             "project.workspace",
             "project.vcsBinding",
@@ -58,7 +74,7 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "(SELECT candidate.id FROM CodeAnalysis candidate WHERE candidate.project.id = :projectId " +
             "AND candidate.commitHash = :commitHash AND candidate.prNumber = :prNumber " +
             "ORDER BY candidate.prVersion DESC, candidate.id DESC LIMIT 1)")
-    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(
+    Optional<CodeAnalysis> findReviewWithoutIssues(
             @Param("projectId") Long projectId, @Param("commitHash") String commitHash, @Param("prNumber") Long prNumber);
 
     Optional<CodeAnalysis> findByProjectIdAndCommitHash(Long projectId, String commitHash);
@@ -101,8 +117,15 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     Optional<CodeAnalysis> findFirstByProjectIdAndStatusNotOrderByCreatedAtDescIdDesc(
             Long projectId, AnalysisStatus excludedStatus);
 
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
-    Optional<CodeAnalysis> findByIdAndProjectId(Long id, Long projectId);
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findByIdAndProjectId(Long id, Long projectId) {
+        var analysis = findWithoutIssuesByIdAndProjectId(id, projectId);
+        // Preserve detached callers' initialized issues without a payload-multiplying join.
+        analysis.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analysis;
+    }
+
+    Optional<CodeAnalysis> findWithoutIssuesByIdAndProjectId(Long id, Long projectId);
 
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
             "AND (:branch IS NULL OR ca.branchName = :branch) " +

@@ -685,7 +685,7 @@ public class ProjectController {
                                 installationMethod,
                                 request.maxAnalysisTokenLimit(),
                                 request.useMcpTools(),
-                                request.taskContextAnalysisEnabled());
+                                request.taskContextAnalysisEnabled(), request.reviewChecks());
                 return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
         }
 
@@ -695,7 +695,8 @@ public class ProjectController {
                         String installationMethod,
                         Integer maxAnalysisTokenLimit,
                         Boolean useMcpTools,
-                        Boolean taskContextAnalysisEnabled) {
+                        Boolean taskContextAnalysisEnabled,
+                        java.util.Map<String, Boolean> reviewChecks) {
         }
 
         @GetMapping("/{projectNamespace}/analysis-limits")

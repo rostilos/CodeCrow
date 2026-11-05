@@ -199,6 +199,11 @@ set_image_definition() {
       CONTEXT="."
       DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile${DOCKERFILE_SUFFIX}"
       ;;
+    composer-audit)
+      IMAGE_NAME="codecrow/composer-audit"
+      CONTEXT="analysis-plugins/domains/composer-audit/sandbox"
+      DOCKERFILE="analysis-plugins/domains/composer-audit/sandbox/Dockerfile"
+      ;;
     web-frontend)
       IMAGE_NAME="codecrow/web-frontend"
       CONTEXT="frontend"
@@ -214,6 +219,12 @@ echo "=========================================="
 echo "  CodeCrow CI Build"
 echo "=========================================="
 echo "Selected services: $SELECTED_SERVICES_LABEL"
+if codecrow_includes_service composer-audit "${SELECTED_SERVICES[@]}"; then
+  python3 -m unittest discover -s analysis-plugins/domains/composer-audit/sandbox -p 'test_*.py' -v > "$CI_LOG_DIR/composer-audit-tests.log" 2>&1 || {
+    print_log_tail "$CI_LOG_DIR/composer-audit-tests.log"
+    exit 1
+  }
+fi
 
 # ── 1. Inject .env files from secrets ──────────────────────────────────────
 echo "--- 1. Writing .env files from CI secrets ---"

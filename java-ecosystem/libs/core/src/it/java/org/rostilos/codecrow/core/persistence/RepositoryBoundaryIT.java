@@ -36,7 +36,17 @@ class RepositoryBoundaryIT {
     @SpringBootConfiguration @EnableAutoConfiguration
     @EntityScan("org.rostilos.codecrow.core.model")
     @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class})
-    static class Config {}
+    static class Config {
+        @org.springframework.context.annotation.Bean
+        org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer inspectSql() {
+            return properties -> properties.put("hibernate.session_factory.statement_inspector",
+                    (org.hibernate.resource.jdbc.spi.StatementInspector) sql -> {
+                        if (SQL.get() != null) SQL.get().add(sql);
+                        return sql;
+                    });
+        }
+    }
+    private static final ThreadLocal<java.util.List<String>> SQL = new ThreadLocal<>();
     @Autowired EntityManager em;
     @Autowired JobRepository jobs;
     @Autowired VcsRepoBindingRepository bindings;
@@ -353,6 +363,73 @@ class RepositoryBoundaryIT {
 
 
     @Autowired org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository changeSummaries;
+
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+
+    @ParameterizedTest @ValueSource(booleans = {true, false})
+    void reviewLookupLoadsIssuesWithoutRepeatingTheSavedPayload(boolean byId) {
+        var source = new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> {
+            var project = binding("qa-payload-" + UUID.randomUUID(), "repo", "one", workspace()).getProject();
+            var analysis = new CodeAnalysis(); analysis.setProject(project);
+            analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
+            analysis.setCommitHash("qa-head"); analysis.setPrVersion(1);
+            analysis.setSourceBranchName("feature/QA-1");
+            analysis.setPrChangeSummaryPayload("x".repeat(1_000_000));
+            for (int i = 0; i < 30; i++) {
+                var issue = new CodeAnalysisIssue(); issue.setFilePath("file-" + i + ".java");
+                issue.setSeverity(IssueSeverity.LOW); issue.setReason("test issue");
+                analysis.addIssue(issue);
+            }
+            em.persist(analysis); em.flush();
+            return new Long[] {analysis.getId(), project.getId()};
+        });
+        SQL.set(new java.util.ArrayList<>());
+        try {
+            var loaded = (byId ? changeSummaries.findByIdAndProjectId(source[0], source[1])
+                    : changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "qa-head", 9L))
+                    .orElseThrow();
+            assertThat(loaded.getPrChangeSummaryPayload()).hasSize(1_000_000);
+            assertThat(loaded.getIssues()).as("issues remain available after the repository transaction").hasSize(30);
+            assertThat(SQL.get()).as("the saved payload must not be repeated for each issue row")
+                    .noneMatch(sql -> sql.contains("pr_change_summary_payload") && sql.contains("join code_analysis_issue"));
+            SQL.get().clear();
+            assertThat(changeSummaries.findSourceBranchForQa(source[0], source[1])).contains("feature/QA-1");
+            assertThat(SQL.get()).singleElement().satisfies(sql -> assertThat(sql)
+                    .doesNotContain("pr_change_summary_payload", "code_analysis_issue"));
+            assertThat(changeSummaries.findSourceBranchForQa(source[0], source[1] + 100000)).isEmpty();
+            assertThat(changeSummaries.findByIdAndProjectId(source[0], source[1] + 100000)).isEmpty();
+            assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "other-head", 9L)).isEmpty();
+        } finally { SQL.remove(); }
+    }
+
+    @Test @Transactional void pendingQaDiscoveryDoesNotLoadReviewPayloads() {
+        var owner = binding("qa-owner", "repo", "one", workspace()).getProject();
+        var other = binding("qa-other", "repo", "two", workspace()).getProject();
+        var expected = new java.util.ArrayList<Long>();
+        for (var project : java.util.List.of(owner, other, owner)) {
+            var analysis = new CodeAnalysis(); analysis.setProject(project);
+            analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
+            analysis.setQaDocumentationPending(true);
+            analysis.setPrChangeSummaryPayload("x".repeat(1_000_000));
+            em.persist(analysis); expected.add(analysis.getId());
+        }
+        em.flush(); em.clear();
+
+        var candidates = changeSummaries.findPendingQaDocumentation(PageRequest.of(0, 2));
+        assertThat(candidates).extracting(candidate -> candidate.getId())
+                .containsExactlyElementsOf(expected.subList(0, 2));
+        assertThat(candidates).extracting(candidate -> candidate.getProjectId())
+                .containsExactly(owner.getId(), other.getId());
+        assertThat(em.unwrap(org.hibernate.Session.class).getStatistics().getEntityCount())
+                .as("polling must not hydrate analyses, saved review payloads or project graphs")
+                .isZero();
+        assertThat(changeSummaries.findPendingQaDocumentation(PageRequest.of(1, 2)))
+                .extracting(candidate -> candidate.getId()).containsExactly(expected.get(2));
+        changeSummaries.consumeQaIntent(owner.getId(), expected.get(0));
+        assertThat(changeSummaries.findPendingQaDocumentation(PageRequest.of(0, 2)))
+                .extracting(candidate -> candidate.getId())
+                .containsExactlyElementsOf(expected.subList(1, 3));
+    }
 
     @Test @Transactional void changeSummarySurvivesReloadAndRequiresProjectPrAndRevision() {
         var owner = binding("summary-owner", "repo", "one", workspace()).getProject();

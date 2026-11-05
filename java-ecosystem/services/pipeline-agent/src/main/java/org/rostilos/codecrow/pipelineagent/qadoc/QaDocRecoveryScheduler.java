@@ -46,7 +46,7 @@ public class QaDocRecoveryScheduler {
     @Scheduled(fixedDelay=15000, initialDelay=15000)
     public void recover() {
         for (var analysis : analyses.findPendingQaDocumentation(PageRequest.of(0,50))) {
-            try { queue.enqueue(analysis.getProject().getId(),analysis.getId()); }
+            try { queue.enqueue(analysis.getProjectId(),analysis.getId()); }
             catch (Exception e) { log.warn("QA intent {} remains pending: {}",analysis.getId(),e.getMessage()); }
         }
         var now=OffsetDateTime.now();

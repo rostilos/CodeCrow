@@ -175,6 +175,7 @@ services:
         condition: service_completed_successfully
     networks:
       - codecrow-network
+      - composer-audit-internal
     volumes:
       - source_code_tmp:/tmp
       - pipeline_agent_logs:/app/logs
@@ -302,6 +303,23 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  composer-audit:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-stage-composer-audit:${COMPOSER_AUDIT_IMAGE_TAG:-stage}
+    read_only: true
+    cap_drop: [ALL]
+    # Used only by entrypoint to install the egress firewall and drop to UID 1001.
+    cap_add: [NET_ADMIN, SETUID, SETGID, SETPCAP]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /work:rw,noexec,nosuid,nodev,size=128m,uid=1001,gid=1001,mode=700
+    pids_limit: 32
+    mem_limit: 384m
+    cpus: 1.0
+    networks:
+      - composer-audit-internal
+      - composer-audit-egress
+    restart: unless-stopped
+
   fix-permissions:
     image: busybox
     command: sh -c "chmod 1777 /tmp && chown 1001:1001 /var/lib/codecrow/structural-index"
@@ -346,4 +364,8 @@ volumes:
 
 networks:
   codecrow-network:
+    driver: bridge
+  composer-audit-internal:
+    internal: true
+  composer-audit-egress:
     driver: bridge

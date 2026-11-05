@@ -16,7 +16,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SERVICES = ("web-server", "pipeline-agent", "inference-orchestrator", "rag-pipeline", "web-frontend")
+SERVICES = ("web-server", "pipeline-agent", "inference-orchestrator", "rag-pipeline", "web-frontend", "composer-audit")
 ENV = "POSTGRES_PASSWORD=test-password\nINTERNAL_API_SECRET=test-secret\nPGADMIN_DEFAULT_PASSWORD=test-admin\n"
 DOCKER_STUB = """import json, os, sys
 args = sys.argv[1:]
@@ -81,7 +81,7 @@ class StageDeploymentTests(StageTestCase):
         result = self.run_deploy(MOCK_POSTGRES_RUNNING="true")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set(self.tags().values()), {"stage-test-release"})
-        self.assertEqual(len(self.tags()), 5)
+        self.assertEqual(len(self.tags()), len(SERVICES))
         calls = [call["args"] for call in self.calls()]
         self.assertTrue(any("pg_dump" in " ".join(call) for call in calls))
         self.assertEqual(len(list((self.deploy / "backups").glob("*.sql.gz"))), 1)

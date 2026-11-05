@@ -490,8 +490,10 @@
                     <version>3.2.5</version>
                     <configuration>
                         <useModulePath>false</useModulePath>
+                        <!-- Reactor modules already run in parallel; bound each test JVM's worker pools. -->
                         <argLine>
                             ${argLine}
+                            -XX:ActiveProcessorCount=2
                             -javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
@@ -515,6 +517,7 @@
                         </includes>
                         <argLine>
                             ${argLine}
+                            -XX:ActiveProcessorCount=2
                             -javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
@@ -623,6 +626,7 @@
 
         <module>services/web-server</module>
         <module>services/pipeline-agent</module>
+        <module>integration-tests</module>
 
         <module>mcp-servers/vcs-mcp</module>
         <module>mcp-servers/platform-mcp</module>

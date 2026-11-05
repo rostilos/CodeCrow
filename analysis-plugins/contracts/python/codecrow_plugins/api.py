@@ -29,6 +29,7 @@ class Capability(str, Enum):
     PROMPT = "prompt"
     SYNTAX = "syntax"
     VALIDATION = "validation"
+    REVIEW_CHECK = "review-check"
 
 
 class OutcomeStatus(str, Enum):

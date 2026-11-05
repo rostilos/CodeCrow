@@ -248,6 +248,26 @@ class PullRequestAnalysisProcessorTest {
                         when(codeAnalysis.getId()).thenReturn(100L);
                 }
 
+                @ParameterizedTest
+                @EnumSource(EVcsProvider.class)
+                void persistsOptionalSecurityFindingsWithoutAnotherInferenceCall(EVcsProvider provider) throws Exception {
+                        var response = Map.<String, Object>of("comment", "review", "issues", List.of());
+                        stubReviewThroughAi(response, provider);
+                        stubPersistedUsageResult();
+                        var checks = mock(org.rostilos.codecrow.analysisengine.service.ReviewCheckService.class);
+                        ReflectionTestUtils.setField(processor, "reviewCheckService", checks);
+                        var finding = Map.of("file", "composer.lock", "category", "SECURITY", "severity", "HIGH", "title", "dependency advisory");
+                        when(checks.enrich(eq(project), eq(aiAnalysisRequest), eq(response), any()))
+                                .thenReturn(Map.of("comment", "review", "issues", List.of(finding)));
+                        processor.process(createRequest(), ignored -> {}, project);
+                        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+                        verify(codeAnalysisService).createAnalysisFromAiResponse(any(), payload.capture(), anyLong(), anyString(),
+                                anyString(), anyString(), any(), any(), any(), any(), any(), any());
+                        assertThat(payload.getValue().get("issues")).isEqualTo(List.of(finding));
+                        verify(aiAnalysisClient, times(1)).performAnalysis(any(), any());
+                        verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), anyLong(), any(), any());
+                }
+
                 @Test
                 void persistsHostReviewSourcesAndPublishesTheExactAnalysisId() throws Exception {
                         var response = Map.<String, Object>of("comment", "review", "issues", List.of());

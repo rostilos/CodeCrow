@@ -84,7 +84,7 @@ public interface IProjectService {
                         Boolean branchAnalysisEnabled, InstallationMethod installationMethod,
                         Integer maxAnalysisTokenLimit,
                         Boolean useMcpTools,
-                        Boolean taskContextAnalysisEnabled);
+                        Boolean taskContextAnalysisEnabled, java.util.Map<String, Boolean> reviewChecks);
 
         Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId);
 

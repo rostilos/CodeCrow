@@ -198,6 +198,7 @@ def test_hyva_detection_is_dependency_stable_and_evidence_based():
 
     assert diagnostics == ()
     assert capabilities.repository_plugins == (
+        "composer-audit",
         "json",
         "php",
         "magento",

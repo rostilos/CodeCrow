@@ -455,6 +455,18 @@ public class GitLabClient implements VcsClient {
     }
     
     @Override
+    public String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        String url = api.projectUrl(workspaceId, repoIdOrSlug) + "/repository/merge_base?refs[]="
+                + api.encode(baseCommit) + "&refs[]=" + api.encode(headCommit);
+        try (Response response = api.execute(api.get(url))) {
+            if (!response.isSuccessful() || response.body() == null) throw new IOException("Merge-base lookup failed");
+            String hash = api.objectMapper().readTree(response.body().string()).path("id").asText(null);
+            if (hash == null || hash.isBlank()) throw new IOException("Merge-base revision is unavailable");
+            return hash;
+        }
+    }
+
+    @Override
     public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
         String url = api.projectUrl(workspaceId, repoIdOrSlug)
                 + "/repository/files/" + api.encode(filePath)

@@ -155,6 +155,11 @@ public interface VcsClient {
      */
     String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException;
 
+    /** Resolve the common ancestor of two pinned revisions; unavailable is not an empty repository. */
+    default String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        throw new IOException("Merge-base lookup is unavailable for this provider");
+    }
+
     /**
      * List every regular repository file at a pinned commit snapshot.
      * Symbolic links and submodule/subrepository entries are not regular

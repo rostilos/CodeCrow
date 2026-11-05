@@ -63,6 +63,15 @@ class ProjectServiceAnalysisSettingsTest {
         assertThat(updated.getConfiguration().useMcpTools()).isFalse();
     }
 
+    @Test
+    void reviewCheckOptOutPersistsAndSurvivesOtherSettingsUpdates() {
+        projectService.updateAnalysisSettings(10L, 20L, null, null, null, null, null, null,
+                java.util.Map.of("composer-audit", false));
+        assertThat(project.getConfiguration().reviewChecks()).containsEntry("composer-audit", false);
+        updateMcpSetting(false);
+        assertThat(project.getConfiguration().reviewChecks()).containsEntry("composer-audit", false);
+    }
+
     private Project updateMcpSetting(Boolean useMcpTools) {
         return projectService.updateAnalysisSettings(
                 10L,
@@ -72,6 +81,6 @@ class ProjectServiceAnalysisSettingsTest {
                 null,
                 null,
                 useMcpTools,
-                null);
+                null, null);
     }
 }

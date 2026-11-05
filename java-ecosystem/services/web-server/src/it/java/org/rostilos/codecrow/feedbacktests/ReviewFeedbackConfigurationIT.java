@@ -123,7 +123,7 @@ class ReviewFeedbackConfigurationIT {
             Future<?> change = pool.submit(() -> transactions.executeWithoutResult(status -> {
                 em.find(Project.class, projectId); // Simulate a cached entity from authorization earlier in the request.
                 loaded.countDown(); await(promoted);
-                projectService.updateAnalysisSettings(workspaceId,projectId,null,null,null,null,false,null);
+                projectService.updateAnalysisSettings(workspaceId,projectId,null,null,null,null,false,null,null);
             }));
             assertThat(loaded.await(10,TimeUnit.SECONDS)).isTrue();
             feedback.promote(workspaceSlug,"repo",ruleId,null,owner); promoted.countDown(); change.get(15,TimeUnit.SECONDS);

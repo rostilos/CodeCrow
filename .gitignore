@@ -68,6 +68,7 @@ tools/magento_benchmark/work/
 /deployment/config/java-shared/application.properties
 /deployment/config/java-shared/github-private-key/*.pem
 .ci-logs/
+.work/
 
 
 # Local review capture artifacts contain repository source.
