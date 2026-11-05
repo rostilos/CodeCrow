@@ -157,6 +157,43 @@ class QaDocCommandProcessorTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.EnumSource(EVcsProvider.class)
+    void recoverableFormattingKeepsThePublicPreviewWithoutAnotherGeneration(EVcsProvider provider) throws IOException {
+        setupHappyPath();
+        String guide = GENERATED_QA_DOC.replace("<!-- codecrow-test-cases:content -->", "")
+                .replace("<!-- codecrow-environment:content -->", "")
+                .replace("**Reject an invalid password** (HIGH)", "1. **Reject an invalid password (HIGH)**")
+                .replace("<!-- codecrow-", "<!--CODECROW-");
+        var saved = new QaDocDocument(project, 7L);
+        saved.replaceContent(TASK_ID, null, "abc123", guide); saved.setId(701L);
+        when(qaDocDocumentService.upsertLatestDocument(any(), anyLong(), anyString(), any(), any(), eq(guide)))
+                .thenReturn(saved);
+        when(qaDocGenerationService.generateQaDocumentation(any(), anyLong(), anyInt(), anyInt(), anyMap(), any()))
+                .thenReturn(guide);
+        var shares = mock(org.rostilos.codecrow.publicshare.service.PublicShareLinkService.class);
+        when(shares.issue(anyString(), anyString())).thenReturn(
+                new org.rostilos.codecrow.publicshare.api.IssuedPublicShare("ccs_format-test"));
+        var settings = mock(org.rostilos.codecrow.core.service.SiteSettingsProvider.class);
+        when(settings.getBaseUrlSettings()).thenReturn(new org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO(
+                "https://api.example", "https://app.example/", "https://hooks.example"));
+        ReflectionTestUtils.setField(processor, "qaDocPublicPreviewService", new QaDocPublicPreviewService(shares, settings));
+        var payload = new WebhookPayload(provider, "qa_documentation", "repo-id", "my-repo", "my-org",
+                PR_ID, "feature/PROJ-123", "main", "abc123", null);
+
+        assertThat(processor.process(payload, project, eventConsumer, Map.of()).success()).isTrue();
+
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), any());
+        verify(qaDocDocumentService).upsertLatestDocument(eq(project), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(guide));
+        var comment = ArgumentCaptor.forClass(String.class);
+        verify(taskManagementClient).postComment(eq(TASK_ID), comment.capture());
+        assertThat(comment.getValue()).contains("/share#token=ccs_format-test&tab=test-cases", "&tab=environment")
+                .doesNotContain("Test steps here", "No special setup is required.", "sign-in required");
+        assertThat(capturedEvents).noneMatch(event -> "qa_preview_unavailable".equals(event.get("state")));
+        verify(shares).issue(anyString(), anyString());
+        verify(qaDocStateRepository).save(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(EVcsProvider.class)
     void unmarkedGuideIsSavedAndDeliveredPrivatelyWithoutAnotherGeneration(EVcsProvider provider) throws IOException {
         setupHappyPath();
         String guide = "# QA guide\n\n**Check login** (HIGH)\nVerify invalid passwords show an error.";

@@ -1548,7 +1548,19 @@ class QaDocOrchestrator(BaseOrchestrator):
         documentation: str,
         placeholders: Dict[str, str],
     ) -> str:
-        """Normalize known formatting without discarding an already generated guide."""
+        """Render explicit sections and normalize formatting without another model call."""
+        original = documentation
+        candidate = documentation.strip()
+        fence = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", candidate, re.DOTALL | re.IGNORECASE)
+        if fence:
+            candidate = fence[1]
+        try:
+            structured = json.loads(candidate, strict=False)
+        except (ValueError, TypeError):
+            structured = None
+        if isinstance(structured, dict) and isinstance(structured.get("sections"), list):
+            documentation = self._render_document_sections(structured["sections"]) or documentation
+        documentation = self._normalize_section_markers(documentation)
         documentation = self._normalize_scenario_priorities(documentation)
         if not self._has_complete_shareable_sections(documentation):
             message = (
@@ -1557,7 +1569,60 @@ class QaDocOrchestrator(BaseOrchestrator):
             )
             logger.warning(message)
             emit_status(self.event_callback, "qa_preview_unavailable", message)
+        elif documentation != original:
+            emit_status(self.event_callback, "qa_format_normalized", "QA sections formatted locally for preview.")
         return documentation
+
+    @staticmethod
+    def _render_document_sections(sections: list) -> Optional[str]:
+        """Only explicit section kinds authorize boundaries; never infer them from headings."""
+        markers = {"test_cases": TEST_CASE_SENTINELS, "environment": ENVIRONMENT_SENTINELS}
+        parts = []
+        shareable = {}
+        for section in sections:
+            if (not isinstance(section, dict)
+                    or not isinstance(section.get("kind"), str)
+                    or section.get("kind") not in {"overview", *markers}
+                    or not isinstance(section.get("content"), str)
+                    or not isinstance(section.get("heading", ""), str)):
+                return None  # Keep the original response rather than silently losing unknown content.
+            content = section["content"].strip()
+            heading = section.get("heading", "").strip()
+            if "\n" in heading or "\r" in heading:
+                return None
+            if not content and not heading:
+                continue
+            kind = section["kind"]
+            if not heading and kind in markers:
+                heading = "Test scenarios" if kind == "test_cases" else "Environment and setup"
+            if heading and not heading.startswith("#"):
+                heading = "## " + heading
+            if kind in markers:
+                if kind in shareable:
+                    shareable[kind]["content"] += f"\n\n{heading}\n\n{content}"
+                else:
+                    shareable[kind] = {"kind": kind, "heading": heading, "content": content}
+                    parts.append(shareable[kind])
+            else:
+                parts.append("\n\n".join(part for part in (heading, content) if part))
+        rendered = []
+        for part in parts:
+            if isinstance(part, str):
+                rendered.append(part)
+            else:
+                start, body, end = markers[part["kind"]]
+                rendered.append(f"{start}\n{part['heading']}\n{body}\n{part['content']}\n{end}")
+        return "\n\n".join(rendered) or None
+
+    @staticmethod
+    def _normalize_section_markers(documentation: str) -> str:
+        documentation = documentation.replace("\r\n", "\n").replace("\r", "\n")
+        return re.sub(
+            r"(?mi)^[ \t]*<!--[ \t]*codecrow-(test-cases|environment)[ \t]*:[ \t]*"
+            r"(start|content|end)[ \t]*-->[ \t]*$",
+            lambda match: f"<!-- codecrow-{match[1].lower()}:{match[2].lower()} -->",
+            documentation,
+        )
 
     @classmethod
     def _normalize_scenario_priorities(cls, documentation: str) -> str:
@@ -1565,11 +1630,20 @@ class QaDocOrchestrator(BaseOrchestrator):
         if section is None:
             return documentation
         start, end, _, _ = section
-        # Models sometimes bold the priority too; Java extracts it outside the title.
-        normalized = re.sub(
-            r"(?m)^([ \t]*)\*\*([^\n]+?) +\((HIGH|MEDIUM|LOW)\)\*\*([ \t]*)$",
-            r"\1**\2** (\3)\4",
+        # Normalize presentation only inside explicit test boundaries.
+        section_text = re.sub(
+            r"(?mi)^([ \t]*)(?:[-*+]|\d+[.)]|#{1,6})[ \t]+"
+            r"(?=\*\*[^\n]+\((?:HIGH|MEDIUM|LOW)\)(?:\*\*)?[ \t]*$)", r"\1",
             documentation[start:end],
+        )
+        normalized = re.sub(
+            r"(?mi)^([ \t]*)\*\*([^\n]+?) +\((HIGH|MEDIUM|LOW)\)\*\*([ \t]*)$",
+            r"\1**\2** (\3)\4",
+            section_text,
+        )
+        normalized = re.sub(
+            r"(?mi)^[ \t]*#{1,6}[ \t]+(.+?)[ \t]+\((HIGH|MEDIUM|LOW)\)[ \t]*$",
+            r"**\1** (\2)", normalized,
         )
         return documentation[:start] + normalized + documentation[end:]
 
@@ -1577,12 +1651,9 @@ class QaDocOrchestrator(BaseOrchestrator):
     def _has_complete_shareable_sections(cls, documentation: Optional[str]) -> bool:
         test_cases = cls._extract_sentinel_section(documentation, TEST_CASE_SENTINELS)
         environment = cls._extract_sentinel_section(documentation, ENVIRONMENT_SENTINELS)
-        if test_cases is None or environment is None or test_cases[1] > environment[0]:
+        if test_cases is None or environment is None:
             return False
-        return re.search(
-            r"(?mi)^\s*\*\*.+?\*\*\s*\((?:HIGH|MEDIUM|LOW)\)",
-            test_cases[3],
-        ) is not None
+        return test_cases[1] <= environment[0] or environment[1] <= test_cases[0]
 
     @classmethod
     def _contains_extractable_test_cases(cls, documentation: Optional[str]) -> bool:
@@ -1599,21 +1670,26 @@ class QaDocOrchestrator(BaseOrchestrator):
         documentation: Optional[str],
         sentinels: tuple[str, str, str],
     ) -> Optional[tuple[int, int, str, str]]:
-        """Extract one exact sentinel block without interpreting its localized heading."""
+        """Recover a missing content divider only within explicit start/end boundaries."""
         if not documentation:
             return None
         start_marker, content_marker, end_marker = sentinels
-        if any(documentation.count(marker) != 1 for marker in sentinels):
+        if (documentation.count(start_marker) != 1 or documentation.count(end_marker) != 1
+                or documentation.count(content_marker) > 1):
             return None
 
         start = documentation.find(start_marker)
-        content_start = documentation.find(content_marker, start + len(start_marker))
-        end = documentation.find(end_marker, content_start + len(content_marker))
-        if start < 0 or content_start < 0 or end < 0:
+        end = documentation.find(end_marker)
+        if end <= start:
             return None
-
-        heading = documentation[start + len(start_marker):content_start].strip()
-        content = documentation[content_start + len(content_marker):end].strip()
+        body = documentation[start + len(start_marker):end].strip()
+        if documentation.count(content_marker) == 1:
+            if content_marker not in body:
+                return None
+            heading, content = body.split(content_marker, 1)
+        else:
+            heading, _, content = body.partition("\n")
+        heading, content = heading.strip(), content.strip()
         if not heading.startswith("#") or "\n" in heading or not content:
             return None
         return start, end + len(end_marker), heading, content

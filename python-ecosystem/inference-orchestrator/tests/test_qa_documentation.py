@@ -22,6 +22,7 @@ from service.qa_documentation.base_orchestrator import (
 from utils.prompts.constants_qa_doc import (
     QA_DOC_ANALYSIS_SYSTEM_PROMPT,
     QA_DOC_CUSTOM_PROMPT,
+    QA_DOC_SYSTEM_PROMPT,
 )
 
 
@@ -313,15 +314,14 @@ class TestIndependentTestCases:
         assert orchestrator._has_complete_shareable_sections(normalized)
         llm.ainvoke.assert_not_awaited()
 
-    def test_custom_template_requires_both_exact_sentinel_blocks(self):
+    def test_custom_template_keeps_explicit_sections_in_the_shared_response_contract(self):
         assert "custom template MUST NOT remove test cases" in QA_DOC_CUSTOM_PROMPT
-        assert "<!-- codecrow-test-cases:start -->" in QA_DOC_CUSTOM_PROMPT
-        assert "<!-- codecrow-test-cases:content -->" in QA_DOC_CUSTOM_PROMPT
-        assert "<!-- codecrow-test-cases:end -->" in QA_DOC_CUSTOM_PROMPT
-        assert "<!-- codecrow-environment:start -->" in QA_DOC_CUSTOM_PROMPT
-        assert "<!-- codecrow-environment:content -->" in QA_DOC_CUSTOM_PROMPT
-        assert "<!-- codecrow-environment:end -->" in QA_DOC_CUSTOM_PROMPT
+        assert "`test_cases` section" in QA_DOC_CUSTOM_PROMPT
+        assert "`environment` section" in QA_DOC_CUSTOM_PROMPT
         assert "do not render a duplicate" in QA_DOC_CUSTOM_PROMPT
+        assert "Return one JSON object with a `sections` array" in QA_DOC_SYSTEM_PROMPT
+        assert "Never translate JSON keys" in QA_DOC_SYSTEM_PROMPT
+        assert "<!-- codecrow-" not in QA_DOC_SYSTEM_PROMPT + QA_DOC_CUSTOM_PROMPT
 
     def test_detects_only_marked_structured_scenarios(self):
         valid = """

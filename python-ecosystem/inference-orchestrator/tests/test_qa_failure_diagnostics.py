@@ -1,5 +1,6 @@
 """QA failures remain attributable and cannot restart uncertain paid work."""
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -62,8 +63,15 @@ def run_args():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["BASE", "RAW", "CUSTOM"])
-async def test_usable_unmarked_document_returns_success_without_paid_format_repair(monkeypatch, caplog, mode):
+@pytest.mark.parametrize("structured", [False, True])
+async def test_document_returns_success_without_paid_format_repair(monkeypatch, caplog, mode, structured):
     document = "# QA guide\n\n## Checkout\n**Place an order** (HIGH)\nVerify the order appears after payment."
+    if structured:
+        document = json.dumps({"sections": [
+            {"kind": "overview", "heading": "# QA guide", "content": "Checkout now supports saved cards."},
+            {"kind": "test_cases", "heading": "Checkout", "content": "**Place an order** (HIGH)\nVerify the order appears after payment."},
+            {"kind": "environment", "heading": "Setup", "content": "Use the QA payment account."},
+        ]})
     llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
         SimpleNamespace(content="YES"), SimpleNamespace(content=document),
     ]))
@@ -85,10 +93,17 @@ async def test_usable_unmarked_document_returns_success_without_paid_format_repa
 
     assert response.status_code == 200, response.text
     assert response.json()["documentation_needed"] is True
-    assert response.json()["documentation"].startswith(document)
+    result = response.json()["documentation"]
+    if structured:
+        assert QaDocOrchestrator._has_complete_shareable_sections(result)
+        assert "Verify the order appears after payment." in result
+        assert "Use the QA payment account." in result
+        assert "public preview unavailable" not in caplog.text
+    else:
+        assert result.startswith(document)
+        assert "public preview unavailable" in caplog.text
     assert response.json()["template_mode_used"] == mode
     assert llm.ainvoke.await_count == 2  # Relevance and generation only.
-    assert "public preview unavailable" in caplog.text
 
 
 @pytest.mark.asyncio
