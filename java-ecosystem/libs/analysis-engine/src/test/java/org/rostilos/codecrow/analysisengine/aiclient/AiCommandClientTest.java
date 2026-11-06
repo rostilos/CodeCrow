@@ -27,6 +27,16 @@ import static org.mockito.Mockito.*;
 @DisplayName("AiCommandClient")
 class AiCommandClientTest {
 
+        @Test
+        void lostCallerLeaseStopsCommandWithoutResubmission() {
+                when(queueService.renewJobLease(anyString())).thenReturn(false);
+                assertThatThrownBy(() -> client.ask(createAskRequest(), null))
+                        .isInstanceOf(IOException.class).hasMessageContaining("caller lease expired");
+                verify(queueService, times(1)).leftPush(eq("codecrow:queue:commands"), anyString());
+                verify(queueService, never()).rightPop(anyString(), anyLong());
+                verify(queueService).deleteKey(startsWith(RedisQueueService.JOB_OWNER_KEY_PREFIX));
+        }
+
         @Mock
         private RedisQueueService queueService;
 
@@ -35,6 +45,7 @@ class AiCommandClientTest {
 
         @BeforeEach
         void setUp() {
+                lenient().when(queueService.renewJobLease(anyString())).thenReturn(true);
                 objectMapper = new ObjectMapper();
                 client = new AiCommandClient(queueService, objectMapper);
                 lenient().when(queueService.hasKey(AiCommandClient.CONSUMER_HEARTBEAT_KEY))
@@ -62,25 +73,15 @@ class AiCommandClientTest {
         }
 
         private AiCommandClient.SummarizeRequest createSummarizeRequest() {
-                return new AiCommandClient.SummarizeRequest(
-                                1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                                "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
-                                "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket", null);
+                return new AiCommandClient.SummarizeRequest(1L, "workspace", "repo-slug", "project-workspace", "namespace", "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123", "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket", null, null, null, null);
         }
 
         private AiCommandClient.AskRequest createAskRequest() {
-                return new AiCommandClient.AskRequest(
-                                1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                                "openai", "gpt-4", "api-key", null, "What is this code doing?",
-                                42L, "abc123", "oauth-client", "oauth-secret", "access-token",
-                                4096, "bitbucket", null, null, null);
+                return new AiCommandClient.AskRequest(1L, "workspace", "repo-slug", "project-workspace", "namespace", "openai", "gpt-4", "api-key", null, "What is this code doing?", 42L, "main", "abc123", "manifest", "collection", "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket", null, null, null, null, null);
         }
 
         private AiCommandClient.ReviewRequest createReviewRequest() {
-                return new AiCommandClient.ReviewRequest(
-                                1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                                "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
-                                "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket", null);
+                return new AiCommandClient.ReviewRequest(1L, "workspace", "repo-slug", "project-workspace", "namespace", "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123", "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket", null, null, null);
         }
 
         @Nested
@@ -110,7 +111,8 @@ class AiCommandClientTest {
                         verify(queueService).removeFromList(
                                         eq("codecrow:queue:commands"), anyString());
                         verify(queueService).setExpiry(anyString(), anyLong());
-                        verify(queueService).deleteKey(anyString());
+                        verify(queueService).deleteKey(startsWith("codecrow:inference:owner:"));
+                        verify(queueService).deleteKey(startsWith("codecrow:analysis:events:"));
                 }
 
                 @Test

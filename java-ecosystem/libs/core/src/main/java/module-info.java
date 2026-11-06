@@ -168,4 +168,13 @@ module org.rostilos.codecrow.core {
             to spring.core, spring.beans, spring.context;
 
     exports org.rostilos.codecrow.core.service.qadoc;
+    exports org.rostilos.codecrow.core.model.reviewcheck;
+    exports org.rostilos.codecrow.core.persistence.repository.reviewcheck;
+    exports org.rostilos.codecrow.core.service.reviewcheck;
+    opens org.rostilos.codecrow.core.model.reviewcheck
+            to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    opens org.rostilos.codecrow.core.persistence.repository.reviewcheck
+            to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.core.service.reviewcheck
+            to spring.core, spring.beans, spring.context;
 }

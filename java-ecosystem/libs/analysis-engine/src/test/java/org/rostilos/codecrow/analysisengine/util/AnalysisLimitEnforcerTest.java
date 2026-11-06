@@ -20,6 +20,15 @@ class AnalysisLimitEnforcerTest {
     private final AnalysisLimitEnforcer enforcer = new AnalysisLimitEnforcer();
 
     @Test
+    void largeDiffUsesDownstreamBatchingWhenNoSpendingLimitIsConfigured() {
+        Project project = projectWithLimits(AnalysisLimitsConfig.empty(), AnalysisLimitsConfig.empty());
+        String diff = "diff --git a/large.ipynb b/large.ipynb\n--- a/large.ipynb\n+++ b/large.ipynb\n"
+                + "@@ -1 +1 @@\n-old\n+" + "x".repeat(5_471_392) + "\n";
+        assertThatCode(() -> enforcer.enforce(project, 42L, diff)).doesNotThrowAnyException();
+        assertThat(enforcer.effectiveLimits(project)).isEqualTo(AnalysisLimitsConfig.empty());
+    }
+
+    @Test
     void projectOverridesWorkspaceAndDeploymentLimits() {
         Project project = projectWithLimits(
                 new AnalysisLimitsConfig(10, 2_000L, 5_000L, 2_000),

@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp.gitlab;
 
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
+import org.rostilos.codecrow.mcp.generic.McpCredentialSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,7 +14,7 @@ public class GitLabClientFactory {
 
     public GitLabMcpClientImpl createClient() {
         // Use the same property names as other providers for consistency
-        String accessToken = System.getProperty("accessToken");
+        String accessToken = McpCredentialSource.accessToken();
         String namespace = System.getProperty("workspace");  // GitLab uses namespace, but we receive workspace
         String project = System.getProperty("repo.slug");
         String mrIid = System.getProperty("pullRequest.id");  // MR IID in GitLab
@@ -35,10 +36,11 @@ public class GitLabClientFactory {
 
         LOGGER.info("Created GitLab MCP client for {}/{} on {}",
                 namespace, project, configuration.getBaseUrl());
-        GitLabClient gitLabClient =
-                org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory
-                        .createWithAccessToken(
-                                accessToken, configuration.getBaseUrl());
+        GitLabClient gitLabClient = new GitLabClient(
+                org.rostilos.codecrow.mcp.generic.McpRateLimitTransport.observe(
+                        org.rostilos.codecrow.vcsclient.gitlab.GitLabClientFactory.createAuthorizedHttpClient(accessToken),
+                        java.net.URI.create(configuration.getBaseUrl()).getHost(), accessToken),
+                configuration.getBaseUrl());
         return new GitLabMcpClientImpl(gitLabClient, configuration, fileLimit);
     }
 }

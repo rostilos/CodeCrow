@@ -21,6 +21,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("JiraCloudClient")
 class JiraCloudClientTest {
 
+    @Test
+    void lostResponseAfterPostingDoesNotCreateAnotherComment() {
+        server.enqueue(new MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST));
+        server.enqueue(new MockResponse().setResponseCode(500));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> client.postComment("PROJ-123", "QA guide"))
+                .isInstanceOf(IOException.class);
+        assertThat(server.getRequestCount()).isEqualTo(1);
+    }
+
     private final ObjectMapper mapper = new ObjectMapper();
     private MockWebServer server;
     private JiraCloudClient client;

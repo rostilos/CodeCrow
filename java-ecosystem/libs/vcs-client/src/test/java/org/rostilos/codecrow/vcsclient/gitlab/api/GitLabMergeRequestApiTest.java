@@ -17,6 +17,24 @@ class GitLabMergeRequestApiTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Test
+    void markerLookupReadsLaterPagesAndPropagatesUnavailableConversation() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(jsonResponse(OBJECT_MAPPER.writeValueAsString(java.util.Collections.nCopies(100,
+                    java.util.Map.of("id", 1, "body", "human comment")))));
+            gitLab.enqueue(jsonResponse("[{\"id\":700,\"body\":\"<!-- codecrow-review-checks -->\"}]"));
+            gitLab.enqueue(new MockResponse().setResponseCode(503));
+            gitLab.start();
+            var api = new GitLabMergeRequestApi(new GitLabApiContext(new OkHttpClient(), gitLab.url("/").toString()));
+            assertThat(api.findNoteByMarker("team", "repo", 17, "<!-- codecrow-review-checks -->")).isEqualTo(700L);
+            assertThatThrownBy(() -> api.findNoteByMarker("team", "repo", 17, "<!-- codecrow-review-checks -->"))
+                    .isInstanceOf(IOException.class);
+            assertThat(gitLab.getRequestCount()).isEqualTo(3);
+            gitLab.takeRequest();
+            assertThat(gitLab.takeRequest().getRequestUrl().queryParameter("page")).isEqualTo("2");
+        }
+    }
+
+    @Test
     void metadataAndCommentsUseOneConfiguredContext() throws Exception {
         try (MockWebServer gitLab = new MockWebServer()) {
             gitLab.enqueue(jsonResponse("""
@@ -50,7 +68,7 @@ class GitLabMergeRequestApiTest {
                     .contains("Review body");
             assertThat(gitLab.takeRequest().getPath())
                     .isEqualTo("/gitlab/api/v4/projects/team%2Frepo"
-                            + "/merge_requests/17/notes?per_page=100");
+                            + "/merge_requests/17/notes?per_page=100&page=1");
         }
     }
 
@@ -135,4 +153,17 @@ class GitLabMergeRequestApiTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody(body);
     }
+
+    @Test void deletedSourceCommentUsesOnlyOldLine() throws Exception {
+        try (MockWebServer server=new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(201).setBody("{}")); server.start();
+            var api=new GitLabMergeRequestApi(new GitLabApiContext(new OkHttpClient(),server.url("/").toString()));
+            api.postLineComment("team","repo",17,"Finding","base","head","start","deleted.java",10,
+                    org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+            JsonNode position=OBJECT_MAPPER.readTree(server.takeRequest().getBody().readUtf8()).path("position");
+            assertThat(position.path("old_line").asInt()).isEqualTo(10);
+            assertThat(position.has("new_line")).isFalse();
+        }
+    }
+
 }

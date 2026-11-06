@@ -70,7 +70,8 @@ public class PipelineActionProcessor {
             Job job
     ) throws GeneralSecurityException {
 
-        try {
+        try (var vcsContext = new org.rostilos.codecrow.vcsclient.VcsRequestContext(
+                request.getProjectId(), job == null ? null : job.getExternalId().toString(), "pipeline")) {
             Project project = projectService.getProjectWithConnections(request.getProjectId());
             boolean dependenciesGated = job != null;
             if (dependenciesGated) {

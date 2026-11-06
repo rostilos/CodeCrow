@@ -66,6 +66,7 @@ class GetPullRequestActionTest {
         assertThat(result).isNotNull();
         assertThat(result.get("number").asInt()).isEqualTo(123);
         assertThat(result.get("title").asText()).isEqualTo("Test PR");
+        assertThat(result.path("base").path("sha").asText()).isEqualTo("def456");
         verify(response).close();
     }
 

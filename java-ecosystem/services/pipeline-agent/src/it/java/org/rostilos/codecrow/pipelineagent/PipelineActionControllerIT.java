@@ -3,10 +3,20 @@ package org.rostilos.codecrow.pipelineagent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.rostilos.codecrow.core.model.job.JobStatus;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
+import org.rostilos.codecrow.core.model.job.JobType;
+import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
+import org.rostilos.codecrow.core.service.JobService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
+
+import java.time.Duration;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Integration tests for ProviderPipelineActionController.
@@ -16,6 +26,31 @@ import static org.hamcrest.Matchers.*;
  */
 @TestPropertySource(properties = "codecrow.pipeline.streaming-response.enabled=false")
 class PipelineActionControllerIT extends BasePipelineAgentIT {
+
+    @Autowired
+    private JobRepository jobRepository;
+
+    @Autowired
+    private JobService jobService;
+
+    private void assertDurableAcceptedJob(String jobId, Long projectId, JobType type,
+                                         String commitHash) throws Exception {
+        var job = jobRepository.findByExternalId(jobId).orElseThrow();
+        assertThat(job.getProject().getId()).isEqualTo(projectId);
+        assertThat(job.getJobType()).isEqualTo(type);
+        assertThat(job.getTriggerSource()).isEqualTo(JobTriggerSource.PIPELINE);
+        assertThat(job.getCommitHash()).isEqualTo(commitHash);
+        var payload = objectMapper.readTree(jobService.findWebhookDispatchPayload(job.getId()).orElseThrow());
+        assertThat(payload.path("projectId").asLong()).isEqualTo(projectId);
+        assertThat(payload.path("commitHash").asText()).isEqualTo(commitHash);
+        assertThat(payload.path("targetBranchName").asText()).isEqualTo("main");
+        // These projects have no VCS connection. The accepted worker must still
+        // finish observably, rather than leave an init-only job or leak work
+        // into the next test's database cleanup.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(jobRepository.findById(job.getId()).orElseThrow().getStatus())
+                        .isIn(JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED));
+    }
 
     @Nested
     @DisplayName("POST /api/processing/webhook/pr")
@@ -72,7 +107,9 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                         "projectId": 99999,
                         "pullRequestId": 42,
                         "sourceBranchName": "feature/test",
-                        "targetBranchName": "main"
+                        "targetBranchName": "main",
+                        "commitHash": "abc123def456",
+                        "analysisType": "PR_REVIEW"
                     }
                     """)
             .when()
@@ -93,21 +130,25 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                         "projectId": 99999,
                         "pullRequestId": 42,
                         "sourceBranchName": "feature/test",
-                        "targetBranchName": "main"
+                        "targetBranchName": "main",
+                        "commitHash": "abc123def456",
+                        "analysisType": "PR_REVIEW"
                     }
                     """)
             .when()
                 .post("/api/processing/webhook/pr")
             .then()
                 .statusCode(401);
+
+            assertThat(jobRepository.count()).isZero();
         }
 
         @Test
-        @DisplayName("PR processing — valid auth, valid project — accepted or processes")
-        void prProcessing_validAuth_accepted() {
+        @DisplayName("PR processing — valid auth — 202 with durable dispatch")
+        void prProcessing_validAuth_accepted() throws Exception {
             Long projectId = createTestProject("pr-valid-ns", "Valid PR Project");
 
-            projectAuthRequest(projectId)
+            String jobId = projectAuthRequest(projectId)
                 .body("""
                     {
                         "projectId": %d,
@@ -123,9 +164,12 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
             .when()
                 .post("/api/processing/webhook/pr")
             .then()
-                // The endpoint returns streaming NDJSON; may succeed or fail
-                // depending on external service availability, but auth should pass
-                .statusCode(anyOf(is(200), is(500)));
+                .statusCode(202)
+                .body("status", equalTo("accepted"))
+                .body("jobId", not(emptyOrNullString()))
+                .extract().path("jobId");
+
+            assertDurableAcceptedJob(jobId, projectId, JobType.PR_ANALYSIS, "abc123def456");
         }
     }
 
@@ -186,11 +230,11 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
         }
 
         @Test
-        @DisplayName("Branch processing — valid auth — accepted or processes")
-        void branchProcessing_validAuth_accepted() {
+        @DisplayName("Branch processing — valid auth — 202 with durable dispatch")
+        void branchProcessing_validAuth_accepted() throws Exception {
             Long projectId = createTestProject("branch-valid-ns", "Valid Branch Project");
 
-            projectAuthRequest(projectId)
+            String jobId = projectAuthRequest(projectId)
                 .body("""
                     {
                         "projectId": %d,
@@ -202,7 +246,12 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
             .when()
                 .post("/api/processing/webhook/branch")
             .then()
-                .statusCode(anyOf(is(200), is(500)));
+                .statusCode(202)
+                .body("status", equalTo("accepted"))
+                .body("jobId", not(emptyOrNullString()))
+                .extract().path("jobId");
+
+            assertDurableAcceptedJob(jobId, projectId, JobType.BRANCH_ANALYSIS, "def456abc789");
         }
     }
 }

@@ -17,7 +17,6 @@ import java.util.Optional;
 @Repository
 public interface VcsRepoBindingRepository extends JpaRepository<VcsRepoBinding, Long> {
 
-    Optional<VcsRepoBinding> findByProviderAndExternalRepoId(EVcsProvider provider, String externalRepoId);
 
     Optional<VcsRepoBinding> findByProject_Id(Long projectId);
 
@@ -27,25 +26,22 @@ public interface VcsRepoBindingRepository extends JpaRepository<VcsRepoBinding, 
 
     List<VcsRepoBinding> findByWorkspace_IdAndProvider(Long workspaceId, EVcsProvider provider);
 
-    boolean existsByProviderAndExternalRepoId(EVcsProvider provider, String externalRepoId);
+    boolean existsByWorkspace_IdAndVcsConnection_IdAndExternalRepoId(
+            Long workspaceId, Long connectionId, String externalRepoId);
 
+    // Candidate discovery is not authorization. The caller must authenticate
+    // against each binding's project before selecting a unique recipient.
     @Query("SELECT b FROM VcsRepoBinding b " +
-           "LEFT JOIN FETCH b.project " +
-           "LEFT JOIN FETCH b.vcsConnection " +
-           "WHERE b.provider = :provider AND b.externalRepoId = :externalRepoId")
-    Optional<VcsRepoBinding> findByProviderAndExternalRepoIdWithDetails(
+           "JOIN FETCH b.project p JOIN FETCH p.workspace " +
+           "JOIN FETCH b.workspace JOIN FETCH b.vcsConnection c JOIN FETCH c.workspace " +
+           "WHERE b.provider = :provider AND (b.externalRepoId = :externalRepoId " +
+           "OR (b.externalRepoId = b.externalRepoSlug AND b.externalRepoSlug = :repoSlug " +
+           "AND b.externalNamespace = :namespace))")
+    List<VcsRepoBinding> findWebhookCandidates(
             @Param("provider") EVcsProvider provider,
-            @Param("externalRepoId") String externalRepoId
-    );
-
-    @Query("SELECT b FROM VcsRepoBinding b " +
-           "LEFT JOIN FETCH b.project " +
-           "LEFT JOIN FETCH b.vcsConnection " +
-           "WHERE b.provider = :provider AND b.externalRepoSlug = :repoSlug")
-    Optional<VcsRepoBinding> findByProviderAndExternalRepoSlugWithDetails(
-            @Param("provider") EVcsProvider provider,
-            @Param("repoSlug") String repoSlug
-    );
+            @Param("externalRepoId") String externalRepoId,
+            @Param("repoSlug") String repoSlug,
+            @Param("namespace") String namespace);
 
     @Query("SELECT b FROM VcsRepoBinding b " +
            "LEFT JOIN FETCH b.project " +

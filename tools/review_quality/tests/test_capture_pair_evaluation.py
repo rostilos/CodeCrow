@@ -120,9 +120,9 @@ def _capture(
                 "promptHunkIds": ["sha256:hunk"],
                 "anchorHunkIds": ["sha256:hunk"],
                 "evidenceRefs": [],
-                "visibleEvidenceIds": ["RAG-visible"],
+                "visibleEvidenceIds": ["relation:" + "d" * 64],
                 "visibleEvidenceFactDigests": {
-                    "RAG-visible": [],
+                    "relation:" + "d" * 64: [],
                 },
                 "terminalState": "published",
                 "rejection": None,
@@ -195,8 +195,6 @@ def _capture(
         ],
         "retrieval": {
             "deterministicStates": ["complete"],
-            "semanticFailures": 0,
-            "semanticDisabled": False,
             "exactEvidenceIds": reviewable_hunks,
         },
     }
@@ -417,6 +415,8 @@ def test_evaluates_integrity_checked_paired_full_pipeline_captures(tmp_path):
         "precision": 0.5,
         "recall": 0.5,
         "coverage": 1.0,
+        "f1": 0.5,
+        "f2": 0.5,
         "changed_lines": 1,
         "model_calls": 1,
         "input_tokens": 10,
@@ -425,6 +425,11 @@ def test_evaluates_integrity_checked_paired_full_pipeline_captures(tmp_path):
         "cost_per_changed_kloc": 10.0,
         "median_cost_per_changed_kloc": 10.0,
         "p95_cost_per_changed_kloc": 10.0,
+        "completion_counts": {"complete": 1, "partial": 0, "failed": 0, "missing": 0, "unknown": 0},
+        "usage_known_cases": {"model_calls": 1, "input_tokens": 1, "output_tokens": 1, "cost": 1, "wall_time_seconds": 0},
+        "wall_time_seconds": None,
+        "median_wall_time_seconds": None,
+        "p95_wall_time_seconds": None,
     }
     assert metrics["php-magento"]["true_positives"] == 2
     assert metrics["php-magento"]["false_positives"] == 0
@@ -553,7 +558,7 @@ def _certified_inventory():
             "id": "defect-a",
             "file": "app/code/Vendor/Module/Model/Example.php",
             "line": 10,
-            "summary": "Candidate-blind semantic regression",
+            "summary": "Candidate-blind behavioral regression",
             "evidenceFiles": ["app/code/Vendor/Module/Policy.php"],
         }],
         "certification": {
@@ -610,7 +615,7 @@ def test_binds_candidate_blind_inventory_to_exact_capture_identity(tmp_path):
         "id": "defect-a",
         "file": "app/code/Vendor/Module/Model/Example.php",
         "line": 10,
-        "summary": "Candidate-blind semantic regression",
+        "summary": "Candidate-blind behavioral regression",
         "evidenceFiles": ["app/code/Vendor/Module/Policy.php"],
     }]
     assert template["cases"][0]["groundTruth"]["status"] == "unreviewed"
@@ -1042,7 +1047,11 @@ def test_rejects_declared_hunk_coverage_that_does_not_match_capture(tmp_path):
         evaluate_capture_manifest(manifest, base_dir=tmp_path)
 
 
-def test_rejects_capture_with_degraded_terminal_retrieval_evidence(tmp_path):
+@pytest.mark.parametrize(
+    "states",
+    [[], ["bounded"], ["unavailable"]],
+)
+def test_accepts_optional_structural_retrieval_state(tmp_path, states):
     issue = _issue("A", 10)
     fallback = _capture(
         mode_identity="fallback-runtime",
@@ -1054,7 +1063,7 @@ def test_rejects_capture_with_degraded_terminal_retrieval_evidence(tmp_path):
         plugins=["python"],
         issues=[issue],
     )
-    plugin["pipelineEvidence"]["retrieval"]["deterministicStates"] = ["failed"]
+    plugin["pipelineEvidence"]["retrieval"]["deterministicStates"] = states
     plugin["pipelineEvidenceDigest"] = _digest(plugin["pipelineEvidence"])
     plugin["captureDigest"] = None
     plugin["captureDigest"] = _digest(plugin)
@@ -1063,17 +1072,18 @@ def test_rejects_capture_with_degraded_terminal_retrieval_evidence(tmp_path):
     _write(fallback_path, fallback)
     _write(plugin_path, plugin)
 
-    with pytest.raises(ValueError, match="retrieval evidence is incomplete"):
-        create_template(
-            case_id="case",
-            languages=["python"],
-            frameworks=[],
-            captures=[
-                ("fallback", fallback_path),
-                ("plugin-context", plugin_path),
-            ],
-            baseline="fallback",
-        )
+    template = create_template(
+        case_id="case",
+        languages=["python"],
+        frameworks=[],
+        captures=[
+            ("fallback", fallback_path),
+            ("plugin-context", plugin_path),
+        ],
+        baseline="fallback",
+    )
+
+    assert template["cases"][0]["modes"][1]["mode"] == "plugin-context"
 
 
 def test_rejects_capture_with_incomplete_terminal_candidate_evidence(tmp_path):
@@ -1157,7 +1167,7 @@ def test_rejects_published_candidate_using_evidence_from_another_prompt(tmp_path
         issues=[issue],
     )
     record = plugin["pipelineEvidence"]["candidates"]["records"][0]
-    record["evidenceRefs"] = ["RAG-not-visible"]
+    record["evidenceRefs"] = ["relation:" + "e" * 64]
     plugin["pipelineEvidenceDigest"] = _digest(plugin["pipelineEvidence"])
     plugin["captureDigest"] = None
     plugin["captureDigest"] = _digest(plugin)

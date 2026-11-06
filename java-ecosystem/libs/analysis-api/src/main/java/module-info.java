@@ -3,4 +3,5 @@ module org.rostilos.codecrow.analysisapi {
     requires org.slf4j;
     
     exports org.rostilos.codecrow.analysisapi.rag;
+    exports org.rostilos.codecrow.analysisapi.usage;
 }

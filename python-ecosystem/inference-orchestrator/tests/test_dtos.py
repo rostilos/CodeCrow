@@ -112,19 +112,53 @@ class TestReviewRequestDto:
         req = _minimal_review_request(targetBranchName="main")
         assert req.get_rag_base_branch() is None
 
+    def test_target_head_commit_is_distinct_from_merge_base(self):
+        req = _minimal_review_request(
+            targetHeadCommitHash="target-head",
+            baseCommitHash="merge-base",
+        )
+        assert req.get_target_head_commit_hash() == "target-head"
+        assert req.baseCommitHash == "merge-base"
+
+    def test_target_head_commit_falls_back_to_legacy_base_field(self):
+        req = _minimal_review_request(baseCommitHash="legacy-target-head")
+        assert req.get_target_head_commit_hash() == "legacy-target-head"
+
     def test_defaults(self):
         req = _minimal_review_request()
         assert req.changedFiles == []
         assert req.deletedFiles == []
-        assert req.diffSnippets == []
         assert req.previousCodeAnalysisIssues == []
         assert req.analysisMode == "FULL"
-        assert req.useMcpTools is False
+        assert req.useMcpTools is True
+        assert req.mcpLocalOnly is False
         assert req.ragEnabled is True
 
     def test_project_can_disable_rag_for_one_review(self):
         req = _minimal_review_request(ragEnabled=False)
         assert req.ragEnabled is False
+
+    def test_project_can_disable_mcp_tools_for_one_review(self):
+        req = _minimal_review_request(useMcpTools=False)
+        assert req.useMcpTools is False
+
+    def test_request_can_require_provider_isolated_mcp(self):
+        req = _minimal_review_request(mcpLocalOnly=True)
+        assert req.mcpLocalOnly is True
+
+    def test_local_repository_snapshot_metadata(self):
+        req = _minimal_review_request(
+            localRepoPath="/tmp/review-snapshot",
+            localRepoTargetBranch="main",
+            localRepoRevision="abc123",
+            localRagRepoPath="/tmp/structural-snapshot",
+            localReviewOverlayPath="/tmp/review-overlay",
+        )
+        assert req.localRepoPath == "/tmp/review-snapshot"
+        assert req.localRepoTargetBranch == "main"
+        assert req.localRepoRevision == "abc123"
+        assert req.localRagRepoPath == "/tmp/structural-snapshot"
+        assert req.localReviewOverlayPath == "/tmp/review-overlay"
 
     def test_enrichment_data_none(self):
         req = _minimal_review_request()
@@ -182,24 +216,6 @@ class TestSummarizeRequestDto:
         )
         assert req.supportsMermaid is True
 
-    def test_get_rag_branch_with_pr(self):
-        req = SummarizeRequestDto(
-            projectId=1,
-            projectVcsWorkspace="ws",
-            projectVcsRepoSlug="repo",
-            projectWorkspace="ws",
-            projectNamespace="ns",
-            aiProvider="ANTHROPIC",
-            aiModel="claude-3",
-            aiApiKey="sk-test",
-            pullRequestId=10,
-            sourceBranch="feat/y",
-            targetBranch="main",
-        )
-        assert req.get_rag_branch() == "feat/y"
-        assert req.get_rag_base_branch() == "main"
-
-
 # ── SummarizeResponseDto ─────────────────────────────────────────
 
 class TestSummarizeResponseDto:
@@ -228,6 +244,27 @@ class TestAskRequestDto:
         )
         assert req.question == "Why?"
         assert req.issueReferences == []
+
+    def test_structural_search_binding(self):
+        req = AskRequestDto(
+            projectId=1,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            projectWorkspace="ws",
+            projectNamespace="ns",
+            aiProvider="OPENAI",
+            aiModel="gpt-4",
+            aiApiKey="sk-test",
+            question="Where is auth handled?",
+            branch="main",
+            repositoryRevision="a" * 40,
+            repositoryGenerationManifestSha256="b" * 64,
+            ragCollectionTarget="cc_ws_repo_main_generation",
+        )
+
+        assert req.branch == "main"
+        assert req.repositoryRevision == "a" * 40
+        assert req.ragGenerationManifestSha256 == "b" * 64
 
     def test_response_defaults(self):
         resp = AskResponseDto()

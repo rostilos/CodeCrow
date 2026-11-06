@@ -106,15 +106,12 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         if ("closed".equals(action)) {
             boolean isMerged = payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
             
-            // Always clean up PR-specific RAG data on close (merge or not).
-            // PR-indexed points are no longer needed once the PR is closed.
-            cleanupPrRagData(payload, project);
             markPullRequestClosed(payload, project, isMerged);
             
             if (isMerged) {
                 return handlePrMergeEvent(payload, project, eventConsumer);
             }
-            // Closed without merge: DB state and RAG cleanup are already handled.
+            // Closed without merge: persisted PR state is already updated.
             return WebhookResult.ignored("PR closed without merge");
         }
         
@@ -385,29 +382,6 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
     // PR RAG CLEANUP
     // ========================================================================================
     
-    /**
-     * Clean up PR-specific RAG data when a PR is closed (merged or not).
-     * This is a best-effort, non-blocking operation — failure does not affect the webhook result.
-     */
-    private void cleanupPrRagData(WebhookPayload payload, Project project) {
-        try {
-            String prIdStr = payload.pullRequestId();
-            if (prIdStr == null) {
-                return;
-            }
-            int prNumber = Integer.parseInt(prIdStr);
-            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber);
-            if (deleted) {
-                log.info("Cleaned up PR #{} RAG data for project {} on close/merge", prNumber, project.getId());
-            } else {
-                log.info("PR #{} RAG cleanup did not complete for project {}; "
-                        + "the cleanup operation recorded the failure detail", prNumber, project.getId());
-            }
-        } catch (Exception e) {
-            log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
-        }
-    }
-
     private void markPullRequestClosed(WebhookPayload payload, Project project, boolean merged) {
         try {
             Long prNumber = parsePullRequestNumber(payload.pullRequestId());

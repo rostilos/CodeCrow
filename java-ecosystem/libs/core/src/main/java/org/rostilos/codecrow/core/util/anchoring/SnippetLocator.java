@@ -24,6 +24,36 @@ public final class SnippetLocator {
 
     private SnippetLocator() {}
 
+    /** Match the entire contiguous excerpt; ambiguous moves require semantic reconciliation. */
+    public static LocateResult locateExact(String snippet, String fileContent, int hintLine) {
+        if (snippet == null || snippet.isBlank() || fileContent == null) {
+            return new LocateResult(0, 0, 0, Strategy.NOT_FOUND);
+        }
+        String[] expected = snippet.strip().split("\\r?\\n", -1);
+        String[] actual = fileContent.split("\\r?\\n", -1);
+        int found = 0;
+        boolean ambiguous = false;
+        for (int start = 0; start + expected.length <= actual.length; start++) {
+            boolean matches = true;
+            for (int offset = 0; offset < expected.length; offset++) {
+                // Ignore indentation, but preserve whitespace inside literals and expressions.
+                if (!expected[offset].strip().equals(actual[start + offset].strip())) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (!matches) continue;
+            if (start + 1 == hintLine) {
+                return new LocateResult(hintLine, hintLine + expected.length - 1, 1, Strategy.HASH_EXACT);
+            }
+            ambiguous |= found > 0;
+            found = start + 1;
+        }
+        return found > 0 && !ambiguous
+                ? new LocateResult(found, found + expected.length - 1, 1, Strategy.HASH_EXACT)
+                : new LocateResult(0, 0, 0, Strategy.NOT_FOUND);
+    }
+
     /**
      * Result of snippet location.
      *

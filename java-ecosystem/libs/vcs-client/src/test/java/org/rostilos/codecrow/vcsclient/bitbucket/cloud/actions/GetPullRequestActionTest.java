@@ -42,16 +42,23 @@ class GetPullRequestActionTest {
         String jsonResponse = """
             {
                 "title": "Test PR",
+                "author": {"uuid": "{developer-id}", "display_name": "Developer"},
                 "description": "Test description",
                 "state": "OPEN",
                 "source": {
                     "branch": {
                         "name": "feature"
+                    },
+                    "commit": {
+                        "hash": "source-head"
                     }
                 },
                 "destination": {
                     "branch": {
                         "name": "main"
+                    },
+                    "commit": {
+                        "hash": "target-head"
                     }
                 }
             }
@@ -66,8 +73,12 @@ class GetPullRequestActionTest {
         GetPullRequestAction.PullRequestMetadata result = action.getPullRequest("workspace", "repo", "123");
 
         assertThat(result).isNotNull();
+        assertThat(result.getAuthorId()).isEqualTo("{developer-id}");
+        assertThat(result.getAuthorName()).isEqualTo("Developer");
         assertThat(result.getTitle()).isEqualTo("Test PR");
         assertThat(result.getState()).isEqualTo("OPEN");
+        assertThat(result.getSourceCommit()).isEqualTo("source-head");
+        assertThat(result.getDestinationCommit()).isEqualTo("target-head");
         verify(response).close();
     }
 

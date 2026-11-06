@@ -3,15 +3,22 @@ package org.rostilos.codecrow.webserver.analytics.service;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
+import org.rostilos.codecrow.core.dto.analysis.AnalysisItemDTO;
+import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
+import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
+import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysisReportResponse;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
@@ -70,7 +77,33 @@ public class ProjectAnalyticsService {
     }
 
     public List<CodeAnalysis> getBranchAnalysisHistory(Long projectId, String branchName) {
-        return branchService.getBranchAnalysisHistory(projectId, branchName);
+        return branchService.getBranchAnalysisHistory(projectId, branchName).stream()
+                .filter(a -> a.getStatus() != AnalysisStatus.PARTIAL)
+                .toList();
+    }
+
+    public List<CodeAnalysis> getRecentReportAnalyses(Long projectId, String branch) {
+        return codeAnalysisRepository.findReportHistory(projectId, normalizeBranch(branch), null, null,
+                PageRequest.of(0, 10)).getContent();
+    }
+
+    public AnalysesHistoryResponse getReportHistory(Long projectId, String branch, Long prNumber,
+                                                    AnalysisStatus status, int page, int pageSize) {
+        Page<CodeAnalysis> result = codeAnalysisRepository.findReportHistory(
+                projectId, normalizeBranch(branch), prNumber, status,
+                PageRequest.of(Math.max(0, page - 1), Math.max(1, Math.min(pageSize, 200))));
+        return new AnalysesHistoryResponse(result.getContent().stream().map(AnalysisItemDTO::fromEntity).toList(),
+                result.getTotalElements(), result.getTotalPages(), result.getNumber() + 1, result.getSize());
+    }
+
+    public Optional<AnalysisReportResponse> getAnalysisReport(Long projectId, Long analysisId) {
+        return codeAnalysisRepository.findByIdAndProjectId(analysisId, projectId)
+                .map(a -> new AnalysisReportResponse(AnalysisItemDTO.fromEntity(a), a.getComment(),
+                        a.getIssues().stream().map(IssueDTO::fromEntity).toList()));
+    }
+
+    private String normalizeBranch(String branch) {
+        return branch == null || branch.isBlank() ? null : branch;
     }
 
     public BranchService.BranchStats getBranchStats(Long projectId, String branchName) {
@@ -78,7 +111,9 @@ public class ProjectAnalyticsService {
     }
 
     public List<CodeAnalysis> getAnalysisHistory(Long projectId, String branch) {
-        List<CodeAnalysis> analyses = codeAnalysisService.findByProjectId(projectId);
+        List<CodeAnalysis> analyses = codeAnalysisService.findByProjectId(projectId).stream()
+                .filter(a -> a.getStatus() != AnalysisStatus.PARTIAL)
+                .toList();
         if (branch != null && !branch.isBlank()) {
             analyses = analyses.stream()
                     .filter(a -> branch.equals(a.getBranchName()))
@@ -111,6 +146,10 @@ public class ProjectAnalyticsService {
         } else {
             recentAnalyses = codeAnalysisRepository.findByProjectIdAndCreatedAtAfter(projectId, cutoff);
         }
+
+        recentAnalyses = recentAnalyses.stream()
+                .filter(a -> a.getStatus() != AnalysisStatus.PARTIAL)
+                .toList();
 
         if (recentAnalyses.size() < 2) {
             return "stable";
@@ -158,7 +197,8 @@ public class ProjectAnalyticsService {
     }
 
     public Optional<CodeAnalysis> findLatestAnalysis(Long projectId) {
-        return codeAnalysisService.findLatestByProjectId(projectId);
+        return codeAnalysisRepository.findFirstByProjectIdAndStatusNotOrderByCreatedAtDescIdDesc(
+                projectId, AnalysisStatus.PARTIAL);
     }
 
     /**
@@ -190,6 +230,7 @@ public class ProjectAnalyticsService {
 
         // order by createdAt ascending (older -> newer) to produce trend
         analyses = analyses.stream()
+                .filter(a -> a.getStatus() != AnalysisStatus.PARTIAL)
                 .sorted(Comparator.comparing(CodeAnalysis::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .toList();
 

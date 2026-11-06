@@ -31,10 +31,13 @@ public class ReportGenerator {
 
     private final SiteSettingsProvider siteSettingsProvider;
     private final AnalysisStatusEvaluator analysisStatusEvaluator;
+    private final org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks;
 
     private static final Logger log = LoggerFactory.getLogger(ReportGenerator.class);
 
-    public ReportGenerator(SiteSettingsProvider siteSettingsProvider, AnalysisStatusEvaluator analysisStatusEvaluator) {
+    public ReportGenerator(SiteSettingsProvider siteSettingsProvider, AnalysisStatusEvaluator analysisStatusEvaluator,
+                           org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks) {
+        this.reviewChecks = reviewChecks;
         this.siteSettingsProvider = siteSettingsProvider;
         this.analysisStatusEvaluator = analysisStatusEvaluator;
     }
@@ -131,7 +134,8 @@ public class ReportGenerator {
                             issue.getSuggestedFixDiff(),
                             LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
                             issue.getId(),
-                            issue.getCodeSnippet()
+                            issue.getCodeSnippet(),
+                            issue.getAnchorSide()
                     ))
                     .toList();
 
@@ -189,7 +193,9 @@ public class ReportGenerator {
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),
                 LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
-                issue.getId()
+                issue.getId(),
+                issue.getCodeSnippet(),
+                issue.getAnchorSide()
         );
     }
 
@@ -375,6 +381,31 @@ public class ReportGenerator {
                             toBitbucketSeverity(componentIssue.getSeverity()),
                             "CODE_SMELL");
                 }).collect(toSet());
+    }
+
+    /** Check findings retain individual platform records, but share one PR comment. */
+    public String createReviewChecksMarkdown(CodeAnalysis analysis, Long platformPrEntityId) {
+        StringBuilder markdown = new StringBuilder();
+        for (var result : reviewChecks.findForAnalysis(analysis)) {
+            var findings = result.getFindings().stream().filter(finding -> !finding.isResolved()).toList();
+            if (findings.isEmpty() && result.isComplete()) continue;
+            String id = result.getCheckId();
+            String label = id.replace('-', ' ');
+            label = Character.toUpperCase(label.charAt(0)) + label.substring(1);
+            String url = LinksGenerator.createStatusUrl(getBaseUrl(), analysis.getProject(),
+                    platformPrEntityId, analysis.getPrVersion(), "open")
+                    + "&reviewCheckId=" + java.net.URLEncoder.encode(id, java.nio.charset.StandardCharsets.UTF_8)
+                    + "&subTab=checks";
+            long high = findings.stream().filter(finding -> finding.getSeverity() == IssueSeverity.HIGH).count();
+            long medium = findings.stream().filter(finding -> finding.getSeverity() == IssueSeverity.MEDIUM).count();
+            long low = findings.stream().filter(finding -> finding.getSeverity() == IssueSeverity.LOW).count();
+            markdown.append("### ").append(label).append("\n\n")
+                    .append(findings.size()).append(" open dependency advisories (")
+                    .append(high).append(" high, ").append(medium).append(" medium, ").append(low).append(" low).\n\n");
+            if (!result.isComplete()) markdown.append("Audit coverage is incomplete; showing available and last-known findings.\n\n");
+            markdown.append("[View all findings in CodeCrow](").append(url).append(")\n\n");
+        }
+        return markdown.toString().strip();
     }
 
     public CodeInsightsAnnotation createCodeInsightsAnnotation(

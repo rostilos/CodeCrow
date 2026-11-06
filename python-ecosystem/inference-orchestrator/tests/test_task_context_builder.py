@@ -132,14 +132,15 @@ class TestBuildTaskContext:
         # description (which may contain AC text) is still shown.
         assert "#### Acceptance Criteria" not in result
 
-    def test_description_truncation(self):
+    def test_description_is_bounded_by_default(self):
         ctx = {
             "task_key": "X-1",
             "task_summary": "S",
             "description": "A" * 3000,
         }
-        result = build_task_context(ctx, max_description_length=100)
-        assert "…" in result
+        result = build_task_context(ctx)
+        assert "A" * 2000 + "…" in result
+        assert "A" * 2001 not in result
 
     def test_removes_ac_from_description(self):
         """AC should not appear twice (once in AC section, once in description)."""

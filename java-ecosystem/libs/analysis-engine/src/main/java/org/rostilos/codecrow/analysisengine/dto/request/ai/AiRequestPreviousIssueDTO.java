@@ -24,8 +24,19 @@ public record AiRequestPreviousIssueDTO(
         String resolvedByCommit, // Commit hash that resolved the issue
         Long resolvedInAnalysisId, // Analysis ID where this was resolved (null if still open)
         // Content-based anchoring
+        String anchorSide,
         String codeSnippet // Verbatim source line for line anchoring — Python passes back, Java re-resolves
 ) {
+    public AiRequestPreviousIssueDTO(String id, String type, String severity, String title,
+            String reason, String suggestedFixDescription, String suggestedFixDiff, String file,
+            Integer line, String branch, String pullRequestId, String status, String category,
+            Integer prVersion, String resolvedDescription, String resolvedByCommit,
+            Long resolvedInAnalysisId, String codeSnippet) {
+        this(id, type, severity, title, reason, suggestedFixDescription, suggestedFixDiff,
+                file, line, branch, pullRequestId, status, category, prVersion,
+                resolvedDescription, resolvedByCommit, resolvedInAnalysisId, "HEAD", codeSnippet);
+    }
+
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
             ? issue.getIssueCategory().name() 
@@ -54,6 +65,7 @@ public record AiRequestPreviousIssueDTO(
                 issue.getResolvedDescription(),
                 issue.getResolvedCommitHash(),
                 issue.getResolvedAnalysisId(),
+                issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD",
                 issue.getCodeSnippet()
         );
     }
@@ -65,8 +77,8 @@ public record AiRequestPreviousIssueDTO(
      *
      * <p><b>ID handling:</b> The {@code id} field is set to the origin
      * {@link CodeAnalysisIssue} ID when available, because
-     * {@code processReconciledIssue()} looks up the BranchIssue via
-     * {@code findByBranchIdAndOriginIssueId(branchId, id)}.  If there is no
+     * reconciliation matches decisions to the request's branch-scoped issue map.
+     * If there is no
      * origin issue (e.g. the BranchIssue was created directly), we fall back to
      * the BranchIssue's own PK.
      */
@@ -79,8 +91,8 @@ public record AiRequestPreviousIssueDTO(
         Integer lineNumber = bi.getCurrentLineNumber() != null
                 ? bi.getCurrentLineNumber() : bi.getLineNumber();
 
-        // Use origin issue ID so processReconciledIssue() can look up by
-        // findByBranchIdAndOriginIssueId.  Hibernate allows getId() on a
+        // Preserve the origin ID used by the request's branch-scoped decision map.
+        // Hibernate allows getId() on a
         // lazy proxy without triggering full initialization.
         String issueId = bi.getOriginIssue() != null
                 ? String.valueOf(bi.getOriginIssue().getId())
@@ -104,6 +116,7 @@ public record AiRequestPreviousIssueDTO(
                 bi.getResolvedDescription(),
                 bi.getResolvedInCommitHash(),
                 bi.getOriginAnalysisId(),    // resolvedInAnalysisId → use origin for provenance
+                bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD",
                 bi.getCodeSnippet()
         );
     }

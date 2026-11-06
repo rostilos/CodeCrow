@@ -1,0 +1,21 @@
+{
+  "id": "composer-audit",
+  "kind": "domain",
+  "requires": [],
+  "capabilities": [
+    "review-check"
+  ],
+  "detection": {
+    "filesAny": [
+      "composer.json",
+      "composer.lock"
+    ],
+    "extensions": [],
+    "filesAll": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.composeraudit.ComposerAuditPlugin"
+  }
+}

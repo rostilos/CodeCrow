@@ -12,7 +12,7 @@ import org.rostilos.codecrow.plugins.PluginRuntime;
 import org.rostilos.codecrow.plugins.ProjectCapabilities;
 import org.rostilos.codecrow.plugins.ProjectSelector;
 import org.rostilos.codecrow.plugins.RepositoryFacts;
-import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.RepositorySource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -34,7 +34,6 @@ public class ProjectCapabilitySelectionService {
     private static final Logger log = LoggerFactory.getLogger(ProjectCapabilitySelectionService.class);
     private static final int MAX_MARKER_FILES = 64;
     private static final int MAX_MARKER_BYTES = 262_144;
-    private static final int MAX_REPOSITORY_FILES = 500_000;
 
     private final PluginRuntime runtime;
     private final PluginRegistry registry;
@@ -57,18 +56,14 @@ public class ProjectCapabilitySelectionService {
      * contributors that can already be selected from path/marker evidence.
      */
     public SelectionPlan plan(
-            VcsClient vcsClient,
-            String workspace,
-            String repository,
+            RepositorySource source,
             String commit,
             List<String> changedFiles) {
-        return plan(vcsClient, workspace, repository, commit, changedFiles, null);
+        return plan(source, commit, changedFiles, null);
     }
 
     public SelectionPlan plan(
-            VcsClient vcsClient,
-            String workspace,
-            String repository,
+            RepositorySource source,
             String commit,
             List<String> changedFiles,
             AnalysisProfileConfig analysisProfile) {
@@ -81,20 +76,16 @@ public class ProjectCapabilitySelectionService {
 
         String projectType = analysisProfile != null ? analysisProfile.projectType() : null;
         String sourceRoot = analysisProfile != null ? analysisProfile.sourceRoot() : null;
-        boolean completeRepositoryInventory = false;
+        boolean repositoryInventoryAvailable = false;
         if (projectType == null && !registry.descriptors().isEmpty()) {
             try {
-                List<String> repositoryFiles = vcsClient.listRepositoryFiles(
-                        workspace,
-                        repository,
-                        commit,
-                        MAX_REPOSITORY_FILES);
+                List<String> repositoryFiles = source != null ? source.paths() : null;
                 if (repositoryFiles != null) {
                     repositoryFiles.stream()
                             .filter(path -> path != null && !path.isBlank())
                             .map(ProjectCapabilitySelectionService::normalize)
                             .forEach(paths::add);
-                    completeRepositoryInventory = true;
+                    repositoryInventoryAvailable = true;
                 } else {
                     log.warn(
                             "Repository path inventory at commit {} was unavailable; automatic "
@@ -103,15 +94,15 @@ public class ProjectCapabilitySelectionService {
                 }
             } catch (Exception exception) {
                 log.warn(
-                        "Cannot list the pinned repository tree at commit {}; automatic plugin "
+                        "Cannot read the pinned archive inventory at commit {}; automatic plugin "
                                 + "detection will continue with changed paths and exact marker reads: {}",
                         commit,
                         exception.getMessage());
             }
         }
-        if (!completeRepositoryInventory) {
-            // Changed paths are only a fallback existence signal. A complete
-            // pinned tree is authoritative and deliberately excludes deleted
+        if (!repositoryInventoryAvailable) {
+            // Changed paths are only a fallback existence signal. The available
+            // archive inventory deliberately excludes deleted
             // paths and old rename sides from repository facts.
             paths.addAll(changedPaths);
         }
@@ -189,8 +180,8 @@ public class ProjectCapabilitySelectionService {
                     if (root != null) candidateRoots.add(root);
                 }
             }
-            if (!completeRepositoryInventory) {
-                // Without a provider tree, ancestor roots at least let an
+            if (!repositoryInventoryAvailable) {
+                // Without an archive inventory, ancestor roots at least let an
                 // ordinary changed framework file discover unchanged exact
                 // markers. Glob-only context still correctly remains reduced.
                 changedPaths.forEach(path -> addAncestorRoots(candidateRoots, path));
@@ -200,7 +191,7 @@ public class ProjectCapabilitySelectionService {
         Comparator<MarkerCandidate> candidateOrder = markerCandidateOrder(changedPaths);
         Map<MarkerLaneKey, BoundedMarkerLane> markerLanes = new LinkedHashMap<>();
         boolean candidateDiscoveryReduced = false;
-        if (completeRepositoryInventory) {
+        if (repositoryInventoryAvailable) {
             Map<String, List<MarkerReadRule>> exactRulesByName = new LinkedHashMap<>();
             List<MarkerReadRule> patternRules = new ArrayList<>();
             for (MarkerReadRule rule : markerReadRules) {
@@ -276,8 +267,7 @@ public class ProjectCapabilitySelectionService {
         int skippedForBytes = 0;
         for (String markerPath : scheduledMarkerPaths) {
             try {
-                String content = vcsClient.getFileContent(
-                        workspace, repository, markerPath, commit);
+                String content = source != null ? source.readFile(markerPath, MAX_MARKER_BYTES) : null;
                 if (content == null) continue;
                 // A successful pinned read proves path existence even when
                 // the content cannot fit in the optional marker byte budget.
@@ -321,7 +311,7 @@ public class ProjectCapabilitySelectionService {
                 enrichmentPaths,
                 projectType,
                 sourceRoot,
-                completeRepositoryInventory);
+                repositoryInventoryAvailable);
     }
 
     /**
@@ -338,7 +328,7 @@ public class ProjectCapabilitySelectionService {
         int skippedForBytes = 0;
         boolean skippedForFiles = false;
         if (enrichment != null && enrichment.fileContents() != null) {
-            if (!plan.completeRepositoryInventory()) {
+            if (!plan.repositoryInventoryAvailable()) {
                 enrichment.fileContents().stream()
                         .filter(file -> !file.skipped() && file.content() != null)
                         .map(file -> normalize(file.path()))
@@ -353,7 +343,7 @@ public class ProjectCapabilitySelectionService {
                     if (file.skipped() || file.content() == null) continue;
                     String path = normalize(file.path());
                     if (markerContents.containsKey(path)) continue;
-                    if (plan.completeRepositoryInventory() && !paths.contains(path)) continue;
+                    if (plan.repositoryInventoryAvailable() && !paths.contains(path)) continue;
                     if (!matchesPatternCandidate(marker, path, plan.sourceRoot())
                             || !file.content().contains(marker.contains())) {
                         continue;
@@ -409,14 +399,12 @@ public class ProjectCapabilitySelectionService {
      * filtering.
      */
     public ProjectCapabilities select(
-            VcsClient vcsClient,
-            String workspace,
-            String repository,
+            RepositorySource source,
             String commit,
             List<String> changedFiles,
             PrEnrichmentDataDto enrichment) {
         return complete(
-                plan(vcsClient, workspace, repository, commit, changedFiles),
+                plan(source, commit, changedFiles),
                 enrichment);
     }
 
@@ -769,7 +757,7 @@ public class ProjectCapabilitySelectionService {
             List<String> enrichmentPaths,
             String projectType,
             String sourceRoot,
-            boolean completeRepositoryInventory) {
+            boolean repositoryInventoryAvailable) {
         public SelectionPlan {
             if (commit == null || commit.isBlank()) {
                 throw new IllegalArgumentException("selection commit is required");

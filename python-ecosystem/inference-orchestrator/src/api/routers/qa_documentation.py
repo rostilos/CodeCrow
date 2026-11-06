@@ -8,12 +8,14 @@ Supports both single-pass (legacy / small PRs) and multi-stage ULTRATHINKING
 pipeline (large PRs with enrichment data).
 """
 import logging
-from fastapi import APIRouter, Request
+from uuid import uuid4
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any, List, Literal
 
 from model.enrichment import PrEnrichmentDataDto
 from service.qa_documentation.qa_doc_service import QaDocumentationService
+from api.event_stream import run_while_connected
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,15 @@ router = APIRouter(tags=["qa-documentation"])
 
 class QaDocumentationRequest(BaseModel):
     """Request payload for QA documentation generation."""
+    pr_change_summary: Optional[Dict[str, Any]] = None
+    tool_context: Optional[Dict[str, Any]] = None
+    source_revision: Optional[str] = None
+    project_workspace: Optional[str] = None
+    project_namespace: Optional[str] = None
+    access_token: Optional[str] = Field(default=None, repr=False)
+    oauth_client: Optional[str] = Field(default=None, repr=False)
+    oauth_secret: Optional[str] = Field(default=None, repr=False)
+    vcs_base_url: Optional[str] = None
     project_id: int
     project_name: str
     pr_number: Optional[int] = None
@@ -78,11 +89,19 @@ class QaDocumentationRequest(BaseModel):
         }
 
 
+class QaInputCoverage(BaseModel):
+    """Coverage of supplied inputs, not a claim of semantic or test completeness."""
+    status: Literal["complete", "partial", "unknown"]
+    source: Literal["saved_changes", "diff", "analysis_only"]
+    provided_file_count: int
+
+
 class QaDocumentationResponse(BaseModel):
     """Response containing the generated QA documentation."""
     documentation: Optional[str] = None
     documentation_needed: bool = True
-    template_mode_used: Literal["RAW", "BASE", "CUSTOM"] = "BASE"
+    template_mode_used: Optional[Literal["RAW", "BASE", "CUSTOM"]] = None
+    input_coverage: Optional[QaInputCoverage] = None
 
 
 @router.post("/qa-documentation", response_model=QaDocumentationResponse)
@@ -108,38 +127,81 @@ async def generate_qa_documentation(
         "yes" if payload.delta_diff else "no",
     )
 
-    qa_service = QaDocumentationService()
+    try:
+        qa_service = QaDocumentationService()
 
-    result = await qa_service.generate(
-        project_id=payload.project_id,
-        project_name=payload.project_name,
-        pr_number=payload.pr_number,
-        issues_found=payload.issues_found,
-        files_analyzed=payload.files_analyzed,
-        pr_metadata=payload.pr_metadata or {},
-        template_mode=payload.template_mode,
-        custom_template=payload.custom_template,
-        task_context=payload.task_context,
-        ai_provider=payload.ai_provider,
-        ai_model=payload.ai_model,
-        ai_api_key=payload.ai_api_key,
-        ai_base_url=payload.ai_base_url,
-        diff=payload.diff,
-        delta_diff=payload.delta_diff,
-        previous_documentation=payload.previous_documentation,
-        is_same_pr_rerun=payload.is_same_pr_rerun,
-        enrichment_data=payload.enrichment_data,
-        changed_file_paths=payload.changed_file_paths,
-        workspace_slug=payload.workspace_slug,
-        repo_slug=payload.repo_slug,
-        source_branch=payload.source_branch,
-        target_branch=payload.target_branch,
-        vcs_provider=payload.vcs_provider,
-        output_language=payload.output_language,
-    )
+        result = await run_while_connected(request, qa_service.generate(
+            pr_change_summary=payload.pr_change_summary,
+            repository_context={
+                "project_id": payload.project_id, "pr_number": payload.pr_number,
+                "source_revision": payload.source_revision, "tool_context": payload.tool_context,
+                "project_workspace": payload.project_workspace, "project_namespace": payload.project_namespace,
+                "workspace_slug": payload.workspace_slug, "repo_slug": payload.repo_slug,
+                "access_token": payload.access_token, "oauth_client": payload.oauth_client,
+                "oauth_secret": payload.oauth_secret, "vcs_provider": payload.vcs_provider,
+                "vcs_base_url": payload.vcs_base_url,
+            },
+            project_id=payload.project_id,
+            project_name=payload.project_name,
+            pr_number=payload.pr_number,
+            issues_found=payload.issues_found,
+            files_analyzed=payload.files_analyzed,
+            pr_metadata=payload.pr_metadata or {},
+            template_mode=payload.template_mode,
+            custom_template=payload.custom_template,
+            task_context=payload.task_context,
+            ai_provider=payload.ai_provider,
+            ai_model=payload.ai_model,
+            ai_api_key=payload.ai_api_key,
+            ai_base_url=payload.ai_base_url,
+            diff=payload.diff,
+            delta_diff=payload.delta_diff,
+            previous_documentation=payload.previous_documentation,
+            is_same_pr_rerun=payload.is_same_pr_rerun,
+            enrichment_data=payload.enrichment_data,
+            changed_file_paths=payload.changed_file_paths,
+            workspace_slug=payload.workspace_slug,
+            repo_slug=payload.repo_slug,
+            source_branch=payload.source_branch,
+            target_branch=payload.target_branch,
+            vcs_provider=payload.vcs_provider,
+            output_language=payload.output_language,
+        ))
 
-    return QaDocumentationResponse(
-        documentation=result.get("documentation"),
-        documentation_needed=result.get("documentation_needed", True),
-        template_mode_used=payload.template_mode,
-    )
+        return QaDocumentationResponse(
+            documentation=result.get("documentation"),
+            documentation_needed=result.get("documentation_needed", True),
+            template_mode_used=result.get("template_mode_used"),
+            input_coverage=result.get("input_coverage"),
+        )
+    except HTTPException:
+        raise
+    except Exception as error:
+        error_id = str(uuid4())
+        failure = error
+        seen = set()
+        upstream_status = None
+        while failure is not None and id(failure) not in seen:
+            seen.add(id(failure))
+            status = getattr(failure, "status_code", getattr(failure, "code", None))
+            if isinstance(status, int) and 400 <= status <= 599:
+                upstream_status = status
+                break
+            cause = failure.__cause__ or failure.__context__
+            if cause is None:
+                break
+            failure = cause
+        detail = {
+            "error": "qa_generation_failed",
+            "error_id": error_id,
+            "error_type": type(failure).__name__,
+            "upstream_status": upstream_status,
+        }
+        logger.exception(
+            "QA documentation failed: error_id=%s project_id=%s pr=%s provider=%s model=%s "
+            "error_type=%s upstream_status=%s; not automatically retried",
+            error_id, payload.project_id, payload.pr_number, payload.ai_provider, payload.ai_model,
+            detail["error_type"], upstream_status,
+        )
+        # Provider messages may contain private request data; return only diagnostic metadata.
+        raise HTTPException(status_code=500, detail=detail) from error

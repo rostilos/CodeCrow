@@ -17,6 +17,13 @@ public interface ReconcileTaskRepository extends JpaRepository<ReconcileTask, Lo
 
     Optional<ReconcileTask> findByExternalId(String externalId);
 
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE ReconcileTask t SET t.status = org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus.IN_PROGRESS, " +
+            "t.startedAt = :startedAt WHERE t.id = :id " +
+            "AND t.status = org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus.PENDING")
+    int claimPendingTask(@Param("id") Long id, @Param("startedAt") OffsetDateTime startedAt);
+
     /**
      * Find all tasks with a given status, oldest first.
      */

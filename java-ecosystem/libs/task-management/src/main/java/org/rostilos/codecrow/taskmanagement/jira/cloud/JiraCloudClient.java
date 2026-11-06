@@ -59,6 +59,7 @@ public class JiraCloudClient implements TaskManagementClient {
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false)
                 .addInterceptor(chain -> {
                     Request original = chain.request();
                     Request authorised = original.newBuilder()
@@ -146,20 +147,19 @@ public class JiraCloudClient implements TaskManagementClient {
 
     @Override
     public TaskComment postComment(String taskId, String body, TaskCommentVisibility visibility) throws IOException {
-        return RetryExecutor.withExponentialBackoff(() -> {
-            ObjectNode payload = buildAdfCommentPayload(body);
-            addVisibility(payload, visibility);
+        // Reconcile by the existing ownership marker after an uncertain result; never repeat this POST blindly.
+        ObjectNode payload = buildAdfCommentPayload(body);
+        addVisibility(payload, visibility);
 
-            Request request = new Request.Builder()
-                    .url(config.baseUrl() + API_V3 + "/issue/" + taskId + "/comment")
-                    .post(RequestBody.create(objectMapper.writeValueAsBytes(payload), JSON_MEDIA))
-                    .build();
+        Request request = new Request.Builder()
+                .url(config.baseUrl() + API_V3 + "/issue/" + taskId + "/comment")
+                .post(RequestBody.create(objectMapper.writeValueAsBytes(payload), JSON_MEDIA))
+                .build();
 
-            try (Response response = httpClient.newCall(request).execute()) {
-                ensureSuccess(response, "post comment on " + taskId);
-                return parseComment(parseBody(response));
-            }
-        });
+        try (Response response = httpClient.newCall(request).execute()) {
+            ensureSuccess(response, "post comment on " + taskId);
+            return parseComment(parseBody(response));
+        }
     }
 
     @Override

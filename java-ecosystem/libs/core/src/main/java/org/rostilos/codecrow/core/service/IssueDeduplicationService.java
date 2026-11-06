@@ -81,7 +81,7 @@ public class IssueDeduplicationService {
         Map<String, List<CodeAnalysisIssue>> byFile = new LinkedHashMap<>();
         for (CodeAnalysisIssue issue : issues) {
             String path = issue.getFilePath() != null ? issue.getFilePath() : "unknown";
-            byFile.computeIfAbsent(path, k -> new ArrayList<>()).add(issue);
+            byFile.computeIfAbsent(path + "|" + issue.getAnchorSide().name(), k -> new ArrayList<>()).add(issue);
         }
 
         List<CodeAnalysisIssue> result = new ArrayList<>(issues.size());

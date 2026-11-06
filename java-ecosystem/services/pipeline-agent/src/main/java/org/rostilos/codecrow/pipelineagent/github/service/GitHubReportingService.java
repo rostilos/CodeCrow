@@ -138,11 +138,34 @@ public class GitHubReportingService implements VcsReportingService {
         // "Files changed" and as grouped reviewer comments in the PR conversation.
         postInlineReviewComments(
                 httpClient, vcsRepoInfo, pullRequestNumber, codeAnalysis, reviewPlan);
+        postReviewCheckSummary(httpClient, vcsRepoInfo, pullRequestNumber,
+                reportGenerator.createReviewChecksMarkdown(codeAnalysis, platformPrEntityId));
         
         // Create Check Run for the commit
         createCheckRun(httpClient, vcsRepoInfo, codeAnalysis, summary);
 
         log.info("Successfully posted analysis results to GitHub");
+    }
+
+    private void postReviewCheckSummary(OkHttpClient httpClient, VcsRepoInfo repository, Long prNumber, String markdown) {
+        if (markdown == null) return;
+        String marker = "<!-- codecrow-review-checks -->";
+        var action = new CommentOnPullRequestAction(httpClient);
+        String owner = repository.getRepoWorkspace(), repo = repository.getRepoSlug();
+        try {
+            Long id = action.listComments(owner, repo, prNumber.intValue()).stream()
+                    .filter(comment -> String.valueOf(comment.get("body")).contains(marker))
+                    .map(comment -> ((Number) comment.get("id")).longValue()).findFirst().orElse(null);
+            if (markdown.isBlank()) {
+                if (id != null) action.deleteComment(owner, repo, id);
+            } else if (id != null) {
+                action.updateComment(owner, repo, id, marker + "\n" + markdown);
+            } else {
+                action.postComment(owner, repo, prNumber.intValue(), marker + "\n" + markdown);
+            }
+        } catch (IOException unavailable) {
+            log.warn("Could not publish review-check summary on GitHub PR {}: {}", prNumber, unavailable.getMessage());
+        }
     }
 
     private GitHubReviewFormatter.ReviewPlan createReviewPlan(

@@ -2,8 +2,8 @@
 
 This command exercises the production Java acquisition/request builder twice
 against one temporary local Git snapshot: once with an empty plugin bundle and
-once with the assembled bundle. It performs no Redis, RAG, embedding, or review
-provider call. Its output is a prerequisite for a later explicitly authorized
+once with the assembled bundle. It performs no Redis, RAG, or review provider
+call. Its output is a prerequisite for a later explicitly authorized
 paid paired capture, not quality evidence.
 """
 
@@ -96,7 +96,7 @@ def audit_paired_requests(
         "kind": "review-quality-isolated-paired-preflight",
         "scope": (
             "disconnected Java acquisition/request identity only; no Redis, RAG, "
-            "embedding, or review-provider call and no precision/recall evidence"
+            "or review-provider call and no precision/recall evidence"
         ),
         "sourceIdentity": {
             field: baseline_payload.get(field)
@@ -122,7 +122,6 @@ def audit_paired_requests(
             },
         },
         "reviewProviderCalls": 0,
-        "embeddingProviderCalls": 0,
         "connectedProjectCreated": False,
     }
 
@@ -163,7 +162,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Verify disconnected production Java fallback/candidate request "
-            "identity without invoking Redis, RAG, embeddings, or a review model."
+            "identity without invoking Redis, RAG, or a review model."
         )
     )
     parser.add_argument(

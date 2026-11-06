@@ -19,7 +19,7 @@ import java.util.Optional;
 
 /**
  * Owns durable branch-index identities and their immutable generations. It does
- * not know how Qdrant or a VCS works; callers build and validate the physical
+ * not know how the structural store or a VCS works; callers build and validate the physical
  * generation, then atomically publish or fail it through this service.
  */
 @Service
@@ -42,16 +42,7 @@ public class RagBranchIndexRegistryService {
             RagBranchIndex branchIndex,
             RagBranchIndexGeneration generation,
             RagIndexOperation operation,
-            boolean existingOperation,
-            String sourceCollectionTarget) {
-
-        public BuildRegistration(
-                RagBranchIndex branchIndex,
-                RagBranchIndexGeneration generation,
-                RagIndexOperation operation,
-                boolean existingOperation) {
-            this(branchIndex, generation, operation, existingOperation, null);
-        }
+            boolean existingOperation) {
     }
 
     @Transactional
@@ -62,13 +53,28 @@ public class RagBranchIndexRegistryService {
             String fromRevision,
             String toRevision,
             String representationFingerprint) {
+        return registerBuild(
+                project, branchName, indexKind, fromRevision, toRevision,
+                representationFingerprint, null);
+    }
+
+    @Transactional
+    public BuildRegistration registerBuild(
+            Project project,
+            String branchName,
+            RagBranchIndexKind indexKind,
+            String fromRevision,
+            String toRevision,
+            String representationFingerprint,
+            String operationDiscriminator) {
         requireProjectIdentity(project);
         String branch = requireText(branchName, "branchName");
         String targetRevision = requireText(toRevision, "toRevision");
         RagBranchIndexKind kind = indexKind != null ? indexKind : RagBranchIndexKind.DURABLE;
 
         String operationKey = operationKey(
-                project.getId(), branch, fromRevision, targetRevision, representationFingerprint);
+                project.getId(), branch, fromRevision, targetRevision,
+                representationFingerprint, operationDiscriminator);
         Optional<RagIndexOperation> existing = operationRepository
                 .findByProjectIdAndOperationKey(project.getId(), operationKey);
         if (existing.isPresent()) {
@@ -86,16 +92,14 @@ public class RagBranchIndexRegistryService {
                     branchIndex,
                     operation.getGeneration(),
                     operation,
-                    true,
-                    sourceCollectionTarget(operation.getGeneration()));
+                    true);
         }
 
         RagBranchIndex branchIndex = branchIndexRepository
                 .findByProjectIdAndBranchNameForUpdate(project.getId(), branch)
                 .orElseGet(() -> new RagBranchIndex(project, branch, kind));
         rejectCleanupClaim(branchIndex);
-        if (branchIndex.getIndexKind() == RagBranchIndexKind.LEGACY
-                || kind == RagBranchIndexKind.PRIMARY
+        if (kind == RagBranchIndexKind.PRIMARY
                 || (branchIndex.getIndexKind() == RagBranchIndexKind.TRANSIENT
                     && kind == RagBranchIndexKind.DURABLE)) {
             branchIndex.setIndexKind(kind);
@@ -123,14 +127,7 @@ public class RagBranchIndexRegistryService {
                 branchIndex,
                 generation,
                 operation,
-                false,
-                sourceCollectionTarget(generation));
-    }
-
-    private static String sourceCollectionTarget(
-            RagBranchIndexGeneration generation) {
-        RagBranchIndexGeneration parent = generation.getParentGeneration();
-        return parent != null ? parent.getCollectionName() : null;
+                false);
     }
 
     @Transactional
@@ -342,11 +339,24 @@ public class RagBranchIndexRegistryService {
             String fromRevision,
             String toRevision,
             String representationFingerprint) {
+        return operationKey(
+                projectId, branchName, fromRevision, toRevision,
+                representationFingerprint, null);
+    }
+
+    static String operationKey(
+            long projectId,
+            String branchName,
+            String fromRevision,
+            String toRevision,
+            String representationFingerprint,
+            String operationDiscriminator) {
         return digest(projectId + "\n"
                 + branchName + "\n"
                 + nullToEmpty(fromRevision) + "\n"
                 + toRevision + "\n"
-                + nullToEmpty(representationFingerprint));
+                + nullToEmpty(representationFingerprint) + "\n"
+                + nullToEmpty(operationDiscriminator));
     }
 
     private RagIndexOperation requireOperationForUpdate(long operationId) {

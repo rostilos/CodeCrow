@@ -1,26 +1,8 @@
 # Core dependencies
 python-dotenv>=1.0.0,<2.0.0
 
-# OpenAI client (for OpenRouter compatibility)
-openai>=1.12.0,<2.0.0
-tiktoken>=0.5.0,<1.0.0
-
-# LlamaIndex core
-llama-index-core==0.13.0
-
-# LlamaIndex extensions
-llama-index-embeddings-openai>=0.3.0
-# Keep the adapter and client as one tested compatibility pair. qdrant-client
-# 1.19 removed IDF_EMBEDDING_MODELS while this adapter still imports it.
-llama-index-vector-stores-qdrant==0.10.2
-llama-index-llms-openai>=0.3.0
-
 # LangChain text splitters (language-aware code splitting)
 langchain-text-splitters>=0.3.0
-
-# LangChain community (for LanguageParser with tree-sitter)
-langchain-community>=0.3.0
-langchain-core>=0.3.0
 
 # Tree-sitter is one native compatibility set. Keep local and image runtimes
 # identical so parser behavior does not depend on when dependencies were installed.
@@ -37,10 +19,7 @@ tree-sitter-c-sharp==0.23.1
 tree-sitter-ruby==0.23.1
 tree-sitter-php==0.24.1
 
-# Qdrant for vector storage
-qdrant-client==1.16.2
-
-# Redis for async queue
+# Redis for cross-process mutation coordination
 redis>=5.0.0,<6.0.0
 
 # Web framework
@@ -49,21 +28,13 @@ uvicorn[standard]>=0.27.0,<0.28.0
 pydantic>=2.6.0,<3.0.0
 pydantic-settings>=2.1.0,<3.0.0
 
-# File handling
-aiofiles>=23.2.0,<24.0.0
-
 # Testing
 pytest>=8.0.0,<9.0.0
 pytest-asyncio>=0.23.0,<1.0.0
 pytest-cov>=5.0.0,<7.0.0
 
-# HTTP client for OpenRouter
-httpx>=0.27.0,<1.0.0
-
 # System monitoring
 psutil>=5.9.0,<6.0.0
 
-# Application performance monitoring
-newrelic==11.5.0
 
 debugpy==1.8.1

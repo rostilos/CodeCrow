@@ -1,117 +1,60 @@
-"""
-Unit tests for rag_pipeline.models.config — RAGConfig validators and helpers.
-"""
+"""Unit tests for structural repository-index configuration."""
+
 import os
-import pytest
 from unittest.mock import patch
 
-from rag_pipeline.models.config import (
-    RAGConfig,
-    get_embedding_dim_for_model,
-    EMBEDDING_MODEL_DIMENSIONS,
-    _parse_csv_env,
-    IndexStats,
-)
+import pytest
 
-
-class TestGetEmbeddingDimForModel:
-
-    def test_exact_match(self):
-        assert get_embedding_dim_for_model("openai/text-embedding-3-small") == 1536
-        assert get_embedding_dim_for_model("all-minilm") == 384
-        assert get_embedding_dim_for_model("nomic-embed-text") == 768
-
-    def test_partial_match(self):
-        # "qwen3-embedding-0.6b" should match via partial
-        dim = get_embedding_dim_for_model("qwen3-embedding-0.6b")
-        assert dim == 1024
-
-    def test_unknown_model_returns_default(self):
-        assert get_embedding_dim_for_model("totally-unknown-model") == 1536
-
-    def test_all_known_models_have_positive_dim(self):
-        for model, dim in EMBEDDING_MODEL_DIMENSIONS.items():
-            assert dim > 0, f"Model {model} has non-positive dim {dim}"
-
-
-class TestParseCsvEnv:
-
-    def test_returns_default_when_env_not_set(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("RAG_TEST_CSV", None)
-            assert _parse_csv_env("RAG_TEST_CSV", ["a", "b"]) == ["a", "b"]
-
-    def test_parses_comma_separated(self):
-        with patch.dict(os.environ, {"RAG_TEST_CSV": "main,develop,release"}):
-            assert _parse_csv_env("RAG_TEST_CSV", []) == ["main", "develop", "release"]
-
-    def test_strips_whitespace(self):
-        with patch.dict(os.environ, {"RAG_TEST_CSV": " main , develop "}):
-            assert _parse_csv_env("RAG_TEST_CSV", []) == ["main", "develop"]
-
-    def test_empty_value_returns_default(self):
-        with patch.dict(os.environ, {"RAG_TEST_CSV": "  "}):
-            assert _parse_csv_env("RAG_TEST_CSV", ["default"]) == ["default"]
+from rag_pipeline.models.config import IndexStats, RAGConfig
 
 
 class TestRAGConfig:
-
     def test_default_values(self):
-        config = RAGConfig()
+        # Other test modules import ``main`` during collection, which loads the
+        # deployment .env. Defaults must be asserted independently of that
+        # process-wide production configuration.
+        with patch.dict(os.environ, {}, clear=True):
+            config = RAGConfig()
+        assert config.structural_index_root == "/var/lib/codecrow/structural-index"
+        assert config.full_index_concurrency == 16
+        assert config.architecture_finalization_timeout_seconds == 600
+        assert config.review_generation_ttl_seconds == 21600
+        assert config.max_file_size_bytes == 512 * 1024
+        assert config.max_files_per_index == 50000
         assert config.chunk_size == 8000
         assert config.chunk_overlap == 200
-        assert config.text_chunk_size == 2000
-        assert config.retrieval_top_k == 10
-        assert config.similarity_threshold == 0.7
-        assert config.max_file_size_bytes == 1024 * 1024
-        assert config.qdrant_timeout_seconds == 30
-        assert config.qdrant_upsert_max_payload_bytes == 8 * 1024 * 1024
-        assert config.full_index_concurrency == 1
-        assert config.architecture_finalization_timeout_seconds == 600
+        assert config.max_chunks_per_index == 1_000_000
 
-    def test_qdrant_timeout_is_configurable(self):
-        with patch.dict(os.environ, {"QDRANT_TIMEOUT_SECONDS": "45"}):
-            assert RAGConfig().qdrant_timeout_seconds == 45
+    def test_structural_index_root_is_configurable(self):
+        with patch.dict(
+            os.environ,
+            {"STRUCTURAL_INDEX_ROOT": "/tmp/codecrow-structural-test"},
+        ):
+            assert (
+                RAGConfig().structural_index_root
+                == "/tmp/codecrow-structural-test"
+            )
 
-    def test_rag_resource_limits_are_configurable(self):
-        with patch.dict(os.environ, {
-            "QDRANT_UPSERT_MAX_PAYLOAD_BYTES": "4194304",
-            "RAG_FULL_INDEX_CONCURRENCY": "2",
-        }):
+    def test_index_concurrency_is_configurable(self):
+        with patch.dict(os.environ, {"RAG_FULL_INDEX_CONCURRENCY": "2"}):
             config = RAGConfig()
-            assert config.qdrant_upsert_max_payload_bytes == 4194304
             assert config.full_index_concurrency == 2
 
-    def test_architecture_finalization_timeout_is_configurable(self):
-        with patch.dict(os.environ, {
-            "RAG_ARCHITECTURE_FINALIZATION_TIMEOUT_SECONDS": "90",
-        }):
-            assert RAGConfig().architecture_finalization_timeout_seconds == 90
+    def test_review_generation_ttl_is_configurable(self):
+        with patch.dict(
+            os.environ,
+            {"RAG_REVIEW_GENERATION_TTL_SECONDS": "7200"},
+        ):
+            assert RAGConfig().review_generation_ttl_seconds == 7200
 
-    def test_auto_detect_embedding_dim_ollama(self):
-        config = RAGConfig(embedding_provider="ollama", ollama_model="all-minilm", embedding_dim=0)
-        assert config.embedding_dim == 384
+    def test_max_file_size_is_configurable(self):
+        with patch.dict(os.environ, {"RAG_MAX_FILE_SIZE_BYTES": "262144"}):
+            assert RAGConfig().max_file_size_bytes == 262144
 
-    def test_auto_detect_embedding_dim_openrouter(self):
-        config = RAGConfig(
-            embedding_provider="openrouter",
-            openrouter_model="openai/text-embedding-3-small",
-            openrouter_api_key="test-key-12345",
-            embedding_dim=0,
-        )
-        assert config.embedding_dim == 1536
-
-    def test_explicit_embedding_dim_overrides_auto(self):
-        config = RAGConfig(embedding_dim=512)
-        assert config.embedding_dim == 512
-
-    def test_openrouter_without_key_raises(self):
-        with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
-            RAGConfig(embedding_provider="openrouter", openrouter_api_key="")
-
-    def test_unknown_provider_falls_back_to_ollama(self):
-        config = RAGConfig(embedding_provider="unknown_provider")
-        assert config.embedding_provider == "ollama"
+    @pytest.mark.parametrize("configured", [0, -1])
+    def test_max_file_size_must_be_positive(self, configured):
+        with pytest.raises(ValueError, match="greater than or equal to 1"):
+            RAGConfig(max_file_size_bytes=configured)
 
     def test_excluded_patterns_defaults(self):
         config = RAGConfig()
@@ -119,8 +62,8 @@ class TestRAGConfig:
         assert ".git/**" in config.excluded_patterns
         assert "*.min.js" in config.excluded_patterns
 
-class TestIndexStats:
 
+class TestIndexStats:
     def test_round_trip(self):
         stats = IndexStats(
             namespace="ws__proj__main",
@@ -131,7 +74,6 @@ class TestIndexStats:
             project="proj",
             branch="main",
         )
-        data = stats.model_dump()
-        restored = IndexStats(**data)
+        restored = IndexStats(**stats.model_dump())
         assert restored.namespace == "ws__proj__main"
         assert restored.chunk_count == 500

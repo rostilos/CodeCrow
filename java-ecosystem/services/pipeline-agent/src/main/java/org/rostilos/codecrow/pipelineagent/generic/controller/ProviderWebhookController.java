@@ -19,6 +19,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookAsyncProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.WebhookDeduplicationService;
 import org.rostilos.codecrow.pipelineagent.generic.service.WebhookEventClassifier;
+import org.rostilos.codecrow.pipelineagent.generic.service.NativeWebhookAuthenticator;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +55,7 @@ public class ProviderWebhookController {
     private final WebhookAsyncProcessor webhookAsyncProcessor;
     private final SiteSettingsProvider siteSettingsProvider;
     private final WebhookDeduplicationService deduplicationService;
+    private final NativeWebhookAuthenticator nativeAuthenticator;
     
     public ProviderWebhookController(
             WebhookProjectResolver projectResolver,
@@ -65,7 +67,8 @@ public class ProviderWebhookController {
             JobService jobService,
             WebhookAsyncProcessor webhookAsyncProcessor,
             SiteSettingsProvider siteSettingsProvider,
-            WebhookDeduplicationService deduplicationService
+            WebhookDeduplicationService deduplicationService,
+            NativeWebhookAuthenticator nativeAuthenticator
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
@@ -77,6 +80,7 @@ public class ProviderWebhookController {
         this.webhookAsyncProcessor = webhookAsyncProcessor;
         this.siteSettingsProvider = siteSettingsProvider;
         this.deduplicationService = deduplicationService;
+        this.nativeAuthenticator = nativeAuthenticator;
     }
     
     /**
@@ -114,8 +118,9 @@ public class ProviderWebhookController {
             }
             
             // Find the project by external repo ID (with slug fallback for legacy bindings)
-            Optional<Project> projectOpt = projectResolver.findProjectByExternalRepo(
-                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
+            Optional<Project> projectOpt = projectResolver.findAuthenticatedProject(
+                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug(),
+                    webhookPayload.workspaceSlug(), project -> projectResolver.validateWebhookAuth(project, authToken));
             
             if (projectOpt.isEmpty()) {
                 log.warn("No project found for {} repo {} (slug={})", provider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
@@ -159,7 +164,9 @@ public class ProviderWebhookController {
             @RequestHeader(value = "X-GitHub-Event", required = false) String githubEventType,
             @RequestHeader(value = "X-Gitlab-Event", required = false) String gitlabEventType,
             @RequestHeader(value = "X-Hub-Signature-256", required = false) String githubSignature,
-            @RequestBody String body
+            @RequestHeader(value = "X-Hub-Signature", required = false) String bitbucketSignature,
+            @RequestHeader(value = "X-Gitlab-Token", required = false) String gitlabToken,
+            @RequestBody byte[] body
     ) {
         try {
             EVcsProvider vcsProvider = EVcsProvider.fromId(provider);
@@ -176,21 +183,17 @@ public class ProviderWebhookController {
                         .body(Map.of("error", "missing_repo_id", "message", "Could not extract repository ID"));
             }
             
-            Optional<Project> projectOpt = projectResolver.findProjectByExternalRepo(
-                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
+            Optional<Project> projectOpt = projectResolver.findAuthenticatedProject(
+                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug(),
+                    webhookPayload.workspaceSlug(), project -> nativeAuthenticator.authenticate(
+                            project, vcsProvider, payload, body, githubSignature, bitbucketSignature, gitlabToken));
             
             if (projectOpt.isEmpty()) {
-                log.info("No project found for {} repo {} (slug={}) - ignoring webhook", 
-                        provider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
-                return ResponseEntity.ok(Map.of("status", "ignored", 
-                        "message", "Repository not configured"));
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "unauthorized", "message", "Webhook authentication failed"));
             }
-            
             Project project = projectOpt.get();
-            
-            // TODO: Validate signature for providers that support it (GitHub, GitLab)
-            // TODO: For now, we accept all webhooks for configured repos
-            
+
             return processWebhook(vcsProvider, webhookPayload, project);
             
         } catch (IllegalArgumentException e) {

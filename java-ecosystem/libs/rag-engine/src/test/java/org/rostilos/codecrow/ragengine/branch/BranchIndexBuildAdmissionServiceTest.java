@@ -60,19 +60,20 @@ class BranchIndexBuildAdmissionServiceTest {
         operation.setId(30L);
         operation.setGeneration(generation);
         registration = new RagBranchIndexRegistryService.BuildRegistration(
-                branchIndex, generation, operation, false, "source-target");
+                branchIndex, generation, operation, false);
     }
 
     @Test
     void registersThenAtomicallyLinksAndStartsJobAndOperation() {
         when(registryService.registerBuild(
                 eq(project), eq("main"), eq(RagBranchIndexKind.PRIMARY),
-                isNull(), eq("revision-b"), startsWith("exact-full-snapshot:automatic:")))
+                isNull(), eq("revision-b"), isNull(),
+                startsWith("exact-full-snapshot:automatic:")))
                 .thenReturn(registration);
         Job job = mock(Job.class);
         when(job.getId()).thenReturn(77L);
-        when(jobService.createRagIndexJob(
-                project, false, JobTriggerSource.WEBHOOK, "main", "revision-b"))
+        when(jobService.createRepositoryIndexBuildJob(
+                project, JobTriggerSource.WEBHOOK, "main", "revision-b"))
                 .thenReturn(job);
 
         var admitted = service.admit(
@@ -86,18 +87,17 @@ class BranchIndexBuildAdmissionServiceTest {
                 .isEqualTo("physical-target");
         assertThat(admitted.preparedBuild().analysisLockKey())
                 .isEqualTo("lock-owner-123");
-        assertThat(admitted.preparedBuild().sourceCollectionTarget())
-                .isEqualTo("source-target");
         assertThat(admitted.statusAdmission()).isEqualTo(
                 BranchIndexBuildAdmissionService.ProjectStatusAdmission.UPDATING);
         InOrder order = inOrder(registryService, jobService, trackingService);
         order.verify(registryService).registerBuild(
                 eq(project), eq("main"), eq(RagBranchIndexKind.PRIMARY),
-                isNull(), eq("revision-b"), startsWith("exact-full-snapshot:automatic:"));
+                isNull(), eq("revision-b"), isNull(),
+                startsWith("exact-full-snapshot:automatic:"));
         order.verify(trackingService).preparePublishedGenerationForUpdate(
                 project, "main", "revision-a", 120, 240, sourceActivatedAt);
-        order.verify(jobService).createRagIndexJob(
-                project, false, JobTriggerSource.WEBHOOK, "main", "revision-b");
+        order.verify(jobService).createRepositoryIndexBuildJob(
+                project, JobTriggerSource.WEBHOOK, "main", "revision-b");
         order.verify(registryService).startBuild(30L, 77L, "lock-owner-123");
         order.verify(jobService).startJob(job);
         order.verify(trackingService).markUpdatingStarted(
@@ -107,7 +107,7 @@ class BranchIndexBuildAdmissionServiceTest {
     @Test
     void rejectsPreviouslyCommittedAdmissionWithoutCreatingAnotherJob() {
         when(registryService.registerBuild(any(), anyString(), any(), isNull(),
-                anyString(), anyString()))
+                anyString(), isNull(), anyString()))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
                         registration.branchIndex(), registration.generation(),
                         registration.operation(), true));
@@ -134,13 +134,13 @@ class BranchIndexBuildAdmissionServiceTest {
         initialOperation.setId(31L);
         initialOperation.setGeneration(initial);
         when(registryService.registerBuild(any(), anyString(), any(), isNull(),
-                eq("revision-first"), anyString()))
+                eq("revision-first"), isNull(), anyString()))
                 .thenReturn(new RagBranchIndexRegistryService.BuildRegistration(
                         registration.branchIndex(), initial, initialOperation, false));
         Job job = mock(Job.class);
         when(job.getId()).thenReturn(78L);
-        when(jobService.createRagIndexJob(
-                project, true, JobTriggerSource.WEBHOOK, "main", "revision-first"))
+        when(jobService.createRepositoryIndexBuildJob(
+                project, JobTriggerSource.WEBHOOK, "main", "revision-first"))
                 .thenReturn(job);
 
         var admitted = service.admit(

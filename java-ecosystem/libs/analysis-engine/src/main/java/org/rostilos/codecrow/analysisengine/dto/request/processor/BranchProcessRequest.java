@@ -24,13 +24,6 @@ public class BranchProcessRequest implements AnalysisProcessRequest {
      */
     public Long sourcePrNumber;
 
-    /**
-     * Optional: ZIP archive of the repository for first-time full indexing in RAG pipeline.
-     * If provided, the entire repository will be indexed.
-     * If not provided, only incremental updates will be performed.
-     */
-    public byte[] archive;
-
     public Long getProjectId() {
         return projectId;
     }
@@ -47,11 +40,4 @@ public class BranchProcessRequest implements AnalysisProcessRequest {
 
     public Long getSourcePrNumber() { return sourcePrNumber; }
 
-    public byte[] getArchive() {
-        return archive;
-    }
-
-    public void setArchive(byte[] archive) {
-        this.archive = archive;
-    }
 }

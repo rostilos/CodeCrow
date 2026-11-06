@@ -37,9 +37,12 @@ public class QaDocDocumentService {
         }
 
         QaDocDocument document = qaDocDocumentRepository
-                .findByProjectIdAndPrNumber(project.getId(), prNumber)
+                .findForUpdate(project.getId(), prNumber)
                 .orElseGet(() -> new QaDocDocument(project, prNumber));
 
+        if (document.isFromNewerAnalysis(analysisId)) {
+            throw new IllegalStateException("A newer review already produced QA documentation for this PR.");
+        }
         document.replaceContent(taskId, analysisId, commitHash, markdownContent);
         return qaDocDocumentRepository.save(document);
     }

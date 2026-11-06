@@ -22,6 +22,7 @@ class GitLabClientTest {
             gitLab.enqueue(jsonResponse("""
                     {
                       "iid": 17,
+                      "author": {"id": 42, "username": "developer"},
                       "title": "Self-managed review",
                       "description": "Description",
                       "source_branch": "feature",
@@ -30,6 +31,7 @@ class GitLabClientTest {
                       "web_url": "https://gitlab.example/team/repo/-/merge_requests/17",
                       "diff_refs": {
                         "base_sha": "base-sha",
+                        "start_sha": "target-head-sha",
                         "head_sha": "head-sha"
                       }
                     }
@@ -49,8 +51,11 @@ class GitLabClientTest {
             VcsPullRequest pullRequest = client.getPullRequest("team", "repo", 17);
             String diff = client.getPullRequestDiff("team", "repo", 17);
 
+            assertThat(pullRequest.authorId()).isEqualTo("42");
+            assertThat(pullRequest.authorName()).isEqualTo("developer");
             assertThat(pullRequest.title()).isEqualTo("Self-managed review");
             assertThat(pullRequest.baseCommit()).isEqualTo("base-sha");
+            assertThat(pullRequest.targetHeadCommit()).isEqualTo("target-head-sha");
             assertThat(pullRequest.headCommit()).isEqualTo("head-sha");
             assertThat(diff).contains("diff --git a/src/App.java b/src/App.java")
                     .contains("+new");

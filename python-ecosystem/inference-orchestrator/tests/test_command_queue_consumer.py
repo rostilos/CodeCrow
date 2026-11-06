@@ -37,6 +37,15 @@ class FakeRedis:
     def pipeline(self):
         return FakePipeline(self)
 
+    async def exists(self, key):
+        return True
+
+    async def set(self, *args, **kwargs):
+        return True
+
+    async def expire(self, *args, **kwargs):
+        return True
+
 
 def _ask_request():
     return {
@@ -210,7 +219,7 @@ async def test_start_uses_blocking_read_safe_redis_timeouts():
     consumer._consume_loop = AsyncMock()
 
     with patch(
-        "server.command_queue_consumer.redis.from_url",
+        "server.redis_job_consumer.redis.from_url",
         return_value=redis_client,
     ) as from_url:
         await consumer.start()
@@ -259,7 +268,7 @@ async def test_blocking_read_timeout_is_retried_without_consumer_failure():
 
     with (
         patch(
-            "server.command_queue_consumer.asyncio.sleep",
+            "server.redis_job_consumer.asyncio.sleep",
             side_effect=stop_after_backoff,
         ),
         patch("server.command_queue_consumer.logger.warning") as warning,
@@ -303,6 +312,9 @@ async def test_stop_waits_for_admitted_command_before_closing_redis():
     consumer = CommandQueueConsumer(MagicMock())
     consumer._redis = MagicMock()
     consumer._redis.aclose = AsyncMock()
+    consumer._redis.exists = AsyncMock(return_value=True)
+    consumer._redis.set = AsyncMock(return_value=True)
+    consumer._redis.expire = AsyncMock(return_value=True)
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -312,11 +324,12 @@ async def test_stop_waits_for_admitted_command_before_closing_redis():
 
     consumer._handle_job = AsyncMock(side_effect=handle_until_released)
     await consumer._job_semaphore.acquire()
-    job_task = asyncio.create_task(consumer._handle_admitted_job("payload"))
+    job_task = asyncio.create_task(consumer._handle_admitted_job('{"job_id":"owned-job"}'))
     consumer._job_tasks.add(job_task)
     job_task.add_done_callback(consumer._job_tasks.discard)
     await started.wait()
 
+    redis_client = consumer._redis
     stop_task = asyncio.create_task(consumer.stop())
     await asyncio.sleep(0)
 
@@ -327,7 +340,7 @@ async def test_stop_waits_for_admitted_command_before_closing_redis():
     await asyncio.wait_for(stop_task, timeout=1)
 
     assert job_task.done()
-    consumer._redis.aclose.assert_awaited_once_with()
+    redis_client.aclose.assert_awaited_once_with()
 
 
 def test_redis_outage_diagnostic_is_bounded_until_recovery():

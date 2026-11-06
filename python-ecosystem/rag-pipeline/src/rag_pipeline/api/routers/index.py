@@ -8,21 +8,21 @@ import shutil
 import time
 from queue import Empty, Full, Queue
 from pathlib import Path
-from threading import Lock, Thread, current_thread
-from typing import BinaryIO, Callable, List
+from threading import Event, Lock, Thread, current_thread
+from typing import BinaryIO, Callable
 from uuid import uuid4
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ...models.config import IndexStats
+from ..heavy_work import get_build_workers, run_heavy_operation
 from ..models import (
-    IndexRequest, UpdateFilesRequest, DeleteFilesRequest, ApplyChangesRequest,
-    AdvanceGenerationRequest,
-    GenerationAliasPublicationRequest,
-    DeleteBranchRequest, CleanupStaleBranchesRequest,
-    EstimateRequest, EstimateResponse,
+    IndexRequest,
+    RevisionDiscoveryResponse,
+    RevisionPreflightResponse,
 )
-from ...core.repository_overlay import IncrementalIndexPreconditionError
+from ...core.exact_index import ExactIndexPreconditionError
+from ...core.source_tree import RepositorySourceTreeError
 from ...core.coordination import (
     MutationCoordinationUnavailable,
     MutationLeaseUnavailable,
@@ -48,13 +48,17 @@ INDEX_STREAM_HEARTBEAT_SECONDS = _stream_heartbeat_interval_seconds()
 
 
 class _IndexStreamWorkerRegistry:
-    """Track synchronous HTTP-stream indexing beyond request cancellation."""
+    """Track and cooperatively cancel synchronous HTTP-stream indexing."""
 
     def __init__(self) -> None:
-        self._workers: set[Thread] = set()
+        self._workers: dict[Thread, Event] = {}
         self._lock = Lock()
 
-    def start(self, target: Callable[[], None]) -> Thread:
+    def start(
+        self,
+        target: Callable[[], None],
+        cancellation_event: Event,
+    ) -> Thread:
         """Admit and start one worker before exposing its response stream."""
 
         def run_tracked() -> None:
@@ -62,7 +66,7 @@ class _IndexStreamWorkerRegistry:
                 target()
             finally:
                 with self._lock:
-                    self._workers.discard(current_thread())
+                    self._workers.pop(current_thread(), None)
 
         worker = Thread(
             target=run_tracked,
@@ -74,36 +78,39 @@ class _IndexStreamWorkerRegistry:
             daemon=False,
         )
         with self._lock:
-            self._workers.add(worker)
+            self._workers[worker] = cancellation_event
         try:
             worker.start()
         except BaseException:
             with self._lock:
-                self._workers.discard(worker)
+                self._workers.pop(worker, None)
             raise
         return worker
 
+    def cancel(self, worker: Thread) -> None:
+        """Signal one admitted worker to stop at its next safe boundary."""
+        with self._lock:
+            cancellation_event = self._workers.get(worker)
+        if cancellation_event is not None:
+            cancellation_event.set()
+
     async def wait_for(self, worker: Thread) -> None:
-        """Wait for a worker, deferring cancellation until it has returned."""
-        cancellation: asyncio.CancelledError | None = None
-        while worker.is_alive():
-            try:
-                await asyncio.sleep(0.05)
-            except asyncio.CancelledError as exception:
-                # A disconnected streaming client must not unwind its server
-                # handler while the admitted worker can still read the
-                # caller-owned repository snapshot.
-                cancellation = cancellation or exception
+        """Wait outside request cleanup and propagate cancellation once."""
+
+        try:
+            while worker.is_alive():
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.cancel(worker)
+            raise
         worker.join()
-        if cancellation is not None:
-            raise cancellation
 
     async def drain(self) -> None:
-        """Wait for every currently admitted stream worker."""
+        """Cancel and wait for every currently admitted stream worker."""
         announced = False
         while True:
             with self._lock:
-                active_workers = tuple(self._workers)
+                active_workers = tuple(self._workers.items())
             if not active_workers:
                 return
             if not announced:
@@ -112,7 +119,9 @@ class _IndexStreamWorkerRegistry:
                     len(active_workers),
                 )
                 announced = True
-            for worker in active_workers:
+            for _, cancellation_event in active_workers:
+                cancellation_event.set()
+            for worker, _ in active_workers:
                 await self.wait_for(worker)
 
     @property
@@ -270,101 +279,107 @@ def _get_singletons():
     return config, index_manager
 
 
-@router.get("/limits")
-def get_limits():
-    """Get current RAG indexing limits (for free plan info)."""
-    config, _ = _get_singletons()
-    return {
-        "max_chunks_per_index": config.max_chunks_per_index,
-        "max_files_per_index": config.max_files_per_index,
-        "max_file_size_bytes": config.max_file_size_bytes,
-        "chunk_size": config.chunk_size,
-        "chunk_overlap": config.chunk_overlap
+def _index_collection_target(request: IndexRequest) -> str:
+    """Keep managed targets exact and allocate one fresh direct-API target."""
+    if request.collection_target:
+        return request.collection_target
+    # A generated target is intentionally not a mutable tenant/branch alias.
+    # Every direct build receives its own opaque generation identity, so a
+    # later request cannot remap the target held by an in-flight exact read.
+    return f"cc_http_g_{uuid4().hex}"
+
+
+def _execute_index_request(
+    index_manager,
+    request: IndexRequest,
+    *,
+    repo_path: str,
+    collection_target: str,
+    progress_callback=None,
+    cancellation_event: Event | None = None,
+    source_tree_exclusively_owned: bool = False,
+):
+    common = {
+        "repo_path": repo_path,
+        "workspace": request.workspace,
+        "project": request.project,
+        "branch": request.branch,
+        "commit": request.commit,
+        "source_tree_sha256": request.source_tree_sha256,
+        "collection_target": collection_target,
+        "project_type": request.project_type,
+        "source_root": request.source_root,
     }
-
-
-@router.post("/index/estimate", response_model=EstimateResponse)
-def estimate_repository(request: EstimateRequest):
-    """Estimate repository size before indexing (file and chunk counts)."""
-    config, index_manager = _get_singletons()
-    try:
-        file_count, estimated_chunks = index_manager.estimate_repository_size(
-            repo_path=request.repo_path,
-            include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns,
+    if progress_callback is not None:
+        common["progress_callback"] = progress_callback
+    if cancellation_event is not None:
+        common["cancellation_event"] = cancellation_event
+    if source_tree_exclusively_owned:
+        # This is derived from the server-side atomic ownership transfer, never
+        # from an independently trusted client assertion.
+        common["source_tree_exclusively_owned"] = True
+    if request.base_collection_target:
+        return index_manager.index_repository_delta(
+            **common,
+            base_revision=request.base_revision,
+            changed_paths=request.changed_paths,
+            deleted_paths=request.deleted_paths,
+            base_collection_target=request.base_collection_target,
+            base_generation_manifest_sha256=(
+                request.base_generation_manifest_sha256
+            ),
         )
-
-        within_limits = True
-        messages = []
-
-        if config.max_files_per_index > 0 and file_count > config.max_files_per_index:
-            within_limits = False
-            messages.append(f"File count ({file_count}) exceeds limit ({config.max_files_per_index})")
-
-        if config.max_chunks_per_index > 0 and estimated_chunks > config.max_chunks_per_index:
-            within_limits = False
-            messages.append(f"Estimated chunks ({estimated_chunks}) exceeds limit ({config.max_chunks_per_index})")
-
-        if within_limits:
-            message = "Repository is within limits"
-        else:
-            message = (
-                ". ".join(messages) +
-                ". Use exclude patterns to skip large directories (node_modules, vendor, dist, generated files). "
-                "This is a free plan limitation - contact support for extended limits."
-            )
-
-        return EstimateResponse(
-            file_count=file_count,
-            estimated_chunks=estimated_chunks,
-            max_files_allowed=config.max_files_per_index,
-            max_chunks_allowed=config.max_chunks_per_index,
-            within_limits=within_limits,
-            message=message
-        )
-    except Exception as e:
-        logger.error(f"Error estimating repository: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return index_manager.index_repository(
+        **common,
+        include_patterns=request.include_patterns,
+        exclude_patterns=request.exclude_patterns,
+    )
 
 
 @router.post("/index/repository", response_model=IndexStats)
-def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
+async def index_repository_http(request: IndexRequest, background_tasks: BackgroundTasks):
+    """Run full and incremental builds outside the API process and query pool."""
+    workers = get_build_workers()
+    if workers is not None:
+        return await workers.run("index", {
+            "request": request.model_dump(mode="json"),
+            "repo_path": request.repo_path,
+            "collection_target": _index_collection_target(request),
+        })
+    # Direct embeddings without the application lifespan retain their injected
+    # manager; normal service startup always owns process workers.
+    return await run_heavy_operation(index_repository, request, background_tasks)
+
+
+def index_repository(
+    request: IndexRequest, background_tasks: BackgroundTasks = None, *,
+    index_manager=None, repo_path=None, collection_target=None,
+    source_tree_exclusively_owned=False, progress_callback=None,
+    cancellation_event=None,
+):
     """Index entire repository."""
-    _, index_manager = _get_singletons()
+    if index_manager is None:
+        _, index_manager = _get_singletons()
     try:
-        optional_generation_args = {}
-        source_tree_sha256 = getattr(request, "source_tree_sha256", None)
-        collection_target = getattr(request, "collection_target", None)
-        if isinstance(source_tree_sha256, str) and source_tree_sha256:
-            optional_generation_args["source_tree_sha256"] = source_tree_sha256
-        if isinstance(collection_target, str) and collection_target:
-            optional_generation_args["collection_target"] = collection_target
-        reuse_collection_target = getattr(request, "reuse_collection_target", None)
-        if isinstance(reuse_collection_target, str) and reuse_collection_target:
-            optional_generation_args["reuse_collection_target"] = (
-                reuse_collection_target
-            )
-        if getattr(request, "publish_branch_alias", False) is True:
-            optional_generation_args["publish_branch_alias"] = True
-        if getattr(request, "publish_legacy_project_alias", False) is True:
-            optional_generation_args["publish_legacy_project_alias"] = True
-        stats = index_manager.index_repository(
-            repo_path=request.repo_path,
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit,
-            preserve_other_branches=request.preserve_other_branches,
-            include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns,
-            project_type=request.project_type,
-            source_root=request.source_root,
-            **optional_generation_args,
+        collection_target = collection_target or _index_collection_target(request)
+        stats = _execute_index_request(
+            index_manager,
+            request,
+            repo_path=repo_path or request.repo_path,
+            collection_target=collection_target,
+            source_tree_exclusively_owned=source_tree_exclusively_owned,
+            progress_callback=progress_callback,
+            cancellation_event=cancellation_event,
         )
         return stats
     except ValueError as e:
         logger.warning(f"Validation error indexing repository: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except RepositorySourceTreeError as e:
+        logger.warning("Repository source identity rejected: %s", e)
+        raise HTTPException(status_code=409, detail=str(e))
+    except ExactIndexPreconditionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except MutationLeaseUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
     except MutationCoordinationUnavailable as e:
@@ -375,7 +390,10 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
 
 
 @router.post("/index/repository/stream")
-def index_repository_stream(request: IndexRequest):
+def index_repository_stream(
+    request: IndexRequest,
+    http_request: Request = None,
+):
     """Index one repository and stream observable batch progress as SSE.
 
     The ordinary endpoint remains the stable JSON contract.  This endpoint is
@@ -384,8 +402,10 @@ def index_repository_stream(request: IndexRequest):
     delivery a prerequisite for a successful snapshot.
     """
     _, index_manager = _get_singletons()
+    collection_target = _index_collection_target(request)
     progress_events: Queue[dict] = Queue(maxsize=1)
     terminal_events: Queue[tuple[str, object]] = Queue(maxsize=1)
+    cancellation_event = Event()
     repository_ownership_transferred = (
         getattr(request, "transfer_repo_ownership", False) is True
     )
@@ -413,40 +433,22 @@ def index_repository_stream(request: IndexRequest):
 
     def run_index() -> None:
         try:
-            optional_generation_args = {}
-            if request.source_tree_sha256:
-                optional_generation_args["source_tree_sha256"] = (
-                    request.source_tree_sha256
-                )
-            if request.collection_target:
-                optional_generation_args["collection_target"] = (
-                    request.collection_target
-                )
-            if request.reuse_collection_target:
-                optional_generation_args["reuse_collection_target"] = (
-                    request.reuse_collection_target
-                )
-            if getattr(request, "publish_branch_alias", False) is True:
-                optional_generation_args["publish_branch_alias"] = True
-            if getattr(request, "publish_legacy_project_alias", False) is True:
-                optional_generation_args["publish_legacy_project_alias"] = True
-            stats = index_manager.index_repository(
-                repo_path=str(index_repo_path),
-                workspace=request.workspace,
-                project=request.project,
-                branch=request.branch,
-                commit=request.commit,
-                preserve_other_branches=request.preserve_other_branches,
-                include_patterns=request.include_patterns,
-                exclude_patterns=request.exclude_patterns,
-                project_type=request.project_type,
-                source_root=request.source_root,
-                progress_callback=progress,
-                **optional_generation_args,
-            )
-            terminal_events.put(
-                ("complete", stats.model_dump(mode="json"))
-            )
+            workers = get_build_workers()
+            if workers is not None:
+                result = workers.run_blocking("index", {
+                    "request": request.model_dump(mode="json"),
+                    "repo_path": str(index_repo_path),
+                    "collection_target": collection_target,
+                    "source_tree_exclusively_owned": repository_ownership_transferred,
+                }, progress_callback=progress, cancellation_event=cancellation_event)
+            else:
+                result = _execute_index_request(
+                    index_manager, request, repo_path=str(index_repo_path),
+                    collection_target=collection_target, progress_callback=progress,
+                    cancellation_event=cancellation_event,
+                    source_tree_exclusively_owned=repository_ownership_transferred,
+                ).model_dump(mode="json")
+            terminal_events.put(("complete", result))
         except Exception as exception:
             # The terminal event gives the Java job owner complete context and
             # that owner emits the rate-bounded diagnostic. Avoid logging the
@@ -467,7 +469,7 @@ def index_repository_stream(request: IndexRequest):
         # Admission happens before successful response headers. Ownership is
         # already represented by an atomic rename, so a lost admission event
         # cannot make the Java caller delete the path this worker is reading.
-        worker = _index_stream_workers.start(run_index)
+        worker = _index_stream_workers.start(run_index, cancellation_event)
     except BaseException:
         if repository_ownership_transferred:
             _remove_owned_stream_repository(
@@ -495,6 +497,22 @@ def index_repository_stream(request: IndexRequest):
                     last_payload_at + INDEX_STREAM_HEARTBEAT_SECONDS
                 )
             while True:
+                # Starlette does not guarantee that a StreamingResponse body
+                # iterator is cancelled immediately when its peer vanishes.
+                # Poll the ASGI receive channel explicitly so a killed harness
+                # cannot leave a full repository build consuming CPU and disk.
+                if (
+                    http_request is not None
+                    and await http_request.is_disconnected()
+                ):
+                    cancellation_event.set()
+                    # Do not wait from the request task itself. Uvicorn may
+                    # keep that task inside a cancelled ASGI receive scope
+                    # after the peer vanishes; repeatedly awaiting there can
+                    # become a hot cancellation loop. Returning enters the
+                    # `finally` block below, which drains the worker from a
+                    # separate shielded task.
+                    return
                 try:
                     payload = progress_events.get_nowait()
                     event_type = "progress"
@@ -555,212 +573,87 @@ def index_repository_stream(request: IndexRequest):
                     break
         finally:
             # StreamingResponse closes this async generator when its client
-            # disconnects. Defer handler teardown until the independently
-            # admitted synchronous operation has returned.
-            worker_drain = asyncio.create_task(
-                _index_stream_workers.wait_for(worker)
-            )
-            try:
-                await asyncio.shield(worker_drain)
-            except asyncio.CancelledError:
-                # Cancellation can be delivered before an awaited coroutine
-                # executes its own cancellation handler. Shield admission
-                # draining as a separate task, then re-raise only after it has
-                # completed.
-                await worker_drain
-                raise
+            # disconnects. Ask the independently registered worker to stop,
+            # then let the request task return without awaiting inside the
+            # possibly cancelled ASGI scope. The worker owns and removes its
+            # transferred snapshot; application shutdown drains the registry.
+            cancellation_event.set()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post("/index/update-files", response_model=IndexStats)
-def update_files(request: UpdateFilesRequest):
-    """Update specific files in index."""
+@router.get(
+    "/index/{workspace}/{project}/revisions",
+    response_model=list[RevisionDiscoveryResponse],
+)
+def discover_revision_preflights(
+    workspace: str,
+    project: str,
+    branch: str = Query(min_length=1),
+    commit: str | None = Query(default=None, min_length=1, max_length=200),
+):
+    """Discover verified sealed generations for one tenant-bound branch."""
     _, index_manager = _get_singletons()
     try:
-        stats = index_manager.update_files(
-            file_paths=request.file_paths,
-            repo_base=request.repo_base,
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit
+        return index_manager.discover_revision_preflights(
+            workspace,
+            project,
+            branch,
+            commit=commit,
         )
-        return stats
-    except IncrementalIndexPreconditionError as e:
-        logger.warning(f"Incremental update precondition failed: {e}")
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationLeaseUnavailable as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationCoordinationUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error updating files: {e}")
+        logger.error("Error discovering exact repository generations: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/index/delete-files", response_model=IndexStats)
-def delete_files(request: DeleteFilesRequest):
-    """Delete specific files from index."""
+@router.get(
+    "/index/{workspace}/{project}/revision",
+    response_model=RevisionPreflightResponse,
+)
+def get_revision_preflight(
+    workspace: str,
+    project: str,
+    branch: str = Query(min_length=1),
+    commit: str = Query(min_length=1, max_length=200),
+    collection_target: str = Query(min_length=1),
+):
+    """Return the sealed receipt for one explicitly selected generation."""
     _, index_manager = _get_singletons()
     try:
-        stats = index_manager.delete_files(
-            file_paths=request.file_paths,
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit,
+        receipt = index_manager.get_revision_preflight(
+            workspace,
+            project,
+            branch,
+            commit,
+            collection_target=collection_target,
         )
-        return stats
-    except IncrementalIndexPreconditionError as e:
-        logger.warning(f"Incremental delete precondition failed: {e}")
+        if receipt is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Exact repository generation was not found",
+            )
+        return receipt
+    except HTTPException:
+        raise
+    except ExactIndexPreconditionError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except MutationLeaseUnavailable as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationCoordinationUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error deleting files: {e}")
+        logger.error("Error validating exact repository generation: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/index/apply-changes", response_model=IndexStats)
-def apply_changes(request: ApplyChangesRequest):
-    """Atomically apply all updated and deleted files from one commit."""
-    _, index_manager = _get_singletons()
-    if request.updated_file_paths and request.repo_base is None:
-        raise HTTPException(
-            status_code=422,
-            detail="repo_base is required when updated_file_paths is not empty",
-        )
-    try:
-        return index_manager.apply_changes(
-            updated_file_paths=request.updated_file_paths,
-            deleted_file_paths=request.deleted_file_paths,
-            repo_base=request.repo_base,
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit,
-        )
-    except IncrementalIndexPreconditionError as e:
-        logger.warning(f"Incremental change-set precondition failed: {e}")
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        logger.warning(f"Invalid incremental change set: {e}")
-        raise HTTPException(status_code=422, detail=str(e))
-    except MutationLeaseUnavailable as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationCoordinationUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error applying incremental change set: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/index/advance-generation", response_model=IndexStats)
-def advance_generation(request: AdvanceGenerationRequest):
-    """Build one immutable target generation from an exact sealed source."""
-    _, index_manager = _get_singletons()
-    if request.repo_base is None:
-        raise HTTPException(
-            status_code=422,
-            detail="repo_base is required to attest the target source tree",
-        )
-    try:
-        return index_manager.advance_generation(
-            source_collection_target=request.source_collection_target,
-            target_collection_target=request.collection_target,
-            source_commit=request.source_commit,
-            source_tree_sha256=request.source_tree_sha256,
-            updated_file_paths=request.updated_file_paths,
-            deleted_file_paths=request.deleted_file_paths,
-            repo_base=request.repo_base,
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit,
-            publish_branch_alias=request.publish_branch_alias,
-            publish_legacy_project_alias=request.publish_legacy_project_alias,
-        )
-    except IncrementalIndexPreconditionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except MutationLeaseUnavailable as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationCoordinationUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error advancing repository generation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/index/generation-aliases")
-def publish_generation_aliases(request: GenerationAliasPublicationRequest):
-    """Publish or repair readable aliases for an accepted immutable generation.
-
-    This is deliberately separate from indexing so the Java registry can reject
-    a stale completed build before any mutable branch-head alias is moved.
-    """
-    _, index_manager = _get_singletons()
-    try:
-        aliases = index_manager.publish_generation_aliases(
-            workspace=request.workspace,
-            project=request.project,
-            branch=request.branch,
-            commit=request.commit,
-            collection_target=request.collection_target,
-            generation_manifest_sha256=request.generation_manifest_sha256,
-            publish_branch_alias=request.publish_branch_alias,
-            publish_legacy_project_alias=request.publish_legacy_project_alias,
-        )
-        return {"status": "published", "aliases": aliases}
-    except IncrementalIndexPreconditionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationLeaseUnavailable as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationCoordinationUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        # Alias repair is optional and retried by the registry owner, which
-        # emits the contextual transition alert. Avoid a fixed-delay ERROR
-        # stream here while preserving the HTTP failure for that caller.
-        logger.info("Readable generation alias publication failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/index/{workspace}/{project}/{branch}")
-def delete_index(workspace: str, project: str, branch: str):
-    """Delete entire index."""
-    _, index_manager = _get_singletons()
-    try:
-        index_manager.delete_index(workspace, project, branch)
-        return {"message": f"Index deleted for {workspace}/{project}/{branch}"}
-    except MutationLeaseUnavailable as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except MutationCoordinationUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error deleting index: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── Branch management ──
-
-@router.delete("/index/{workspace}/{project}/branch/{branch}")
+@router.delete("/index/{workspace}/{project}/branch/{branch:path}")
 def delete_branch(
     workspace: str,
     project: str,
     branch: str,
-    collection_target: str | None = Query(default=None),
-    generation_revision: str | None = Query(default=None, min_length=1),
-    generation_manifest_sha256: str | None = Query(
-        default=None,
+    collection_target: str = Query(min_length=1),
+    generation_revision: str = Query(min_length=1),
+    generation_manifest_sha256: str = Query(
         pattern=r"^[0-9a-f]{64}$",
     ),
 ):
-    """Delete all points for a specific branch from the project collection."""
+    """Delete one exact sealed branch generation."""
     _, index_manager = _get_singletons()
     try:
         success = index_manager.delete_branch(
@@ -774,14 +667,14 @@ def delete_branch(
         if success:
             return {
                 "status": "success",
-                "message": f"Deleted all points for branch '{branch}' from {workspace}/{project}"
+                "message": f"Deleted generation for branch '{branch}' from {workspace}/{project}"
             }
         else:
             return {
                 "status": "not_found",
-                "message": f"Branch '{branch}' not found or collection doesn't exist"
+                "message": f"Generation for branch '{branch}' was not found"
             }
-    except IncrementalIndexPreconditionError as e:
+    except ExactIndexPreconditionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except MutationLeaseUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -790,113 +683,3 @@ def delete_branch(
     except Exception as e:
         logger.error(f"Error deleting branch '{branch}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/index/{workspace}/{project}/branches")
-def list_branches(workspace: str, project: str):
-    """List all branches that have indexed points in the project collection."""
-    _, index_manager = _get_singletons()
-    try:
-        branches = index_manager.get_indexed_branches(workspace, project)
-        branch_stats = []
-
-        for branch in branches:
-            count = index_manager.get_branch_point_count(workspace, project, branch)
-            branch_stats.append({"branch": branch, "point_count": count})
-
-        return {
-            "workspace": workspace,
-            "project": project,
-            "branches": branch_stats,
-            "total_branches": len(branches)
-        }
-    except Exception as e:
-        logger.error(f"Error listing branches: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/index/{workspace}/{project}/cleanup-branches")
-def cleanup_stale_branches(workspace: str, project: str, request: CleanupStaleBranchesRequest):
-    """Delete all branch points except protected and explicitly kept branches."""
-    _, index_manager = _get_singletons()
-    try:
-        all_branches = index_manager.get_indexed_branches(workspace, project)
-        keep_branches = set(request.protected_branches)
-        if request.branches_to_keep:
-            keep_branches.update(request.branches_to_keep)
-
-        branches_to_delete = [b for b in all_branches if b not in keep_branches]
-        deleted_branches = []
-        failed_branches = []
-
-        for branch in branches_to_delete:
-            try:
-                success = index_manager.delete_branch(workspace, project, branch)
-                if success:
-                    deleted_branches.append(branch)
-                else:
-                    failed_branches.append(branch)
-            except Exception as e:
-                logger.error(f"Failed to delete branch '{branch}': {e}")
-                failed_branches.append(branch)
-
-        return {
-            "status": "completed",
-            "deleted_branches": deleted_branches,
-            "failed_branches": failed_branches,
-            "kept_branches": list(keep_branches & set(all_branches)),
-            "total_deleted": len(deleted_branches)
-        }
-    except Exception as e:
-        logger.error(f"Error during branch cleanup: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/index/stats/{workspace}/{project}/{branch}", response_model=IndexStats)
-def get_index_stats(workspace: str, project: str, branch: str):
-    """Get index statistics."""
-    _, index_manager = _get_singletons()
-    try:
-        stats = index_manager._get_index_stats(workspace, project, branch)
-        return stats
-    except Exception as e:
-        logger.error(f"Error getting index stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/index/list", response_model=List[IndexStats])
-def list_indices():
-    """List all indices."""
-    _, index_manager = _get_singletons()
-    try:
-        indices = index_manager.list_indices()
-        return indices
-    except Exception as e:
-        logger.error(f"Error listing indices: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── Deprecated /branch/* redirects ──
-
-@router.delete("/branch/{workspace}/{project}/{branch:path}", deprecated=True)
-def delete_branch_index(workspace: str, project: str, branch: str):
-    """DEPRECATED: Use DELETE /index/{workspace}/{project}/branch/{branch} instead."""
-    return delete_branch(workspace, project, branch)
-
-
-@router.post("/branch/delete", deprecated=True)
-def delete_branch_index_post(request: DeleteBranchRequest):
-    """DEPRECATED: Use DELETE /index/{workspace}/{project}/branch/{branch} instead."""
-    return delete_branch(request.workspace, request.project, request.branch)
-
-
-@router.get("/branch/list/{workspace}/{project}", deprecated=True)
-def list_indexed_branches(workspace: str, project: str):
-    """DEPRECATED: Use GET /index/{workspace}/{project}/branches instead."""
-    return list_branches(workspace, project)
-
-
-@router.get("/branch/stats/{workspace}/{project}/{branch:path}", deprecated=True)
-def get_branch_stats(workspace: str, project: str, branch: str):
-    """DEPRECATED: Use GET /index/stats/{workspace}/{project}/{branch} instead."""
-    return get_index_stats(workspace, project, branch)

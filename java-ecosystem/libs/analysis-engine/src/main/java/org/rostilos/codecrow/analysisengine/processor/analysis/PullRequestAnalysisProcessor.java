@@ -1,10 +1,14 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
+import org.rostilos.codecrow.analysisapi.usage.ReviewUsagePolicy;
+
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -21,6 +25,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileConten
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
@@ -40,10 +45,13 @@ import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Collections;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -62,6 +70,8 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
  */
 @Service
 public class PullRequestAnalysisProcessor {
+    @Autowired(required = false)
+    private ReviewUsagePolicy reviewUsagePolicy;
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
     private static final int SCM_EVIDENCE_COMMIT_LIMIT = 1000;
 
@@ -74,15 +84,20 @@ public class PullRequestAnalysisProcessor {
     private final ApplicationEventPublisher eventPublisher;
     private final AnalyzedCommitService analyzedCommitService;
     private final VcsClientProvider vcsClientProvider;
+    private final LocalRepositorySnapshotService localRepositorySnapshotService;
     private final FileSnapshotService fileSnapshotService;
     private final PrIssueTrackingService prIssueTrackingService;
     private final AstScopeEnricher astScopeEnricher;
+    private final RagOperationsService ragOperationsService;
 
     @Autowired(required = false)
     private ScmEvidenceService scmEvidenceService;
 
     @Autowired(required = false)
     private CodeAnalysisIssueRepository codeAnalysisIssueRepository;
+
+    @Autowired(required = false)
+    private org.rostilos.codecrow.analysisengine.service.ReviewCheckService reviewCheckService;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -93,9 +108,11 @@ public class PullRequestAnalysisProcessor {
             AnalysisLockService analysisLockService,
             AnalyzedCommitService analyzedCommitService,
             VcsClientProvider vcsClientProvider,
+            LocalRepositorySnapshotService localRepositorySnapshotService,
             FileSnapshotService fileSnapshotService,
             PrIssueTrackingService prIssueTrackingService,
             AstScopeEnricher astScopeEnricher,
+            RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.codeAnalysisService = codeAnalysisService;
@@ -107,9 +124,11 @@ public class PullRequestAnalysisProcessor {
         this.eventPublisher = eventPublisher;
         this.analyzedCommitService = analyzedCommitService;
         this.vcsClientProvider = vcsClientProvider;
+        this.localRepositorySnapshotService = localRepositorySnapshotService;
         this.fileSnapshotService = fileSnapshotService;
         this.prIssueTrackingService = prIssueTrackingService;
         this.astScopeEnricher = astScopeEnricher;
+        this.ragOperationsService = ragOperationsService;
     }
 
     public interface EventConsumer {
@@ -167,7 +186,9 @@ public class PullRequestAnalysisProcessor {
         }
 
         AnalysisLockService.LockLease lockLease = null;
-        try {
+        ReviewUsagePolicy.Reservation usageReservation =
+                ReviewUsagePolicy.Reservation.NONE;
+        try (var acquisition = localRepositorySnapshotService.openAcquisition(project.getId())) {
             lockLease = analysisLockService.maintainLockLease(
                     lockKey,
                     analysisLockService.getLeaseMinutes(AnalysisLockType.PR_ANALYSIS));
@@ -180,9 +201,9 @@ public class PullRequestAnalysisProcessor {
                     request.getPullRequestId());
 
             // Get the most recent analysis for incremental diff calculation
-            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty()
-                    ? Optional.empty()
-                    : Optional.of(allPrAnalyses.get(0));
+            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.stream()
+                    .filter(analysis -> analysis.getStatus() != AnalysisStatus.PARTIAL)
+                    .findFirst();
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
             List<AiAnalysisRequest> aiRequests = aiClientService.buildAiAnalysisRequests(
@@ -211,6 +232,7 @@ public class PullRequestAnalysisProcessor {
             }
 
             AiAnalysisRequest aiRequest = aiRequests.get(0);
+            observeTargetBranchGeneration(project, aiRequest, consumer);
             String diffFingerprint = computeReviewIdentity(aiRequest);
             boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
 
@@ -242,10 +264,64 @@ public class PullRequestAnalysisProcessor {
                         project.getId(), request.getPullRequestId());
             }
 
-            Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
-                log.debug("Received event from AI client: type={}", event.get("type"));
-                emitEvent(consumer, event);
-            });
+            Map<String, Object> aiResponse;
+            if (!promptDryRun && reviewUsagePolicy != null) {
+                try {
+                    usageReservation = reviewUsagePolicy.begin(
+                            new ReviewUsagePolicy.Review(
+                                    project.getWorkspace().getId(), project.getId(), request.getPullRequestId(),
+                                    request.getCommitHash(), diffFingerprint, lockKey));
+                } catch (ReviewUsagePolicy.LimitExceededException denied) {
+                    emitEvent(consumer, Map.of("type", "error", "state", "review_limit_exceeded",
+                            "message", denied.getMessage()));
+                    throw denied;
+                } catch (RuntimeException unavailable) {
+                    log.warn("Review usage admission unavailable; continuing review: project={}, detail={}",
+                            project.getId(), unavailable.getMessage());
+                    emitEvent(consumer, Map.of("type", "warning", "state", "review_usage_unavailable",
+                            "message", "Usage accounting is temporarily unavailable; review continues"));
+                }
+            }
+            Map<String, String> proposedFileContents = extractFileContents(aiRequest);
+            Optional<LocalRepositorySnapshotService.PreparedSnapshot> localSnapshot = Optional.empty();
+            if (!promptDryRun
+                    && aiRequest.getUseMcpTools()) {
+                VcsRepoInfo repository = ProjectVcsInfoRetriever.getVcsInfo(project);
+                List<String> proposedTreeChangedFiles = proposedTreeChangedFiles(aiRequest);
+                List<String> proposedTreeDeletedFiles = proposedTreeDeletedFiles(aiRequest);
+                proposedFileContents = completeProposedFileContents(
+                        project,
+                        aiRequest,
+                        proposedFileContents,
+                        proposedTreeChangedFiles,
+                        proposedTreeDeletedFiles);
+                localSnapshot = localRepositorySnapshotService.prepareForReview(
+                        repository.getVcsConnection(),
+                        repository.getRepoWorkspace(),
+                        repository.getRepoSlug(),
+                        request.getTargetBranchName(),
+                        aiRequest.getTargetHeadCommitHash(),
+                        proposedFileContents,
+                        proposedTreeChangedFiles,
+                        proposedTreeDeletedFiles);
+            }
+
+            if (localSnapshot.isPresent()) {
+                try (LocalRepositorySnapshotService.PreparedSnapshot snapshot = localSnapshot.get()) {
+                    aiResponse = aiAnalysisClient.performAnalysis(
+                            aiRequest,
+                            snapshot.transport(),
+                            event -> {
+                                log.debug("Received event from AI client: type={}", event.get("type"));
+                                emitEvent(consumer, event);
+                            });
+                }
+            } else {
+                aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
+                    log.debug("Received event from AI client: type={}", event.get("type"));
+                    emitEvent(consumer, event);
+                });
+            }
             requireConfirmedLease(lockLease);
 
             if (AiAnalysisClient.isPromptDryRunResult(aiResponse)) {
@@ -262,7 +338,7 @@ public class PullRequestAnalysisProcessor {
             }
 
             // === Extract file contents from enrichment data for line hash computation ===
-            Map<String, String> fileContents = new java.util.HashMap<>(extractFileContents(aiRequest));
+            Map<String, String> fileContents = new java.util.HashMap<>(proposedFileContents);
             java.util.Set<String> allChangedFiles = new java.util.HashSet<>(aiRequest.getChangedFiles());
 
             // === VCS fallback: when enrichment data is empty (disabled, failed, or
@@ -282,7 +358,7 @@ public class PullRequestAnalysisProcessor {
             requireConfirmedLease(lockLease);
             CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
                     project,
-                    aiResponse,
+                    withReviewSource(aiResponse, aiRequest, request, project),
                     request.getPullRequestId(),
                     request.getTargetBranchName(),
                     request.getSourceBranchName(),
@@ -294,9 +370,15 @@ public class PullRequestAnalysisProcessor {
                     taskContextValue(aiRequest, "task_key", "taskKey", "key"),
                     taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
 
+            try {
+                usageReservation.completed(newAnalysis.getId());
+            } catch (RuntimeException unavailable) {
+                log.warn("Review usage recording deferred: project={}, analysis={}, detail={}",
+                        project.getId(), newAnalysis.getId(), unavailable.getMessage());
+                emitEvent(consumer, Map.of("type", "warning", "state", "review_usage_deferred",
+                        "message", "Review completed; usage accounting will reconcile from the saved analysis"));
+            }
             persistTaskImplementationEvidence(newAnalysis, aiResponse.get("taskEvidence"));
-
-            int issuesFound = newAnalysis.getTotalIssues();
 
             // === AST scope enrichment: resolve scope boundaries for each issue ===
             try {
@@ -336,6 +418,11 @@ public class PullRequestAnalysisProcessor {
                 log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());
             }
 
+            if (reviewCheckService != null) {
+                requireConfirmedLease(lockLease);
+                reviewCheckService.run(project, aiRequest, newAnalysis, event -> emitEvent(consumer, event));
+            }
+
             // Ownership may have changed after persistence but before external
             // publication. Perform an atomic proof instead of waiting for the
             // next scheduled heartbeat to observe it.
@@ -356,13 +443,17 @@ public class PullRequestAnalysisProcessor {
 
             // === DAG: Mark PR commits as ANALYZED ===
             requireConfirmedLease(lockLease);
-            markPrCommitsAnalyzed(project, request, newAnalysis);
+            boolean partial = newAnalysis.getStatus() == AnalysisStatus.PARTIAL;
+            if (!partial) {
+                markPrCommitsAnalyzed(project, request, newAnalysis);
+            }
 
             // Publish successful completion event
             requireConfirmedLease(lockLease);
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
-                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound,
-                    allChangedFiles != null ? allChangedFiles.size() : 0, null);
+                    partial ? AnalysisCompletedEvent.CompletionStatus.PARTIAL_SUCCESS : AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                    newAnalysis.getTotalIssues(),
+                    allChangedFiles != null ? allChangedFiles.size() : 0, null, newAnalysis.getId());
 
             return aiResponse;
         } catch (IOException e) {
@@ -377,6 +468,12 @@ public class PullRequestAnalysisProcessor {
 
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
+            try {
+                usageReservation.close();
+            } catch (RuntimeException unavailable) {
+                log.warn("Review usage reservation cleanup deferred: project={}, detail={}",
+                        project.getId(), unavailable.getMessage());
+            }
             if (lockLease != null) {
                 try {
                     lockLease.close();
@@ -401,6 +498,33 @@ public class PullRequestAnalysisProcessor {
                             releaseFailure.getMessage());
                 }
             }
+        }
+    }
+
+    private void observeTargetBranchGeneration(
+            Project project,
+            AiAnalysisRequest request,
+            EventConsumer consumer) {
+        String targetBranch = request.getTargetBranchName();
+        String targetRevision = request.getTargetHeadCommitHash();
+        if (targetBranch == null || targetBranch.isBlank()
+                || targetRevision == null || targetRevision.isBlank()) {
+            return;
+        }
+        try {
+            ragOperationsService.refreshBranchGeneration(
+                    project,
+                    targetBranch,
+                    targetRevision,
+                    event -> emitEvent(consumer, event));
+        } catch (RuntimeException unavailable) {
+            log.info(
+                    "PR target repository-index refresh deferred: project={}, branch={}, detail={}",
+                    project.getId(), targetBranch, unavailable.getMessage());
+            emitEvent(consumer, Map.of(
+                    "type", "warning",
+                    "state", "rag_deferred",
+                    "message", "Target-branch repository context will refresh asynchronously"));
         }
     }
 
@@ -472,9 +596,96 @@ public class PullRequestAnalysisProcessor {
     }
 
     /**
-     * Fetch file contents directly from VCS when enrichment data is empty.
-     * This is the fallback path that ensures file snapshots are always available
-     * for the source code viewer, regardless of enrichment status.
+     * Completes the proposed-tree overlay from the immutable PR source revision.
+     *
+     * <p>Enrichment remains the first source because it has already fetched most
+     * review files. Only changed, non-deleted paths without a usable body are
+     * requested from VCS. Paths that the provider still cannot return remain in
+     * the overlay manifest through {@code changedFiles}, so repository tools
+     * report them as unavailable instead of reading stale target-head source.</p>
+     */
+    private Map<String, String> completeProposedFileContents(
+            Project project,
+            AiAnalysisRequest aiRequest,
+            Map<String, String> enrichedContents,
+            List<String> proposedTreeChangedFiles,
+            List<String> proposedTreeDeletedFiles) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (enrichedContents != null) {
+            enrichedContents.forEach((path, content) -> {
+                if (path != null && content != null) {
+                    result.putIfAbsent(path, content);
+                }
+            });
+        }
+
+        Set<String> deletedFiles = proposedTreeDeletedFiles == null
+                ? Set.of()
+                : proposedTreeDeletedFiles.stream()
+                        .filter(path -> path != null && !path.isBlank())
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        deletedFiles.forEach(result::remove);
+
+        LinkedHashSet<String> missingPaths = new LinkedHashSet<>();
+        if (proposedTreeChangedFiles != null) {
+            for (String path : proposedTreeChangedFiles) {
+                if (path != null
+                        && !path.isBlank()
+                        && !deletedFiles.contains(path)
+                        && !result.containsKey(path)) {
+                    missingPaths.add(path);
+                }
+            }
+        }
+        if (missingPaths.isEmpty()) {
+            return result;
+        }
+
+        String sourceRevision = aiRequest.getCurrentCommitHash();
+        if (sourceRevision == null || sourceRevision.isBlank()) {
+            log.warn(
+                    "Proposed-tree overlay is missing {} file body/bodies, but the immutable PR source revision is unavailable; files remain explicitly unavailable",
+                    missingPaths.size());
+            return result;
+        }
+
+        Map<String, String> fetched = fetchFileContentsFromVcs(
+                project,
+                List.copyOf(missingPaths),
+                sourceRevision);
+        fetched.forEach((path, content) -> {
+            if (missingPaths.contains(path) && content != null) {
+                result.putIfAbsent(path, content);
+            }
+        });
+
+        long unavailable = missingPaths.stream()
+                .filter(path -> !result.containsKey(path))
+                .count();
+        if (unavailable > 0) {
+            log.info(
+                    "Proposed-tree overlay could not load {}/{} missing file bodies at source revision {}; they remain explicitly unavailable",
+                    unavailable,
+                    missingPaths.size(),
+                    sourceRevision.substring(0, Math.min(12, sourceRevision.length())));
+        }
+        return result;
+    }
+
+    private List<String> proposedTreeChangedFiles(AiAnalysisRequest request) {
+        List<String> paths = request.getProposedTreeChangedFiles();
+        return paths != null ? paths : request.getChangedFiles();
+    }
+
+    private List<String> proposedTreeDeletedFiles(AiAnalysisRequest request) {
+        List<String> paths = request.getProposedTreeDeletedFiles();
+        return paths != null ? paths : request.getDeletedFiles();
+    }
+
+    /**
+     * Fetch the requested source-tree file contents directly from VCS.
+     * Used both to complete a proposed-tree review overlay and as the source
+     * viewer fallback when enrichment returned no bodies.
      *
      * @param project      the project with VCS connection info
      * @param changedFiles list of file paths to fetch
@@ -492,15 +703,10 @@ public class PullRequestAnalysisProcessor {
                 log.warn("No VCS repo info available — cannot fetch file contents for source viewer");
                 return Collections.emptyMap();
             }
-            VcsClient vcsClient = vcsClientProvider.getClient(repoInfo.getVcsConnection());
-            Map<String, String> contents = vcsClient.getFileContents(
-                    repoInfo.getRepoWorkspace(),
-                    repoInfo.getRepoSlug(),
-                    changedFiles,
-                    commitHash,
-                    100_000 // 100 KB max per file, consistent with enrichment service
-            );
-            log.info("VCS fallback: fetched {}/{} file contents for source viewer (commit={})",
+            Map<String, String> contents = localRepositorySnapshotService.readSourceFiles(
+                    repoInfo.getVcsConnection(), repoInfo.getRepoWorkspace(), repoInfo.getRepoSlug(),
+                    commitHash, changedFiles, 100_000);
+            log.info("VCS file fetch: fetched {}/{} requested bodies (commit={})",
                     contents.size(), changedFiles.size(),
                     commitHash != null ? commitHash.substring(0, Math.min(7, commitHash.length())) : "null");
             return contents;
@@ -605,6 +811,7 @@ public class PullRequestAnalysisProcessor {
                 request.getCommitHash(), request.getTargetBranchName(),
                 request.getSourceBranchName(), diffFingerprint);
         requireConfirmedLease(lockLease);
+        if (reviewCheckService != null) reviewCheckService.copy(fingerprintHit.get(), cloned, event -> log.info("Review check cache: {}", event));
         copyTaskImplementationEvidence(fingerprintHit.get(), cloned);
         // Persist PR-level snapshots for the source code viewer
         persistPrSnapshotsForCacheHit(pullRequest, cloned, fingerprintHit.get(), project,
@@ -673,6 +880,7 @@ public class PullRequestAnalysisProcessor {
                     commitHash, targetBranch,
                     sourceBranch, commitHashHit.get().getDiffFingerprint());
             requireConfirmedLease(lockLease);
+            if (reviewCheckService != null) reviewCheckService.copy(commitHashHit.get(), cloned, event -> log.info("Review check cache: {}", event));
             copyTaskImplementationEvidence(commitHashHit.get(), cloned);
             // Persist PR-level snapshots for the source code viewer
             persistPrSnapshotsForCacheHit(pullRequest, cloned, commitHashHit.get(), project,
@@ -745,6 +953,7 @@ public class PullRequestAnalysisProcessor {
     private Map<String, String> reviewIdentityInputs(AiAnalysisRequest request) {
         TreeMap<String, String> inputs = new TreeMap<>();
         putIdentity(inputs, "baseCommit", request.getBaseCommitHash());
+        putIdentity(inputs, "targetHeadCommit", request.getTargetHeadCommitHash());
         putIdentity(inputs, "headCommit", request.getCurrentCommitHash());
         putIdentity(inputs, "previousCommit", request.getPreviousCommitHash());
         putIdentity(inputs, "targetBranch", request.getTargetBranchName());
@@ -872,17 +1081,9 @@ public class PullRequestAnalysisProcessor {
             }
 
             // Record the PR's HEAD commit as analyzed
-            boolean multiBranch = project.getConfiguration() != null
-                    && project.getConfiguration().ragConfig() != null
-                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
-            if (multiBranch) {
-                analyzedCommitService.recordPrCommitsAnalyzed(
-                        project, analyzedHashes, analysis,
-                        sourceBranch, targetBranch, targetBaseRevision);
-            } else {
-                analyzedCommitService.recordPrCommitsAnalyzed(
-                        project, List.of(commitHash), analysis);
-            }
+            analyzedCommitService.recordPrCommitsAnalyzed(
+                    project, analyzedHashes, analysis,
+                    sourceBranch, targetBranch, targetBaseRevision);
 
             log.info("Recorded PR commit {} as analyzed (branch={}, analysis={})",
                     commitHash.substring(0, Math.min(7, commitHash.length())),
@@ -962,6 +1163,26 @@ public class PullRequestAnalysisProcessor {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> withReviewSource(Map<String, Object> response, AiAnalysisRequest ai,
+                                               PrProcessRequest request, Project project) {
+        var payload = new HashMap<String, Object>(response);
+        var summary = response.get("prChangeSummary") instanceof Map<?, ?> saved
+                ? new HashMap<>((Map<String, Object>) saved) : new HashMap<String, Object>();
+        summary.put("projectId", project.getId()); summary.put("pullRequestId", request.getPullRequestId());
+        summary.put("sourceRevision", request.getCommitHash());
+        summary.putIfAbsent("semanticStatus", "unavailable");
+        var tools = summary.get("toolContext") instanceof Map<?, ?> savedTools
+                ? new HashMap<>((Map<String, Object>) savedTools) : new HashMap<String, Object>();
+        var source = new HashMap<String, Object>();
+        source.put("rawDiff", ai.getRawDiff()); source.put("baseRevision", ai.getBaseCommitHash());
+        source.put("targetRevision", ai.getTargetHeadCommitHash());
+        source.put("changedFiles", proposedTreeChangedFiles(ai)); source.put("deletedFiles", proposedTreeDeletedFiles(ai));
+        source.put("prTitle", request.getPrTitle()); source.put("prDescription", request.getPrDescription());
+        tools.put("reviewSource", source); summary.put("toolContext", tools); payload.put("prChangeSummary", summary);
+        return payload;
+    }
+
     /**
      * Publishes an AnalysisCompletedEvent for PR analysis.
      */
@@ -969,6 +1190,13 @@ public class PullRequestAnalysisProcessor {
                                                String correlationId, Instant startTime,
                                                AnalysisCompletedEvent.CompletionStatus status, int issuesFound,
                                                int filesAnalyzed, String errorMessage) {
+        publishAnalysisCompletedEvent(project, request, correlationId, startTime, status, issuesFound, filesAnalyzed, errorMessage, null);
+    }
+
+    private void publishAnalysisCompletedEvent(Project project, PrProcessRequest request,
+                                               String correlationId, Instant startTime,
+                                               AnalysisCompletedEvent.CompletionStatus status, int issuesFound,
+                                               int filesAnalyzed, String errorMessage, Long analysisId) {
         if (eventPublisher == null) {
             return;
         }
@@ -979,6 +1207,11 @@ public class PullRequestAnalysisProcessor {
             metrics.put("targetBranch", request.getTargetBranchName());
             metrics.put("sourceBranch", request.getSourceBranchName());
             metrics.put("commitHash", request.getCommitHash());
+            if (analysisId == null && status == AnalysisCompletedEvent.CompletionStatus.SUCCESS) {
+                analysisId = codeAnalysisService.getCodeAnalysisCache(project.getId(), request.getCommitHash(), request.getPullRequestId())
+                        .map(CodeAnalysis::getId).orElse(null);
+            }
+            if (analysisId != null) metrics.put("analysisId", analysisId);
             if (request.getPrTitle() != null) {
                 metrics.put("prTitle", request.getPrTitle());
             }

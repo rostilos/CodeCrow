@@ -186,7 +186,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
         if (promptDryRun) {
             // A full-pipeline capture must traverse immutable PR acquisition,
-            // enrichment, overlay indexing, retrieval, and Stage 0-3 even when this
+            // enrichment, structural retrieval, and Stage 0-3 even when this
             // commit already has an analysis. PullRequestAnalysisProcessor also
             // bypasses its persistence caches; bypass this command-level shortcut so
             // the normal user trigger reaches that processor.
@@ -574,7 +574,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         // TODO: Check if user is authorized
         // TODO: For now, we check if the comment author is a workspace member
         String authorId = payload.commentData().commentAuthorId();
-        if (authorId != null && !isAuthorizedUser(project, authorId, payload)) {
+        if (!isAuthorizedUser(project, authorId, payload)) {
             log.info("User {} not authorized for project {}", authorId, project.getId());
             return ValidationResult.invalid("You are not authorized to use CodeCrow commands on this repository");
         }

@@ -10,6 +10,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
@@ -26,16 +28,19 @@ import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.branch.Branch;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -128,6 +133,9 @@ class BranchAnalysisProcessorTest {
     private AstScopeEnricher astScopeEnricher;
 
     @Mock
+    private LocalRepositorySnapshotService localRepositorySnapshotService;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -146,6 +154,17 @@ class BranchAnalysisProcessorTest {
 
     @BeforeEach
     void setUp() {
+        when(analysisLockService.withOwnedLocks(any(), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        when(branchRepository.findById(anyLong())).thenAnswer(inv -> branchRepository.findByIdWithIssues(inv.getArgument(0)));
+        when(branchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(branchIssueReconciliationService.reanalyzeCandidateIssues(any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean(), any()))
+                .thenReturn(new BranchIssueReconciliationService.ReconciliationResult(true, null));
+        when(branchFileOperationsService.prepareBranchFiles(anySet(), any(), any(), any())).thenAnswer(inv -> {
+            BranchFileOperationsService.BranchFileSnapshot snapshot = inv.getArgument(3);
+            return new BranchFileOperationsService.PreparedBranchFiles(snapshot.presentFiles(), snapshot.contents());
+        });
+        lenient().when(branchIssueReconciliationService.findReconciliationPaths(any(), anySet()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
         when(vcsClientProvider.getClient(vcsConnection)).thenReturn(authorizedClient);
         lenient().when(analysisLockService.getLeaseMinutes(any()))
                 .thenReturn(30);
@@ -174,6 +193,7 @@ class BranchAnalysisProcessorTest {
                 pullRequestService,
                 pullRequestStatusSyncService,
                 astScopeEnricher,
+                localRepositorySnapshotService,
                 ragOperationsService
         );
     }
@@ -518,7 +538,7 @@ class BranchAnalysisProcessorTest {
 
             // Verify orchestration calls to support services
             verify(branchFileOperationsService).downloadBranchFileSnapshot(any(), eq("new-commit"), anySet());
-            verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveSnapshot));
+            verify(branchFileOperationsService).prepareBranchFiles(anySet(), eq(project), eq(request), eq(archiveSnapshot));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
             verify(branchDiffFetcher).fetchDiff(
                     any(), any(), any(), any(), any(), isNull(), any());
@@ -527,11 +547,11 @@ class BranchAnalysisProcessorTest {
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer),
-                    eq(archiveContents), eq(rawDiff), eq(false));
+                    eq(archiveContents), eq(rawDiff), eq(false), any());
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
-            verify(branchFileOperationsService).updateFileSnapshotsForBranch(
-                    anySet(), eq(project), eq(request), eq(archiveSnapshot));
+            verify(branchFileOperationsService).persistPreparedFiles(
+                    eq(savedBranch), eq(project), eq(request), any());
             verify(branchIssueReconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), eq(project), any());
             verify(analysisLockService).releaseLock("lock-key");
         }
@@ -679,14 +699,11 @@ class BranchAnalysisProcessorTest {
                     eq(Set.of("src/Issue.java")), eq(Set.of("src/Issue.java")),
                     eq(existingBranch), eq(project), eq(request), any(), eq(archiveContents),
                     argThat(diff -> diff.contains("src/Issue.java")
-                            && !diff.contains("src/Unrelated.java")), eq(false));
+                            && !diff.contains("src/Unrelated.java")), eq(false), any());
             verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
                     anySet(), any(), any(), any(), anyMap());
-            verify(ragOperationsService).triggerIncrementalUpdate(
-                    eq(project), eq("feature-x"), eq("new-commit"),
-                    argThat(diff -> diff.contains("src/Issue.java")
-                            && !diff.contains("src/Unrelated.java")), any());
-            verify(ragOperationsService, never()).updateBranchIndex(any(), any(), any());
+            verify(ragOperationsService).refreshBranchGeneration(
+                    eq(project), eq("feature-x"), eq("new-commit"), any());
         }
 
         @Test
@@ -792,8 +809,8 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
-            when(ragOperationsService.triggerIncrementalUpdate(
-                    eq(project), eq("main"), eq("new-commit"), eq(rawDiff), any()))
+            when(ragOperationsService.refreshBranchGeneration(
+                    eq(project), eq("main"), eq("new-commit"), any()))
                     .thenReturn(true);
 
             // Final markHealthy
@@ -803,16 +820,16 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(ragOperationsService).triggerIncrementalUpdate(eq(project), eq("main"), eq("new-commit"), eq(rawDiff), any());
+            verify(ragOperationsService).refreshBranchGeneration(
+                    eq(project), eq("main"), eq("new-commit"), any());
         }
 
         @Test
-        @DisplayName("should not emit RAG success after an incremental failure")
-        void shouldNotEmitRagSuccessAfterIncrementalFailure() {
+        @DisplayName("should not emit repository-index success after a generation failure")
+        void shouldNotEmitRagSuccessAfterGenerationFailure() {
             BranchProcessRequest request = createRequest();
             request.commitHash = "failed-commit";
             request.targetBranchName = "main";
-            String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
             List<Map<String, Object>> events = new ArrayList<>();
 
             when(project.getId()).thenReturn(1L);
@@ -820,18 +837,16 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
-            when(ragOperationsService.triggerIncrementalUpdate(
-                    eq(project), eq("main"), eq("failed-commit"), eq(rawDiff), any()))
+            when(ragOperationsService.refreshBranchGeneration(
+                    eq(project), eq("main"), eq("failed-commit"), any()))
                     .thenReturn(false);
 
             ReflectionTestUtils.invokeMethod(
                     processor,
-                    "performIncrementalRagUpdate",
+                    "performRagGenerationRefresh",
                     request,
                     project,
-                    rawDiff,
-                    (Consumer<Map<String, Object>>) events::add,
-                    false);
+                    (Consumer<Map<String, Object>>) events::add);
 
             assertThat(events)
                     .noneSatisfy(event ->
@@ -844,7 +859,6 @@ class BranchAnalysisProcessorTest {
             BranchProcessRequest request = createRequest();
             request.commitHash = "current-commit";
             request.targetBranchName = "main";
-            String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
             List<Map<String, Object>> events = new ArrayList<>();
 
             when(project.getId()).thenReturn(1L);
@@ -852,18 +866,16 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
-            when(ragOperationsService.triggerIncrementalUpdate(
-                    eq(project), eq("main"), eq("current-commit"), eq(rawDiff), any()))
+            when(ragOperationsService.refreshBranchGeneration(
+                    eq(project), eq("main"), eq("current-commit"), any()))
                     .thenReturn(true);
 
             ReflectionTestUtils.invokeMethod(
                     processor,
-                    "performIncrementalRagUpdate",
+                    "performRagGenerationRefresh",
                     request,
                     project,
-                    rawDiff,
-                    (Consumer<Map<String, Object>>) events::add,
-                    false);
+                    (Consumer<Map<String, Object>>) events::add);
 
             assertThat(events)
                     .noneSatisfy(event ->
@@ -882,26 +894,24 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
-            when(ragOperationsService.triggerIncrementalUpdate(
-                    eq(project), eq("main"), eq("empty-range-commit"), eq(""), any()))
+            when(ragOperationsService.refreshBranchGeneration(
+                    eq(project), eq("main"), eq("empty-range-commit"), any()))
                     .thenReturn(true);
 
             ReflectionTestUtils.invokeMethod(
                     processor,
-                    "performIncrementalRagUpdate",
+                    "performRagGenerationRefresh",
                     request,
                     project,
-                    "",
-                    (Consumer<Map<String, Object>>) ignored -> { },
-                    false);
+                    (Consumer<Map<String, Object>>) ignored -> { });
 
-            verify(ragOperationsService).triggerIncrementalUpdate(
-                    eq(project), eq("main"), eq("empty-range-commit"), eq(""), any());
+            verify(ragOperationsService).refreshBranchGeneration(
+                    eq(project), eq("main"), eq("empty-range-commit"), any());
         }
 
         @Test
-        @DisplayName("should call updateBranchIndex for non-main branch RAG update")
-        void shouldCallUpdateBranchIndexForNonMainBranch() throws Exception {
+        @DisplayName("should refresh an exact generation for a retained non-main branch")
+        void shouldRefreshExactGenerationForNonMainBranch() throws Exception {
             BranchProcessRequest request = createRequest();
             request.targetBranchName = "feature-x";
             request.commitHash = "new-commit";
@@ -956,8 +966,8 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(ragOperationsService).updateBranchIndex(eq(project), eq("feature-x"), any());
-            verify(ragOperationsService, never()).triggerIncrementalUpdate(any(), any(), any(), any(), any());
+            verify(ragOperationsService).refreshBranchGeneration(
+                    eq(project), eq("feature-x"), eq("new-commit"), any());
         }
 
         @Test
@@ -976,16 +986,14 @@ class BranchAnalysisProcessorTest {
 
             ReflectionTestUtils.invokeMethod(
                     processor,
-                    "performIncrementalRagUpdate",
+                    "performRagGenerationRefresh",
                     request,
                     project,
-                    "diff --git a/f.java b/f.java\n+x\n",
-                    (Consumer<Map<String, Object>>) events::add,
-                    false);
+                    (Consumer<Map<String, Object>>) events::add);
 
             verify(ragOperationsService, never()).isRagPipelineHealthy();
-            verify(ragOperationsService, never()).updateBranchIndex(any(), any(), any());
-            verify(ragOperationsService, never()).triggerIncrementalUpdate(any(), any(), any(), any(), any());
+            verify(ragOperationsService, never()).refreshBranchGeneration(
+                    any(), any(), any(), any());
             assertThat(events).anySatisfy(event ->
                     assertThat(event).containsEntry("state", "rag_skipped"));
         }
@@ -1111,6 +1119,140 @@ class BranchAnalysisProcessorTest {
     }
 
     @Nested
+    @DisplayName("direct-push repository tools")
+    class DirectPushRepositoryToolsTests {
+
+        @Test
+        @DisplayName("should queue the exact generation before inference and close the local snapshot")
+        void shouldUseAndCloseExactLocalSnapshot() throws Exception {
+            BranchProcessRequest request = createRequest();
+            String exactRevision = "eb59a730e56532cc96d0e9fbb6b7616d6ca9897e";
+            request.commitHash = exactRevision;
+            VcsAiClientService aiClientService = mock(VcsAiClientService.class);
+            AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            LocalRepositorySnapshotService.PreparedSnapshot prepared =
+                    mock(LocalRepositorySnapshotService.PreparedSnapshot.class);
+            LocalRepositorySnapshot transport = new LocalRepositorySnapshot(
+                    "/tmp/codecrow-branch-review-test", "main", exactRevision);
+
+            when(project.getId()).thenReturn(1L);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("team");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(commitCoverageService.checkCoverage(
+                    eq(1L), eq("main"), eq(List.of(exactRevision)), eq(true)))
+                    .thenReturn(new CommitCoverageService.CoverageResult(
+                            CommitCoverageService.CoverageStatus.NOT_COVERED,
+                            List.of(exactRevision)));
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB))
+                    .thenReturn(aiClientService);
+            when(aiClientService.buildDirectPushAnalysisRequests(
+                    eq(project), eq(request), anyString(), anyMap(), anyList()))
+                    .thenReturn(List.of(aiRequest));
+            when(aiRequest.getUseMcpTools()).thenReturn(true);
+            when(aiRequest.getTargetHeadCommitHash()).thenReturn(exactRevision);
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.refreshBranchGeneration(
+                    eq(project), eq("main"), eq(exactRevision), any()))
+                    .thenReturn(true);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(
+                    any(), eq(exactRevision), eq(Set.of("src/App.java"))))
+                    .thenReturn(archiveSnapshot(Map.of("src/App.java", "class App {}")));
+            when(localRepositorySnapshotService.prepare(
+                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq(exactRevision)))
+                    .thenReturn(Optional.of(prepared));
+            when(prepared.transport()).thenReturn(transport);
+            when(aiAnalysisClient.performAnalysis(eq(aiRequest), eq(transport), any()))
+                    .thenThrow(new IOException("inference unavailable"));
+
+            Boolean refreshAttempted = ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performDirectPushAnalysisIfNeeded",
+                    project,
+                    request,
+                    List.of(exactRevision),
+                    "diff --git a/src/App.java b/src/App.java\n+class App {}\n",
+                    Set.of("src/App.java"),
+                    EVcsProvider.GITHUB,
+                    (Consumer<Map<String, Object>>) ignored -> { },
+                    null,
+                    false,
+                    lockLease);
+
+            assertThat(refreshAttempted).isTrue();
+            var ordered = inOrder(ragOperationsService, localRepositorySnapshotService, aiAnalysisClient);
+            ordered.verify(ragOperationsService).refreshBranchGeneration(
+                    eq(project), eq("main"), eq(exactRevision), any());
+            ordered.verify(localRepositorySnapshotService).prepare(
+                    vcsConnection, "team", "repo", "main", exactRevision);
+            ordered.verify(aiAnalysisClient).performAnalysis(
+                    eq(aiRequest), eq(transport), any());
+            verify(prepared).close();
+        }
+
+        @Test
+        @DisplayName("should keep direct-push review working when the local snapshot is unavailable")
+        void shouldFallBackWhenLocalSnapshotIsUnavailable() throws Exception {
+            BranchProcessRequest request = createRequest();
+            VcsAiClientService aiClientService = mock(VcsAiClientService.class);
+            AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+
+            when(project.getId()).thenReturn(1L);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("team");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(commitCoverageService.checkCoverage(
+                    eq(1L), eq("main"), eq(List.of("abc123")), eq(true)))
+                    .thenReturn(new CommitCoverageService.CoverageResult(
+                            CommitCoverageService.CoverageStatus.NOT_COVERED,
+                            List.of("abc123")));
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB))
+                    .thenReturn(aiClientService);
+            when(aiClientService.buildDirectPushAnalysisRequests(
+                    eq(project), eq(request), anyString(), anyMap(), anyList()))
+                    .thenReturn(List.of(aiRequest));
+            when(aiRequest.getUseMcpTools()).thenReturn(true);
+            when(aiRequest.getTargetHeadCommitHash()).thenReturn("abc123");
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(false);
+            when(branchFileOperationsService.downloadBranchFileSnapshot(
+                    any(), eq("abc123"), anySet()))
+                    .thenReturn(archiveSnapshot(Map.of("src/App.java", "class App {}")));
+            when(localRepositorySnapshotService.prepare(
+                    eq(vcsConnection), eq("team"), eq("repo"), eq("main"), eq("abc123")))
+                    .thenReturn(Optional.empty());
+            when(aiAnalysisClient.performAnalysis(eq(aiRequest), any(Consumer.class)))
+                    .thenReturn(Map.of("issues", List.of()));
+            when(codeAnalysisService.createDirectPushAnalysisFromAiResponse(
+                    eq(project), anyMap(), eq("main"), eq("abc123"), anyMap()))
+                    .thenReturn(analysis);
+
+            ReflectionTestUtils.invokeMethod(
+                    processor,
+                    "performDirectPushAnalysisIfNeeded",
+                    project,
+                    request,
+                    List.of("abc123"),
+                    "diff --git a/src/App.java b/src/App.java\n+class App {}\n",
+                    Set.of("src/App.java"),
+                    EVcsProvider.GITHUB,
+                    (Consumer<Map<String, Object>>) ignored -> { },
+                    null,
+                    false,
+                    lockLease);
+
+            verify(aiAnalysisClient).performAnalysis(eq(aiRequest), any(Consumer.class));
+            verify(aiAnalysisClient, never()).performAnalysis(
+                    eq(aiRequest), any(LocalRepositorySnapshot.class), any());
+        }
+    }
+
+    @Nested
     @DisplayName("fullReconcile()")
     class FullReconcileTests {
 
@@ -1130,7 +1272,7 @@ class BranchAnalysisProcessorTest {
     }
 
     @Nested
-    @DisplayName("performIncrementalRagUpdate()")
+    @DisplayName("performRagGenerationRefresh()")
     class RagUpdateTests {
         // These are tested through process() behavior since the method is private.
         // The key scenarios: ragOperationsService null, rag not enabled, rag index not ready,
@@ -1172,6 +1314,7 @@ class BranchAnalysisProcessorTest {
                     pullRequestService,
                     pullRequestStatusSyncService,
                     null, // astScopeEnricher
+                    localRepositorySnapshotService,
                     null // ragOperationsService
             );
 

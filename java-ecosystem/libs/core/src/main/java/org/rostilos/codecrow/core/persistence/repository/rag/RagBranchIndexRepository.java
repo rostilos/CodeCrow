@@ -13,6 +13,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,19 +22,6 @@ import java.util.Optional;
  */
 @Repository
 public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, Long> {
-
-    interface OperatorAliasCandidate {
-        Long getBranchIndexId();
-        Long getGenerationId();
-        Long getProjectId();
-        String getWorkspaceName();
-        String getProjectNamespace();
-        String getBranchName();
-        String getRevision();
-        String getCollectionName();
-        String getManifestDigest();
-        RagBranchIndexKind getIndexKind();
-    }
 
     /**
      * Immutable coordinates required to advance the currently published
@@ -45,10 +33,21 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
         Long getGenerationId();
         String getRevision();
         String getCollectionName();
+        String getManifestDigest();
         String getRepresentationFingerprint();
         Integer getFileCount();
         Integer getChunkCount();
         OffsetDateTime getActivatedAt();
+    }
+
+    interface ReconciliationCoordinates {
+        Long getProjectId();
+        String getBranchName();
+        String getDesiredCommitHash();
+        String getActiveRevision();
+        String getActiveRepresentationFingerprint();
+        String getErrorMessage();
+        OffsetDateTime getLastFailedAt();
     }
 
     interface TransientCleanupCandidate {
@@ -70,6 +69,7 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
             SELECT g.id AS generationId,
                    g.revision AS revision,
                    g.collectionName AS collectionName,
+                   g.manifestDigest AS manifestDigest,
                    g.representationFingerprint AS representationFingerprint,
                    g.fileCount AS fileCount,
                    g.chunkCount AS chunkCount,
@@ -83,6 +83,40 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
     Optional<ActiveGenerationCoordinates> findActiveGenerationCoordinates(
             @Param("projectId") Long projectId,
             @Param("branchName") String branchName);
+
+    @Query("""
+            SELECT b.project.id AS projectId,
+                   b.branchName AS branchName,
+                   b.desiredCommitHash AS desiredCommitHash,
+                   g.revision AS activeRevision,
+                   g.representationFingerprint AS activeRepresentationFingerprint,
+                   b.errorMessage AS errorMessage,
+                   b.lastFailedAt AS lastFailedAt
+            FROM RagBranchIndex b
+            LEFT JOIN b.activeGeneration g
+            WHERE b.project.id = :projectId
+              AND b.branchName = :branchName
+            """)
+    Optional<ReconciliationCoordinates> findReconciliationCoordinates(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName);
+
+    /** One bounded scheduler query for every already-observed branch in a project page. */
+    @Query("""
+            SELECT b.project.id AS projectId,
+                   b.branchName AS branchName,
+                   b.desiredCommitHash AS desiredCommitHash,
+                   g.revision AS activeRevision,
+                   g.representationFingerprint AS activeRepresentationFingerprint,
+                   b.errorMessage AS errorMessage,
+                   b.lastFailedAt AS lastFailedAt
+            FROM RagBranchIndex b
+            LEFT JOIN b.activeGeneration g
+            WHERE b.project.id IN :projectIds
+              AND b.cleanupClaimToken IS NULL
+            """)
+    List<ReconciliationCoordinates> findReconciliationCoordinatesByProjectIds(
+            @Param("projectIds") Collection<Long> projectIds);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT b FROM RagBranchIndex b WHERE b.project.id = :projectId AND b.branchName = :branchName")
@@ -111,7 +145,7 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
                    b.cleanupClaimedAt AS cleanupClaimedAt,
                    b.project.configuration AS projectConfiguration
             FROM RagBranchIndex b
-            WHERE b.indexKind = org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.TRANSIENT
+            WHERE b.indexKind <> org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY
             """)
     List<TransientCleanupCandidate> findTransientCleanupCandidates();
 
@@ -120,9 +154,9 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
     @Query("UPDATE RagBranchIndex b SET b.cleanupClaimToken = :claimToken, "
             + "b.cleanupClaimedAt = :claimedAt "
             + "WHERE b.id = :branchIndexId "
-            + "AND b.indexKind = org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.TRANSIENT "
-            + "AND b.lifecycleStatus = "
-            + "org.rostilos.codecrow.core.model.rag.RagBranchIndexLifecycleStatus.READY "
+            + "AND b.indexKind <> org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY "
+            + "AND b.lifecycleStatus <> "
+            + "org.rostilos.codecrow.core.model.rag.RagBranchIndexLifecycleStatus.BUILDING "
             + "AND (b.cleanupClaimToken IS NULL OR b.cleanupClaimToken = :claimToken "
             + "OR b.cleanupClaimedAt < :staleBefore) "
             + "AND ((b.lastAccessedAt IS NOT NULL AND b.lastAccessedAt < :cutoff) "
@@ -168,7 +202,7 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("DELETE FROM RagBranchIndex b WHERE b.id = :branchIndexId "
-            + "AND b.indexKind = org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.TRANSIENT "
+            + "AND b.indexKind <> org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY "
             + "AND b.cleanupClaimToken = :claimToken")
     int deleteClaimedTransientById(
             @Param("branchIndexId") Long branchIndexId,
@@ -187,55 +221,15 @@ public interface RagBranchIndexRepository extends JpaRepository<RagBranchIndex, 
     @Query("SELECT b.branchName FROM RagBranchIndex b WHERE b.project.id = :projectId")
     List<String> findBranchNamesByProjectId(@Param("projectId") Long projectId);
 
-    /**
-     * Reads the immutable values needed by optional operator-alias repair.
-     * Returning a scalar projection lets the database transaction finish
-     * before the caller performs any potentially slow RAG/Qdrant request.
-     */
-    @Query("""
-            SELECT b.project.id AS projectId,
-                   b.id AS branchIndexId,
-                   b.activeGeneration.id AS generationId,
-                   b.project.workspace.name AS workspaceName,
-                   b.project.namespace AS projectNamespace,
-                   b.branchName AS branchName,
-                   b.activeGeneration.revision AS revision,
-                   b.activeGeneration.collectionName AS collectionName,
-                   b.activeGeneration.manifestDigest AS manifestDigest,
-                   b.indexKind AS indexKind
-            FROM RagBranchIndex b
-            WHERE b.activeGeneration IS NOT NULL
-              AND b.indexKind IN (
-                org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY,
-                org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE
-              )
-            """)
-    List<OperatorAliasCandidate> findOperatorAliasCandidates();
+    @Query("SELECT b.branchName FROM RagBranchIndex b "
+            + "WHERE b.project.id = :projectId AND b.activeGeneration IS NOT NULL "
+            + "ORDER BY b.branchName")
+    List<String> findActiveBranchNamesByProjectId(@Param("projectId") Long projectId);
 
-    /**
-     * Re-reads one branch's current publication coordinates without retaining
-     * an entity or transaction across the remote alias request.
-     */
-    @Query("""
-            SELECT b.project.id AS projectId,
-                   b.id AS branchIndexId,
-                   b.activeGeneration.id AS generationId,
-                   b.project.workspace.name AS workspaceName,
-                   b.project.namespace AS projectNamespace,
-                   b.branchName AS branchName,
-                   b.activeGeneration.revision AS revision,
-                   b.activeGeneration.collectionName AS collectionName,
-                   b.activeGeneration.manifestDigest AS manifestDigest,
-                   b.indexKind AS indexKind
-            FROM RagBranchIndex b
-            WHERE b.id = :branchIndexId
-              AND b.activeGeneration IS NOT NULL
-              AND b.indexKind IN (
-                org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY,
-                org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.DURABLE
-              )
-            """)
-    Optional<OperatorAliasCandidate> findOperatorAliasCandidateById(
-            @Param("branchIndexId") Long branchIndexId);
+    @Query("SELECT b.branchName FROM RagBranchIndex b "
+            + "WHERE b.project.id = :projectId AND b.activeGeneration IS NOT NULL "
+            + "AND b.indexKind = org.rostilos.codecrow.core.model.rag.RagBranchIndexKind.PRIMARY")
+    Optional<String> findPrimaryActiveBranchNameByProjectId(
+            @Param("projectId") Long projectId);
 
 }

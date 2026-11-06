@@ -2,6 +2,7 @@ package org.rostilos.codecrow.webserver.analysis.dto.response;
 
 import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
 import org.rostilos.codecrow.core.dto.analysis.issue.IssuesSummaryDTO;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +12,9 @@ public class AnalysisIssueResponse {
     private IssuesSummaryDTO summary = new IssuesSummaryDTO(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     private int maxVersion;
     private int currentVersion;
+    private List<Integer> availableVersions = new ArrayList<>();
+    private List<Integer> partialVersions = new ArrayList<>();
+    private AnalysisStatus analysisStatus;
     private String analysisSummary; // The comment/summary from the CodeAnalysis
     private String commitHash; // The commit hash for this specific analysis version
 
@@ -44,6 +48,15 @@ public class AnalysisIssueResponse {
     public void setCurrentVersion(int currentVersion) {
         this.currentVersion = currentVersion;
     }
+
+    public List<Integer> getAvailableVersions() { return availableVersions; }
+    public void setAvailableVersions(List<Integer> availableVersions) { this.availableVersions = availableVersions; }
+
+    public List<Integer> getPartialVersions() { return partialVersions; }
+    public void setPartialVersions(List<Integer> partialVersions) { this.partialVersions = partialVersions; }
+
+    public AnalysisStatus getAnalysisStatus() { return analysisStatus; }
+    public void setAnalysisStatus(AnalysisStatus analysisStatus) { this.analysisStatus = analysisStatus; }
 
     public String getAnalysisSummary() {
         return analysisSummary;

@@ -70,7 +70,7 @@ def policy_audit(repository: Path) -> dict[str, object]:
         "plugins": list(capabilities.repository_plugins),
         "loaderFiles": len(files),
         "fileDispositions": dict(sorted(dispositions.items())),
-        "semanticFiles": dispositions["full"],
+        "fullAnalysisFiles": dispositions["full"],
         "architectureOnlyFiles": dispositions["architecture-only"],
         "excludedByPlugin": dispositions["excluded"],
         "fullByExtension": dict(sorted(Counter(
@@ -207,7 +207,7 @@ def audit(repository: Path, max_files: int, max_file_bytes: int) -> dict[str, ob
             "architecturePoints": architecture_points,
             "exactSourcePoints": context_points,
             "snapshotPoints": snapshot_points,
-            "totalZeroVectorPoints": (
+            "totalStructuralPoints": (
                 architecture_points + context_points + snapshot_points
             ),
         },

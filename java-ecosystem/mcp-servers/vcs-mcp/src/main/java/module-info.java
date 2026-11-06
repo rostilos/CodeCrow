@@ -5,6 +5,8 @@ module org.rostilos.codecrow.mcpservers {
     requires reactor.core;
     requires org.slf4j;
     requires org.rostilos.codecrow.vcs;
+    requires spring.data.redis;
+    requires lettuce.core;
     requires com.fasterxml.jackson.databind;
     requires okhttp3;
     requires jtokkit;

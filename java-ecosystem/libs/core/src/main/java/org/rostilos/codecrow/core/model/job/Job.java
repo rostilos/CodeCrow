@@ -94,6 +94,12 @@ public class Job {
     @JoinColumn(name = "code_analysis_id")
     private CodeAnalysis codeAnalysis;
 
+    @Column(name = "input_analysis_id")
+    private Long inputAnalysisId;
+
+    public Long getInputAnalysisId() { return inputAnalysisId; }
+    public void setInputAnalysisId(Long id) { this.inputAnalysisId = id; }
+
     /**
      * Error message if job failed.
      */

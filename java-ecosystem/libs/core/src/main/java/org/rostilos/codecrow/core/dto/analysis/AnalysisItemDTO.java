@@ -11,11 +11,15 @@ public record AnalysisItemDTO(
     String triggeredBy,
     OffsetDateTime triggeredAt,
     OffsetDateTime completedAt,
-    String status, // pending|running|completed|failed
+    String status, // accepted|rejected|pending|error|partial
     String aiProvider,
     int issuesFound,
     int criticalIssuesFound,
-    String duration
+    String duration,
+    String sourceBranch,
+    String commitHash,
+    Integer prVersion,
+    String analysisType
 ) {
     public static AnalysisItemDTO fromEntity(CodeAnalysis analysisItem) {
         return new AnalysisItemDTO(
@@ -31,9 +35,12 @@ public record AnalysisItemDTO(
                 analysisItem.getHighSeverityCount(),
                 analysisItem.getCreatedAt() != null && analysisItem.getUpdatedAt() != null
                         ? java.time.Duration.between(analysisItem.getCreatedAt(), analysisItem.getUpdatedAt()).getSeconds() + "s"
-                        : null
+                        : null,
+                analysisItem.getSourceBranchName(),
+                analysisItem.getCommitHash(),
+                analysisItem.getPrVersion(),
+                analysisItem.getAnalysisType() == null ? null : analysisItem.getAnalysisType().name()
         );
     }
 
 }
-

@@ -10,7 +10,6 @@ public enum ESiteSettingsGroup {
     VCS_GITHUB,
     VCS_GITLAB,
     LLM_SYNC,
-    EMBEDDING,
     SMTP,
     GOOGLE_OAUTH,
     BASE_URLS

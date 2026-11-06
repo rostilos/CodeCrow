@@ -123,11 +123,16 @@ public record ProjectRulesConfig(
 
     private static String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+        StringBuilder escaped = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' || c == '\\') escaped.append('\\').append(c);
+            else if (c < 0x20) {
+                escaped.append("\\u00").append(Character.forDigit(c >> 4, 16))
+                        .append(Character.forDigit(c & 15, 16));
+            } else escaped.append(c);
+        }
+        return escaped.toString();
     }
 
     @Override

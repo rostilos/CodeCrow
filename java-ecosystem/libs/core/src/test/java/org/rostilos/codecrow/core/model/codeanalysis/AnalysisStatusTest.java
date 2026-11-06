@@ -13,9 +13,10 @@ class AnalysisStatusTest {
     void shouldHaveAllExpectedValues() {
         AnalysisStatus[] values = AnalysisStatus.values();
         
-        assertThat(values).hasSize(4);
+        assertThat(values).hasSize(5);
         assertThat(values).contains(
                 AnalysisStatus.ACCEPTED,
+                AnalysisStatus.PARTIAL,
                 AnalysisStatus.REJECTED,
                 AnalysisStatus.PENDING,
                 AnalysisStatus.ERROR
@@ -26,6 +27,7 @@ class AnalysisStatusTest {
     @DisplayName("valueOf should return correct enum")
     void valueOfShouldReturnCorrectEnum() {
         assertThat(AnalysisStatus.valueOf("ACCEPTED")).isEqualTo(AnalysisStatus.ACCEPTED);
+        assertThat(AnalysisStatus.valueOf("PARTIAL")).isEqualTo(AnalysisStatus.PARTIAL);
         assertThat(AnalysisStatus.valueOf("PENDING")).isEqualTo(AnalysisStatus.PENDING);
         assertThat(AnalysisStatus.valueOf("ERROR")).isEqualTo(AnalysisStatus.ERROR);
     }

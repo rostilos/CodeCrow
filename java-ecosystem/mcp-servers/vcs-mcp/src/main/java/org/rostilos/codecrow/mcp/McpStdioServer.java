@@ -26,16 +26,10 @@ public class McpStdioServer {
     private static final McpTools mcpTools = new McpTools(new VcsMcpClientFactory());
 
     /**
-     * Semaphore to serialize tool execution.  The MCP SDK (0.10.x) uses a
-     * Reactor {@code Sinks.many().unicast()} for the stdio outbound channel.
-     * Unicast sinks do NOT support concurrent {@code tryEmitNext} calls — if
-     * multiple tool responses try to emit at the same time the sink returns
-     * {@code FAIL_NON_SERIALIZED} which surfaces as
-     * {@code "Failed to enqueue message"}.  By acquiring this semaphore
-     * inside the (synchronous) tool handler we guarantee that at most one
-     * tool call is in-flight at any time, which also means the subsequent
-     * {@code sendMessage()} call from the MCP server framework is never
-     * contended.
+     * Serialize synchronous access to the shared VCS tool implementation.
+     * Response emission happens after this handler returns, so transport
+     * serialization is owned by the MCP client for the complete request and
+     * response operation.
      */
     private static final Semaphore TOOL_SEMAPHORE = new Semaphore(1, true);
 
@@ -69,8 +63,7 @@ public class McpStdioServer {
             McpServerFeatures.SyncToolSpecification spec = new McpServerFeatures.SyncToolSpecification(
                     tool,
                     (exchange, arguments) -> {
-                        // Serialize tool execution to prevent concurrent
-                        // sendMessage() calls on the unicast outbound sink.
+                        // Serialize access to the shared VCS tool implementation.
                         try {
                             TOOL_SEMAPHORE.acquire();
                         } catch (InterruptedException ie) {
@@ -78,8 +71,8 @@ public class McpStdioServer {
                             return new CallToolResult(
                                     List.of(new TextContent("Tool execution interrupted")), true);
                         }
-                        try {
-                            log.info(exchange.toString());
+                        try (var vcsContext = new org.rostilos.codecrow.vcsclient.VcsRequestContext(
+                                Long.getLong("project.id"), System.getProperty("vcs.job.id"), "mcp:" + tool.name())) {
                             Object result = mcpTools.execute(tool.name(), arguments);
                             String jsonResult = objectMapper.writeValueAsString(result);
                             return new CallToolResult(List.of(new TextContent(jsonResult)), false);
@@ -638,8 +631,49 @@ public class McpStdioServer {
                 """;
         tools.add(new Tool(
                 "getBranchFileContent",
-                "Get file content or an optional whole-line range from a branch or commit.",
+                "Get file content or an optional whole-line range from a branch or commit. A start beyond EOF returns a bounded tail window with explicit requested and actual coordinates; use the returned coordinates for citations.",
                 getBranchFileContentSchema
+        ));
+
+        String getReviewFileContentSchema = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "workspace": {
+                      "type": "string",
+                      "description": "The request-bound repository workspace or owner."
+                    },
+                    "repoSlug": {
+                      "type": "string",
+                      "description": "The request-bound repository slug."
+                    },
+                    "filePath": {
+                      "type": "string",
+                      "description": "Repository-relative file path."
+                    },
+                    "startLine": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optional first source line. Prefer a concrete bounded range when the full file is not the review unit."
+                    },
+                    "endLine": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Optional last source line. The server returns at most 401 lines."
+                    },
+                    "contextSuppliedPaths": {
+                      "type": "array",
+                      "items": {"type": "string"},
+                      "description": "Host-bound paths whose complete current source is already present in this Stage 1 prompt."
+                    }
+                  },
+                  "required": ["workspace", "repoSlug", "filePath"]
+                }
+                """;
+        tools.add(new Tool(
+                "getReviewFileContent",
+                "Read unresolved source from this pull request's proposed tree. Prefer startLine/endLine for the smallest useful range and omit them only for an explicit whole-file need; do not reread complete source already supplied. Modified files use exact post-change content, deleted files are reported absent, and unchanged files use the pinned target head. A start beyond EOF returns a bounded tail window with explicit requested and actual coordinates; use the returned coordinates for citations.",
+                getReviewFileContentSchema
         ));
 
 
@@ -689,7 +723,7 @@ public class McpStdioServer {
                   "required": ["workspace", "projectKey", "branch", "dirPath"]
                 }
                 """;
-        tools.add(new Tool("getDirectoryByPath", "Get branch directory by path.", getDirectoryByPathSchema));
+        tools.add(new Tool("getDirectoryByPath", "List one directory by path. With a valid review overlay, the server binds to the mounted proposed tree regardless of the supplied branch and reports the resolved base ref. It includes proposed additions and omits deleted files. Otherwise branch selects the normal repository tree. Local output is bounded and labels truncation; use an empty dirPath for the root.", getDirectoryByPathSchema));
 
         return tools;
     }

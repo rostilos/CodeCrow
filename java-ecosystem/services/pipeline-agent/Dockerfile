@@ -2,15 +2,15 @@ FROM eclipse-temurin:17-jre-alpine
 
 RUN apk add --no-cache curl git su-exec && \
     addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \
-    mkdir -p /app/logs && chown -R appuser:appgroup /app
+    mkdir -p /app/logs /app/config /app/codecrow-config /run/codecrow-config && chown -R appuser:appgroup /app
 
 WORKDIR /app
 
 COPY --chown=appuser:appgroup java-ecosystem/services/pipeline-agent/target/codecrow-pipeline-agent-1.0.jar app.jar
 COPY --chown=appuser:appgroup analysis-plugins/build/java/ /app/plugins/
 
-# Entrypoint: fix volume ownership, then drop to appuser
-RUN printf '#!/bin/sh\nchown -R appuser:appgroup /app/logs 2>/dev/null || true\nexec su-exec appuser "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+COPY java-ecosystem/services/pipeline-agent/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8082
 

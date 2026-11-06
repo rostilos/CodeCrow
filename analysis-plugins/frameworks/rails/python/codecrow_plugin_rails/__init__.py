@@ -18,8 +18,6 @@ from codecrow_plugins import (
 )
 
 
-_MAX_FACTS_PER_FILE = 160
-_MAX_EVIDENCE_REQUESTS = 40
 _HTTP_ROUTES = frozenset({"delete", "get", "head", "options", "patch", "post", "put"})
 _RESOURCE_ROUTES = frozenset({"resource", "resources"})
 _ASSOCIATIONS = {
@@ -337,28 +335,6 @@ def _route_prefix(document: TreeSitterDocument, route_call) -> str | None:
     return _join_route(*reversed(prefixes)) if prefixes else ""
 
 
-def _bounded_facts(facts: set[GraphFact]) -> tuple[GraphFact, ...]:
-    by_kind: dict[str, list[GraphFact]] = {}
-    for fact in sorted(facts):
-        by_kind.setdefault(fact.kind, []).append(fact)
-    selected: list[GraphFact] = []
-    offset = 0
-    kinds = tuple(sorted(by_kind))
-    while len(selected) < _MAX_FACTS_PER_FILE:
-        added = False
-        for kind in kinds:
-            values = by_kind[kind]
-            if offset < len(values):
-                selected.append(values[offset])
-                added = True
-                if len(selected) == _MAX_FACTS_PER_FILE:
-                    break
-        if not added:
-            break
-        offset += 1
-    return tuple(sorted(selected))
-
-
 def _fact_identifiers(fact: GraphFact) -> frozenset[str]:
     values = [fact.source, fact.target, *(value for _, value in fact.attributes)]
     identifiers: set[str] = set()
@@ -452,7 +428,7 @@ class RailsPlugin:
         self._classes(document, artifact.path, facts)
         if not facts:
             return PluginOutcome.abstained()
-        return PluginOutcome.handled(_bounded_facts(facts))
+        return PluginOutcome.handled(tuple(sorted(facts)))
 
     @staticmethod
     def _routes(
@@ -699,7 +675,7 @@ class RailsPlugin:
     def review(self, paths: tuple[str, ...]):
         selected = tuple(sorted(
             path for path in paths if path.casefold().endswith(".rb")
-        ))[:_MAX_EVIDENCE_REQUESTS]
+        ))
         if not selected:
             return PluginOutcome.abstained()
         rules = tuple(sorted((

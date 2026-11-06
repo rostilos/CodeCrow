@@ -1,0 +1,256 @@
+{
+  "provenance": {
+    "repository": "https://github.com/calcom/cal.com",
+    "public_proposed_commit": "9fde0e906897cc0f4f71793f647dd629faba3317",
+    "file": "packages/app-store/hubspot/api/callback.ts",
+    "head_source_sha256": "6a2692daa3127a3212057acdc937e40c3f4cc9ce68548bb67ce578fd7228a7ce",
+    "generation_manifest_sha256": "48d3a83b63b3eb74ccfa26cb467b345380bd9ebcc76999b3173fb604b55fd459",
+    "call_sequence": 15,
+    "tool_call_id": "exec-dedaa500-f971-4f48-88ac-3498baaba247"
+  },
+  "source": "import * as hubspot from \"@hubspot/api-client\";\nimport type { TokenResponseIF } from \"@hubspot/api-client/lib/codegen/oauth/models/TokenResponseIF\";\nimport type { NextApiRequest, NextApiResponse } from \"next\";\n\nimport { WEBAPP_URL } from \"@calcom/lib/constants\";\nimport { getSafeRedirectUrl } from \"@calcom/lib/getSafeRedirectUrl\";\n\nimport getAppKeysFromSlug from \"../../_utils/getAppKeysFromSlug\";\nimport getInstalledAppPath from \"../../_utils/getInstalledAppPath\";\nimport createOAuthAppCredential from \"../../_utils/oauth/createOAuthAppCredential\";\nimport { decodeOAuthState } from \"../../_utils/oauth/decodeOAuthState\";\n\nlet client_id = \"\";\nlet client_secret = \"\";\nconst hubspotClient = new hubspot.Client();\n\nexport interface HubspotToken extends TokenResponseIF {\n  expiryDate?: number;\n}\n\nexport default async function handler(req: NextApiRequest, res: NextApiResponse) {\n  const { code } = req.query;\n\n  if (code && typeof code !== \"string\") {\n    res.status(400).json({ message: \"`code` must be a string\" });\n    return;\n  }\n\n  if (!req.session?.user?.id) {\n    return res.status(401).json({ message: \"You must be logged in to do this\" });\n  }\n\n  const appKeys = await getAppKeysFromSlug(\"hubspot\");\n  if (typeof appKeys.client_id === \"string\") client_id = appKeys.client_id;\n  if (typeof appKeys.client_secret === \"string\") client_secret = appKeys.client_secret;\n  if (!client_id) return res.status(400).json({ message: \"HubSpot client id missing.\" });\n  if (!client_secret) return res.status(400).json({ message: \"HubSpot client secret missing.\" });\n\n  const hubspotToken: HubspotToken = await hubspotClient.oauth.tokensApi.createToken(\n    \"authorization_code\",\n    code,\n    WEBAPP_URL + \"/api/integrations/hubspot/callback\",\n    client_id,\n    client_secret\n  );\n\n  // set expiry date as offset from current time.\n  hubspotToken.expiryDate = Math.round(Date.now() + hubspotToken.expiresIn * 1000);\n\n  await createOAuthAppCredential({ appId: \"hubspot\", type: \"hubspot_other_calendar\" }, hubspotToken, req);\n\n  const state = decodeOAuthState(req);\n  res.redirect(\n    getSafeRedirectUrl(state?.returnTo) ?? getInstalledAppPath({ variant: \"other\", slug: \"hubspot\" })\n  );\n}\n",
+  "units": [
+    {
+      "unit_id": "unit:284a83cdaf6bd7c6b5e72e706456f33b50d3490ac54cf3a5f8291b114ac8c93e",
+      "record_type": "source_unit",
+      "path": "packages/app-store/hubspot/api/callback.ts",
+      "language": "typescript",
+      "kind": "simplified",
+      "name": "callback.ts",
+      "qualified_name": "packages/app-store/hubspot/api/callback.ts:1-57:callback.ts",
+      "start_line": 1,
+      "end_line": 57,
+      "content": "import * as hubspot from \"@hubspot/api-client\";\nimport type { TokenResponseIF } from \"@hubspot/api-client/lib/codegen/oauth/models/TokenResponseIF\";\nimport type { NextApiRequest, NextApiResponse } from \"next\";\n\nimport { WEBAPP_URL } from \"@calcom/lib/constants\";\nimport { getSafeRedirectUrl } from \"@calcom/lib/getSafeRedirectUrl\";\n\nimport getAppKeysFromSlug from \"../../_utils/getAppKeysFromSlug\";\nimport getInstalledAppPath from \"../../_utils/getInstalledAppPath\";\nimport createOAuthAppCredential from \"../../_utils/oauth/createOAuthAppCredential\";\nimport { decodeOAuthState } from \"../../_utils/oauth/decodeOAuthState\";\n\nlet client_id = \"\";\nlet client_secret = \"\";\nconst hubspotClient = new hubspot.Client();\n\n// Code for: interface HubspotToken extends TokenResponseIF {\n\n// Code for: async function handler(req: NextApiRequest, res: NextApiResp...",
+      "content_sha256": "174eebdcdedeeeb43399db1a2a66bc67d74babede72d1fd9341bdd93dca0354f",
+      "metadata": {
+        "branch": "main",
+        "chunk_index": 2,
+        "commit": "9fde0e906897cc0f4f71793f647dd629faba3317",
+        "content_type": "simplified_code",
+        "end_line": 57,
+        "filetype": "ts",
+        "import_occurrences": [],
+        "imports": [
+          "import * as hubspot from \"@hubspot/api-client\";",
+          "import type { TokenResponseIF } from \"@hubspot/api-client/lib/codegen/oauth/models/TokenResponseIF\";",
+          "import type { NextApiRequest, NextApiResponse } from \"next\";",
+          "import { WEBAPP_URL } from \"@calcom/lib/constants\";",
+          "import { getSafeRedirectUrl } from \"@calcom/lib/getSafeRedirectUrl\";",
+          "import getAppKeysFromSlug from \"../../_utils/getAppKeysFromSlug\";",
+          "import getInstalledAppPath from \"../../_utils/getInstalledAppPath\";",
+          "import createOAuthAppCredential from \"../../_utils/oauth/createOAuthAppCredential\";",
+          "import { decodeOAuthState } from \"../../_utils/oauth/decodeOAuthState\";"
+        ],
+        "information_density": 0.0,
+        "language": "typescript",
+        "node_type": "simplified",
+        "path": "packages/app-store/hubspot/api/callback.ts",
+        "plugin_syntax": {
+          "language": "typescript",
+          "plugin": "typescript"
+        },
+        "project": "cal_dot_com",
+        "start_line": 1,
+        "total_chunks": 3,
+        "workspace": "code-review-benchmark"
+      }
+    },
+    {
+      "unit_id": "unit:9ccd84d92102ca0b029de50a3bbfccd47c3313d3b36b77052292855073f5e16c",
+      "record_type": "source_unit",
+      "path": "packages/app-store/hubspot/api/callback.ts",
+      "language": "typescript",
+      "kind": "interface",
+      "name": "HubspotToken",
+      "qualified_name": "packages/app-store/hubspot/api/callback.ts:17-19:HubspotToken",
+      "start_line": 17,
+      "end_line": 19,
+      "content": "interface HubspotToken extends TokenResponseIF {\n  expiryDate?: number;\n}",
+      "content_sha256": "188f4f7368c9f834f88fca8496220916c79ab1b84f1400138567f5b635d66634",
+      "metadata": {
+        "branch": "main",
+        "chunk_index": 0,
+        "commit": "9fde0e906897cc0f4f71793f647dd629faba3317",
+        "content_type": "functions_classes",
+        "end_line": 19,
+        "file_import_occurrences": [
+          {
+            "endByte": 47,
+            "line": 1,
+            "startByte": 0,
+            "target": "import * as hubspot from \"@hubspot/api-client\";"
+          },
+          {
+            "endByte": 148,
+            "line": 2,
+            "startByte": 48,
+            "target": "import type { TokenResponseIF } from \"@hubspot/api-client/lib/codegen/oauth/models/TokenResponseIF\";"
+          },
+          {
+            "endByte": 209,
+            "line": 3,
+            "startByte": 149,
+            "target": "import type { NextApiRequest, NextApiResponse } from \"next\";"
+          },
+          {
+            "endByte": 262,
+            "line": 5,
+            "startByte": 211,
+            "target": "import { WEBAPP_URL } from \"@calcom/lib/constants\";"
+          },
+          {
+            "endByte": 331,
+            "line": 6,
+            "startByte": 263,
+            "target": "import { getSafeRedirectUrl } from \"@calcom/lib/getSafeRedirectUrl\";"
+          },
+          {
+            "endByte": 398,
+            "line": 8,
+            "startByte": 333,
+            "target": "import getAppKeysFromSlug from \"../../_utils/getAppKeysFromSlug\";"
+          },
+          {
+            "endByte": 466,
+            "line": 9,
+            "startByte": 399,
+            "target": "import getInstalledAppPath from \"../../_utils/getInstalledAppPath\";"
+          },
+          {
+            "endByte": 550,
+            "line": 10,
+            "startByte": 467,
+            "target": "import createOAuthAppCredential from \"../../_utils/oauth/createOAuthAppCredential\";"
+          },
+          {
+            "endByte": 622,
+            "line": 11,
+            "startByte": 551,
+            "target": "import { decodeOAuthState } from \"../../_utils/oauth/decodeOAuthState\";"
+          }
+        ],
+        "filetype": "ts",
+        "import_occurrences": [],
+        "imports": [
+          "import * as hubspot from \"@hubspot/api-client\";",
+          "import type { TokenResponseIF } from \"@hubspot/api-client/lib/codegen/oauth/models/TokenResponseIF\";",
+          "import type { NextApiRequest, NextApiResponse } from \"next\";",
+          "import { WEBAPP_URL } from \"@calcom/lib/constants\";",
+          "import { getSafeRedirectUrl } from \"@calcom/lib/getSafeRedirectUrl\";",
+          "import getAppKeysFromSlug from \"../../_utils/getAppKeysFromSlug\";",
+          "import getInstalledAppPath from \"../../_utils/getInstalledAppPath\";",
+          "import createOAuthAppCredential from \"../../_utils/oauth/createOAuthAppCredential\";",
+          "import { decodeOAuthState } from \"../../_utils/oauth/decodeOAuthState\";"
+        ],
+        "information_density": 1.0,
+        "language": "typescript",
+        "node_type": "interface",
+        "path": "packages/app-store/hubspot/api/callback.ts",
+        "plugin_syntax": {
+          "language": "typescript",
+          "plugin": "typescript"
+        },
+        "primary_name": "HubspotToken",
+        "project": "cal_dot_com",
+        "properties": [
+          "expiryDate"
+        ],
+        "referenced_types": [
+          "HubspotToken",
+          "TokenResponseIF",
+          ": number"
+        ],
+        "return_type": ": number",
+        "signature": "interface HubspotToken extends TokenResponseIF",
+        "start_line": 17,
+        "symbol_names": [
+          "HubspotToken"
+        ],
+        "total_chunks": 3,
+        "workspace": "code-review-benchmark"
+      }
+    },
+    {
+      "unit_id": "unit:70cb91fa5230e95f60b25e3c6e39e183fa9a8542e456412fb716608bd7de9d0e",
+      "record_type": "source_unit",
+      "path": "packages/app-store/hubspot/api/callback.ts",
+      "language": "typescript",
+      "kind": "function",
+      "name": "handler",
+      "qualified_name": "packages/app-store/hubspot/api/callback.ts:21-56:handler",
+      "start_line": 21,
+      "end_line": 56,
+      "content": "async function handler(req: NextApiRequest, res: NextApiResponse) {\n  const { code } = req.query;\n\n  if (code && typeof code !== \"string\") {\n    res.status(400).json({ message: \"`code` must be a string\" });\n    return;\n  }\n\n  if (!req.session?.user?.id) {\n    return res.status(401).json({ message: \"You must be logged in to do this\" });\n  }\n\n  const appKeys = await getAppKeysFromSlug(\"hubspot\");\n  if (typeof appKeys.client_id === \"string\") client_id = appKeys.client_id;\n  if (typeof appKeys.client_secret === \"string\") client_secret = appKeys.client_secret;\n  if (!client_id) return res.status(400).json({ message: \"HubSpot client id missing.\" });\n  if (!client_secret) return res.status(400).json({ message: \"HubSpot client secret missing.\" });\n\n  const hubspotToken: HubspotToken = await hubspotClient.oauth.tokensApi.createToken(\n    \"authorization_code\",\n    code,\n    WEBAPP_URL + \"/api/integrations/hubspot/callback\",\n    client_id,\n    client_secret\n  );\n\n  // set expiry date as offset from current time.\n  hubspotToken.expiryDate = Math.round(Date.now() + hubspotToken.expiresIn * 1000);\n\n  await createOAuthAppCredential({ appId: \"hubspot\", type: \"hubspot_other_calendar\" }, hubspotToken, req);\n\n  const state = decodeOAuthState(req);\n  res.redirect(\n    getSafeRedirectUrl(state?.returnTo) ?? getInstalledAppPath({ variant: \"other\", slug: \"hubspot\" })\n  );\n}",
+      "content_sha256": "0d0b1a6bd11a6d98fc8c2f3d4a3a22c2ca6a734e777117f11f6f63c529a4be23",
+      "metadata": {
+        "branch": "main",
+        "calls": [
+          "getAppKeysFromSlug",
+          "createOAuthAppCredential",
+          "decodeOAuthState",
+          "getSafeRedirectUrl",
+          "getInstalledAppPath"
+        ],
+        "chunk_index": 1,
+        "commit": "9fde0e906897cc0f4f71793f647dd629faba3317",
+        "content_type": "functions_classes",
+        "end_line": 56,
+        "filetype": "ts",
+        "import_occurrences": [],
+        "imports": [
+          "import * as hubspot from \"@hubspot/api-client\";",
+          "import type { TokenResponseIF } from \"@hubspot/api-client/lib/codegen/oauth/models/TokenResponseIF\";",
+          "import type { NextApiRequest, NextApiResponse } from \"next\";",
+          "import { WEBAPP_URL } from \"@calcom/lib/constants\";",
+          "import { getSafeRedirectUrl } from \"@calcom/lib/getSafeRedirectUrl\";",
+          "import getAppKeysFromSlug from \"../../_utils/getAppKeysFromSlug\";",
+          "import getInstalledAppPath from \"../../_utils/getInstalledAppPath\";",
+          "import createOAuthAppCredential from \"../../_utils/oauth/createOAuthAppCredential\";",
+          "import { decodeOAuthState } from \"../../_utils/oauth/decodeOAuthState\";"
+        ],
+        "information_density": 0.4571,
+        "language": "typescript",
+        "methods": [
+          "handler"
+        ],
+        "node_type": "function",
+        "parameters": [
+          "req",
+          "res"
+        ],
+        "path": "packages/app-store/hubspot/api/callback.ts",
+        "plugin_syntax": {
+          "language": "typescript",
+          "plugin": "typescript"
+        },
+        "primary_name": "handler",
+        "project": "cal_dot_com",
+        "referenced_types": [
+          ": NextApiRequest",
+          "NextApiRequest",
+          ": NextApiResponse",
+          "NextApiResponse",
+          ": HubspotToken",
+          "HubspotToken"
+        ],
+        "return_type": ": NextApiRequest",
+        "signature": "async function handler(req: NextApiRequest, res: NextApiResponse)",
+        "start_line": 21,
+        "structural_metadata_complete": false,
+        "structural_metadata_partial_reasons": [
+          "ast_depth_limit"
+        ],
+        "symbol_names": [
+          "handler"
+        ],
+        "total_chunks": 3,
+        "variables": [
+          "appKeys",
+          "hubspotToken",
+          "state"
+        ],
+        "workspace": "code-review-benchmark"
+      }
+    }
+  ]
+}

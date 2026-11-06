@@ -150,6 +150,8 @@ public class BitbucketReportingService implements VcsReportingService {
         // Bitbucket presents the most recently active comment first. Finalize the
         // summary after the inline threads so the report appears above the issues.
         postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
+        postReviewCheckSummary(httpClient, vcsRepoInfo, pullRequestNumber,
+                reportGenerator.createReviewChecksMarkdown(codeAnalysis, platformPrEntityId));
         
         postReport(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), report);
         postAnnotations(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), annotations);
@@ -157,6 +159,24 @@ public class BitbucketReportingService implements VcsReportingService {
         log.info("Successfully posted analysis results to Bitbucket");
     }
     
+    private void postReviewCheckSummary(OkHttpClient httpClient, VcsRepoInfo repository, Long prNumber, String markdown) {
+        if (markdown == null) return;
+        String marker = "<!-- codecrow-review-checks -->";
+        var action = new CommentOnBitbucketCloudAction(httpClient, repository, prNumber);
+        try {
+            String id = action.findCommentByMarker(marker);
+            if (markdown.isBlank()) {
+                if (id != null) action.deleteCommentById(id);
+            } else if (id != null) {
+                action.updateComment(id, marker + "\n" + markdown);
+            } else {
+                action.postSimpleComment(marker + "\n" + markdown);
+            }
+        } catch (IOException unavailable) {
+            log.warn("Could not publish review-check summary on Bitbucket PR {}: {}", prNumber, unavailable.getMessage());
+        }
+    }
+
     private String postOrUpdateComment(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,
@@ -212,7 +232,7 @@ public class BitbucketReportingService implements VcsReportingService {
             for (BitbucketInlineCommentFormatter.InlineComment comment : comments) {
                 try {
                     commentAction.postInlineComment(
-                            comment.path(), comment.line(), comment.body());
+                            comment.path(), comment.line(), comment.body(), comment.anchorSide());
                     posted++;
                 } catch (Exception e) {
                     // A stale or non-diff line can be rejected independently.

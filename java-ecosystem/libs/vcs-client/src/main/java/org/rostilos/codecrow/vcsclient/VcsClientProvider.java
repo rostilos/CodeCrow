@@ -72,6 +72,9 @@ public class VcsClientProvider {
     /** Per-connection authorized transport cache (connection-id → transport). */
     private final ConcurrentHashMap<Long, CachedTransport> transportCache = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private VcsRateLimits rateLimits = new VcsRateLimits();
+
     private final VcsConnectionRepository connectionRepository;
     private final BitbucketConnectInstallationRepository connectInstallationRepository;
     private final TokenEncryptionService encryptionService;
@@ -145,6 +148,17 @@ public class VcsClientProvider {
             // Refresh token if needed for APP connections
             VcsConnection activeConnection = ensureValidToken(connection);
             AuthorizedVcsTransport transport = createAuthorizedTransport(activeConnection);
+            String apiHost = switch (activeConnection.getProviderType()) {
+                case GITHUB -> "api.github.com";
+                case BITBUCKET_CLOUD -> "api.bitbucket.org";
+                case GITLAB -> java.net.URI.create(org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig
+                        .instanceBaseUrl(activeConnection)).getHost();
+                default -> "";
+            };
+            transport = transport.withHttpClient(transport.httpClient().newBuilder().retryOnConnectionFailure(false)
+                    .addNetworkInterceptor(new VcsRateLimitInterceptor(rateLimits, quotaIdentity(activeConnection),
+                            apiHost, String.valueOf(activeConnection.getId())))
+                    .build());
 
             // Cache the client
             if (connId != null) {
@@ -163,6 +177,26 @@ public class VcsClientProvider {
     public void evictCachedClient(Long connectionId) {
         if (connectionId != null) {
             transportCache.remove(connectionId);
+        }
+    }
+
+    public static String quotaIdentity(VcsConnection connection) {
+        String principal = connection.getInstallationId();
+        if ((principal == null || principal.isBlank()) && connection.getProviderType() == EVcsProvider.GITHUB
+                && (connection.getConnectionType() == EVcsConnectionType.APP
+                || connection.getConnectionType() == EVcsConnectionType.GITHUB_APP)) {
+            principal = connection.getExternalWorkspaceId();
+        }
+        if (principal == null || principal.isBlank()) principal = "connection-" + connection.getId();
+        String instance = connection.getProviderType() == EVcsProvider.GITLAB
+                ? org.rostilos.codecrow.vcsclient.gitlab.GitLabConfig.instanceBaseUrl(connection) : "cloud";
+        String tenant = connection.getWorkspace() != null ? String.valueOf(connection.getWorkspace().getId()) : "unknown";
+        String identity = tenant + ":" + connection.getProviderType() + ":" + instance + ":" + principal;
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(identity.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
         }
     }
     

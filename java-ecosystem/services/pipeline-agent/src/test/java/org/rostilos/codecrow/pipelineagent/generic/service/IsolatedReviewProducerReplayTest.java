@@ -6,6 +6,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.LocalRepositorySnapshot;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
@@ -19,6 +20,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -47,6 +49,11 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Test-side producer used by the deployed neutral replay.
@@ -93,6 +100,15 @@ class IsolatedReviewProducerReplayTest {
         String headRevision = requiredText(fixture, "headRevision");
         String rawDiff = requiredText(fixture, "rawDiff");
         String projectNamespace = requiredText(fixture, "projectNamespace");
+        boolean ragEnabled = fixture.path("ragEnabled").asBoolean(false);
+        String localRepoPath = ragEnabled
+                ? requiredText(fixture, "localRepoPath") : null;
+        String reviewOverlayPath = ragEnabled
+                ? requiredText(fixture, "reviewOverlayPath") : null;
+        String collectionTarget = ragEnabled
+                ? requiredText(fixture, "collectionTarget") : null;
+        String generationManifestSha256 = ragEnabled
+                ? requiredText(fixture, "generationManifestSha256") : null;
         List<String> expectedRepositoryPlugins = objectMapper.convertValue(
                 fixture.path("expectedRepositoryPlugins"),
                 objectMapper.getTypeFactory().constructCollectionType(
@@ -102,7 +118,7 @@ class IsolatedReviewProducerReplayTest {
                 objectMapper.getTypeFactory().constructMapType(
                         Map.class, String.class, String.class));
 
-        Project project = project(projectNamespace);
+        Project project = project(projectNamespace, ragEnabled);
         PrProcessRequest processRequest = processRequest(headRevision);
         VcsClient vcsClient = syntheticVcsClient(
                 headFiles, baseRevision, headRevision, rawDiff);
@@ -126,6 +142,8 @@ class IsolatedReviewProducerReplayTest {
                     new PullRequestDiffPreparationService(
                             new AnalysisLimitEnforcer()));
 
+            producer.snapshots = new org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService(
+                    new org.rostilos.codecrow.analysisengine.service.BranchArchiveService(vcsClientProvider), vcsClientProvider);
             List<AiAnalysisRequest> requests = producer.buildAiAnalysisRequests(
                     project,
                     processRequest,
@@ -140,9 +158,11 @@ class IsolatedReviewProducerReplayTest {
                     .isEqualTo(SOURCE_BRANCH);
             assertThat(reviewRequest.getBaseCommitHash())
                     .isEqualTo(baseRevision);
+            assertThat(reviewRequest.getTargetHeadCommitHash())
+                    .isEqualTo(baseRevision);
             assertThat(reviewRequest.getCurrentCommitHash())
                     .isEqualTo(headRevision);
-            assertThat(reviewRequest.getRagEnabled()).isFalse();
+            assertThat(reviewRequest.getRagEnabled()).isEqualTo(ragEnabled);
             assertThat(reviewRequest.getChangedFiles())
                     .containsExactlyElementsOf(new ArrayList<>(headFiles.keySet()));
             assertThat(reviewRequest.getProjectCapabilities())
@@ -164,12 +184,56 @@ class IsolatedReviewProducerReplayTest {
 
             AiAnalysisClient queueProducer = new AiAnalysisClient(
                     new RestTemplate(), queueService, objectMapper);
-            queueProducer.performAnalysis(reviewRequest);
+            if (ragEnabled) {
+                var generationRepository = mock(
+                        org.rostilos.codecrow.core.persistence.repository.rag
+                                .RagBranchIndexGenerationRepository.class);
+                var branchIndexRepository = mock(
+                        org.rostilos.codecrow.core.persistence.repository.rag
+                                .RagBranchIndexRepository.class);
+                var generation = mock(
+                        org.rostilos.codecrow.core.model.rag
+                                .RagBranchIndexGeneration.class);
+                when(generation.getCollectionName()).thenReturn(collectionTarget);
+                when(generation.getManifestDigest()).thenReturn(
+                        generationManifestSha256);
+                when(branchIndexRepository.markAccessedIfUnclaimed(
+                        eq(PROJECT_ID), eq(TARGET_BRANCH), any())).thenReturn(1);
+                when(generationRepository.findAvailableExactGeneration(
+                        eq(PROJECT_ID),
+                        eq(TARGET_BRANCH),
+                        eq(baseRevision),
+                        anyList()))
+                        .thenReturn(List.of(generation));
+                ReflectionTestUtils.setField(
+                        queueProducer,
+                        "branchGenerationRepository",
+                        generationRepository);
+                ReflectionTestUtils.setField(
+                        queueProducer,
+                        "branchIndexRepository",
+                        branchIndexRepository);
+                queueProducer.performAnalysis(
+                        reviewRequest,
+                        new LocalRepositorySnapshot(
+                                localRepoPath,
+                                TARGET_BRANCH,
+                                baseRevision,
+                                reviewOverlayPath),
+                        null);
+            } else {
+                queueProducer.performAnalysis(reviewRequest);
+            }
 
             String envelope = ((SyntheticQueueService) queueService)
                     .capturedEnvelope();
             JsonNode queued = objectMapper.readTree(envelope);
             JsonNode queuedRequest = queued.path("request");
+            assertThat(queued.path("job_id").asText()).isNotBlank();
+            assertThat(queuedRequest.path("promptDryRunId").asText())
+                    .isNotBlank();
+            assertThat(queued.path("job_id").asText())
+                    .isEqualTo(queuedRequest.path("promptDryRunId").asText());
             assertThat(queuedRequest.path("promptDryRun").asBoolean()).isTrue();
             assertThat(queuedRequest.path("targetBranchName").asText())
                     .isEqualTo(TARGET_BRANCH);
@@ -177,9 +241,27 @@ class IsolatedReviewProducerReplayTest {
                     .isEqualTo(SOURCE_BRANCH);
             assertThat(queuedRequest.path("baseCommitHash").asText())
                     .isEqualTo(baseRevision);
+            assertThat(queuedRequest.path("targetHeadCommitHash").asText())
+                    .isEqualTo(baseRevision);
             assertThat(queuedRequest.path("currentCommitHash").asText())
                     .isEqualTo(headRevision);
-            assertThat(queuedRequest.path("ragEnabled").asBoolean()).isFalse();
+            assertThat(queuedRequest.path("ragEnabled").asBoolean())
+                    .isEqualTo(ragEnabled);
+            if (ragEnabled) {
+                assertThat(queuedRequest.path("localRepoPath").asText())
+                        .isEqualTo(localRepoPath);
+                assertThat(queuedRequest.path("localRepoTargetBranch").asText())
+                        .isEqualTo(TARGET_BRANCH);
+                assertThat(queuedRequest.path("localRepoRevision").asText())
+                        .isEqualTo(baseRevision);
+                assertThat(queuedRequest.path("localReviewOverlayPath").asText())
+                        .isEqualTo(reviewOverlayPath);
+                assertThat(queuedRequest.path("ragCollectionTarget").asText())
+                        .isEqualTo(collectionTarget);
+                assertThat(queuedRequest.path(
+                        "ragBaseGenerationManifestSha256").asText())
+                        .isEqualTo(generationManifestSha256);
+            }
             assertThat(queuedRequest.path("aiApiKey").asText())
                     .isEqualTo("dry-run-provider-disabled");
             assertThat(queuedRequest.path("accessToken").isNull()).isTrue();
@@ -193,12 +275,16 @@ class IsolatedReviewProducerReplayTest {
         }
     }
 
-    private static Project project(String namespace) {
+    private static Project project(String namespace, boolean ragEnabled) {
         Project project = new Project();
         ReflectionTestUtils.setField(project, "id", PROJECT_ID);
         project.setName("Isolated neutral review fixture");
         project.setNamespace(namespace);
-        project.setConfiguration(new ProjectConfig(false, TARGET_BRANCH));
+        project.setConfiguration(new ProjectConfig(
+                false,
+                TARGET_BRANCH,
+                null,
+                new RagConfig(ragEnabled, TARGET_BRANCH)));
 
         Workspace workspace = new Workspace(
                 "codecrow-quality-isolated",
@@ -285,6 +371,18 @@ class IsolatedReviewProducerReplayTest {
                                     method.getName());
                         };
                     }
+                    if ("downloadRepositoryArchiveToFile".equals(method.getName())) {
+                        if (!headRevision.equals(arguments[2])) throw new IllegalArgumentException("unexpected archive revision");
+                        var destination = (java.nio.file.Path) arguments[3];
+                        try (var zip = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(destination))) {
+                            for (var entry : headFiles.entrySet()) {
+                                zip.putNextEntry(new java.util.zip.ZipEntry("repository/" + entry.getKey()));
+                                zip.write(entry.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                zip.closeEntry();
+                            }
+                        }
+                        return java.nio.file.Files.size(destination);
+                    }
                     if ("getFileContent".equals(method.getName())) {
                         String path = (String) arguments[2];
                         String revision = (String) arguments[3];
@@ -355,10 +453,7 @@ class IsolatedReviewProducerReplayTest {
 
         @Override
         public PrEnrichmentDataDto fetchFileContentsOnly(
-                VcsClient vcsClient,
-                String workspace,
-                String repoSlug,
-                String branchOrCommit,
+                org.rostilos.codecrow.vcsclient.RepositorySource source,
                 List<String> changedFiles) {
             return enrichment(changedFiles, headFiles);
         }
