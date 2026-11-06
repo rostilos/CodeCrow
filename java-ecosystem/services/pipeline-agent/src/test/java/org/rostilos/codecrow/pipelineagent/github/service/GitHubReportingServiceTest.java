@@ -90,6 +90,42 @@ class GitHubReportingServiceTest {
         org.mockito.Mockito.lenient().when(reportGenerator.createDetailedIssuesMarkdown(summary, true)).thenReturn("details");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"new", "existing", "resolved", "read-failure", "lost-response"})
+    void publishesOneCheckSummaryAndDoesNotRetryAmbiguousWrites(String scenario) throws Exception {
+        List<CapturedRequest> requests = new ArrayList<>();
+        var builder = capturingClient(requests, false, false).newBuilder();
+        builder.interceptors().add(0, chain -> {
+            var request = chain.request();
+            String path = request.url().encodedPath();
+            if (request.method().equals("GET") && path.endsWith("/issues/42/comments")) {
+                String json = scenario.equals("existing") || scenario.equals("resolved")
+                        ? "[{\"id\":700,\"body\":\"<!-- codecrow-review-checks --> old report\"}]" : "[]";
+                return new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                        .code(scenario.equals("read-failure") ? 503 : 200).message("fixture")
+                        .body(ResponseBody.create(json, MediaType.get("application/json"))).build();
+            }
+            if (scenario.equals("lost-response") && request.method().equals("POST") && path.endsWith("/issues/42/comments")) {
+                Buffer buffer = new Buffer(); request.body().writeTo(buffer);
+                requests.add(new CapturedRequest(request.method(), path, buffer.readUtf8()));
+                throw new IOException("Response lost after write");
+            }
+            return chain.proceed(request);
+        });
+        when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any())).thenReturn(builder.build());
+        when(reportGenerator.createReviewChecksMarkdown(analysis, 77L)).thenReturn(
+                scenario.equals("resolved") ? "" : "### Composer audit\n20 open dependency advisories\n[View](https://app.example?reviewCheckId=composer-audit)");
+
+        service.postAnalysisResults(analysis, project, 42L, 77L, "99");
+
+        var grouped = requests.stream().filter(request -> request.body().contains("codecrow-review-checks")
+                || request.path().endsWith("/comments/700")).toList();
+        assertThat(grouped).hasSize(scenario.equals("read-failure") ? 0 : 1);
+        if (!grouped.isEmpty()) assertThat(grouped.get(0).method()).isEqualTo(
+                scenario.equals("existing") ? "PATCH" : scenario.equals("resolved") ? "DELETE" : "POST");
+        assertThat(requests).anyMatch(request -> request.method().equals("POST") && request.path().endsWith("/pulls/42/reviews"));
+    }
+
     @Test
     void preservesAggregateCommentAndAddsSubmittedInlineReview() throws IOException {
         List<CapturedRequest> requests = new ArrayList<>();

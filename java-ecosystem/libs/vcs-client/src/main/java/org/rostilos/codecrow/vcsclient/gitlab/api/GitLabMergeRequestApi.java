@@ -281,17 +281,18 @@ public final class GitLabMergeRequestApi {
             String project,
             long mergeRequestIid
     ) throws IOException {
-        String url = notesUrl(namespace, project, mergeRequestIid)
-                + "?per_page=100";
-        try (Response response = api.execute(api.get(url))) {
-            if (!response.isSuccessful()) {
-                log.warn("Failed to list GitLab MR notes: HTTP {} - {}",
-                        response.code(), api.bodyOr(response, ""));
-                return List.of();
+        List<Map<String, Object>> notes = new java.util.ArrayList<>();
+        for (int page = 1; ; page++) {
+            String url = notesUrl(namespace, project, mergeRequestIid) + "?per_page=100&page=" + page;
+            try (Response response = api.execute(api.get(url))) {
+                if (!response.isSuccessful()) {
+                    throw new IOException("Failed to list GitLab notes: HTTP " + response.code());
+                }
+                List<Map<String, Object>> entries = api.objectMapper().readValue(
+                        api.bodyOr(response, "[]"), new TypeReference<>() {});
+                notes.addAll(entries);
+                if (entries.size() < 100) return List.copyOf(notes);
             }
-            return api.objectMapper().readValue(
-                    api.bodyOr(response, "[]"),
-                    new TypeReference<List<Map<String, Object>>>() {});
         }
     }
 

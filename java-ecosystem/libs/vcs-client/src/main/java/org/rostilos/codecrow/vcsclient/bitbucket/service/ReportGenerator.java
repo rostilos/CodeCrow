@@ -120,6 +120,7 @@ public class ReportGenerator {
             // Create issue summaries (for both resolved & unresolved)
             List<AnalysisSummary.IssueSummary> issueSummaries = issues.stream()
                     .filter(issue -> !issue.isResolved())
+                    .filter(issue -> issue.getReviewCheckId() == null)
                     .map(issue -> new AnalysisSummary.IssueSummary(
                             issue.getSeverity(),
                             issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null,
@@ -355,6 +356,7 @@ public class ReportGenerator {
 
        return analysis.getIssues().stream()
                 .filter(componentIssue -> !componentIssue.isResolved())
+                .filter(componentIssue -> componentIssue.getReviewCheckId() == null)
                 .map(componentIssue -> {
                     String path = componentIssue.getFilePath();
                     // Use title as annotation description if available, fall back to truncated reason
@@ -378,6 +380,30 @@ public class ReportGenerator {
                             toBitbucketSeverity(componentIssue.getSeverity()),
                             "CODE_SMELL");
                 }).collect(toSet());
+    }
+
+    /** Check findings retain individual platform records, but share one PR comment. */
+    public String createReviewChecksMarkdown(CodeAnalysis analysis, Long platformPrEntityId) {
+        var groups = analysis.getIssues().stream()
+                .filter(issue -> !issue.isResolved() && issue.getReviewCheckId() != null)
+                .collect(Collectors.groupingBy(CodeAnalysisIssue::getReviewCheckId, TreeMap::new, Collectors.toList()));
+        StringBuilder markdown = new StringBuilder();
+        groups.forEach((id, findings) -> {
+            String label = id.replace('-', ' ');
+            label = Character.toUpperCase(label.charAt(0)) + label.substring(1);
+            String url = LinksGenerator.createStatusUrl(getBaseUrl(), analysis.getProject(),
+                    platformPrEntityId, analysis.getPrVersion(), "open")
+                    + "&reviewCheckId=" + java.net.URLEncoder.encode(id, java.nio.charset.StandardCharsets.UTF_8)
+                    + "&subTab=issues";
+            long high = findings.stream().filter(issue -> issue.getSeverity() == IssueSeverity.HIGH).count();
+            long medium = findings.stream().filter(issue -> issue.getSeverity() == IssueSeverity.MEDIUM).count();
+            long low = findings.stream().filter(issue -> issue.getSeverity() == IssueSeverity.LOW).count();
+            markdown.append("### ").append(label).append("\n\n")
+                    .append(findings.size()).append(" open dependency advisories (")
+                    .append(high).append(" high, ").append(medium).append(" medium, ").append(low).append(" low).\n\n")
+                    .append("[View all findings in CodeCrow](").append(url).append(")\n\n");
+        });
+        return markdown.toString().strip();
     }
 
     public CodeInsightsAnnotation createCodeInsightsAnnotation(

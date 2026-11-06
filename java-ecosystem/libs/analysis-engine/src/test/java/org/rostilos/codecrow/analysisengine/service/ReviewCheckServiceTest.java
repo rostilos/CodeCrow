@@ -48,12 +48,14 @@ class ReviewCheckServiceTest {
                 return new Result(List.of(new Finding("composer.lock", 3, "HIGH", "Dependency advisory", "reason", "update", "snippet")), List.of("audited"));
             }
         };
-        Map<String,Object> original = Map.of("issues", List.of(Map.of("title","existing")), "comment", "review");
+        Map<String,Object> original = Map.of("issues", List.of(Map.of("title","existing", "reviewCheckId", "spoofed")), "comment", "review");
         var events = new ArrayList<Map<String,Object>>();
         var result = new ReviewCheckService(clients,List.of(plugin)).enrich(project, request, original, events::add);
         assertThat((List<?>)result.get("issues")).hasSize(2);
         assertThat((List<?>)original.get("issues")).hasSize(1);
         assertThat(((Map<?,?>)((List<?>)result.get("issues")).get(1)).get("category")).isEqualTo("SECURITY");
+        assertThat(((Map<?,?>)((List<?>)result.get("issues")).get(1)).get("reviewCheckId")).isEqualTo("test-check");
+        assertThat(((Map<?,?>)((List<?>)result.get("issues")).get(0)).get("reviewCheckId")).isNull();
         verify(client).getFileContent("tenant-owner", "tenant-repo", "composer.lock", "head");
         verify(client).getMergeBase("tenant-owner", "tenant-repo", "base", "head");
         verifyNoMoreInteractions(client);

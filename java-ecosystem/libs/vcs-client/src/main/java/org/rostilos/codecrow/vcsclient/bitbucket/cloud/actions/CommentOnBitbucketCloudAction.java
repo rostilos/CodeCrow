@@ -316,6 +316,24 @@ public class CommentOnBitbucketCloudAction {
      * @param marker The marker text to search for in comment content
      * @return Number of comments deleted
      */
+    public String findCommentByMarker(String marker) throws IOException {
+        String url = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments",
+                vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(), prNumber);
+        while (url != null) {
+            try (Response response = authorizedOkHttpClient.newCall(new Request.Builder().url(url).get().build()).execute()) {
+                JsonNode page = new ObjectMapper().readTree(validate(response));
+                for (JsonNode comment : page.path("values")) {
+                    String content = comment.path("content").path("raw").asText();
+                    if (!comment.path("deleted").asBoolean() && content.contains(hideCodeCrowMarkers(marker))) {
+                        return comment.path("id").asText();
+                    }
+                }
+                url = page.hasNonNull("next") ? page.get("next").asText() : null;
+            }
+        }
+        return null;
+    }
+
     public int deleteCommentsByMarker(String marker) throws IOException {
         String workspace = vcsRepoInfo.getRepoWorkspace();
         String repoSlug = vcsRepoInfo.getRepoSlug();

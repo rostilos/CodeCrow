@@ -119,6 +119,8 @@ public class GitLabReportingService implements VcsReportingService {
         
         // Post inline comments on specific lines (like Bitbucket annotations)
         postInlineComments(client, vcsRepoInfo, mergeRequestIid, codeAnalysis, summary);
+        postReviewCheckSummary(client, vcsRepoInfo, mergeRequestIid,
+                reportGenerator.createReviewChecksMarkdown(codeAnalysis, platformMrEntityId));
 
         log.info("Successfully posted analysis results to GitLab for MR {}", mergeRequestIid);
     }
@@ -276,6 +278,24 @@ public class GitLabReportingService implements VcsReportingService {
         body.append("\n\n").append(CODECROW_COMMENT_MARKER);
         
         return body.toString();
+    }
+
+    private void postReviewCheckSummary(GitLabClient client, VcsRepoInfo repository, Long prNumber, String markdown) {
+        if (markdown == null) return;
+        String marker = "<!-- codecrow-review-checks -->";
+        String owner = repository.getRepoWorkspace(), repo = repository.getRepoSlug();
+        try {
+            Long id = client.findMergeRequestNoteByMarker(owner, repo, prNumber, marker);
+            if (markdown.isBlank()) {
+                if (id != null) client.deleteMergeRequestNote(owner, repo, prNumber, id);
+            } else if (id != null) {
+                client.updateMergeRequestNote(owner, repo, prNumber, id, marker + "\n" + markdown);
+            } else {
+                client.postMergeRequestComment(owner, repo, prNumber, marker + "\n" + markdown);
+            }
+        } catch (IOException unavailable) {
+            log.warn("Could not publish review-check summary on GitLab MR {}: {}", prNumber, unavailable.getMessage());
+        }
     }
 
     private void postOrUpdateComment(

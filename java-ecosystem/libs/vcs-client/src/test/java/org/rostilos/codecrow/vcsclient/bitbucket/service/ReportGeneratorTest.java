@@ -80,6 +80,35 @@ class ReportGeneratorTest {
 
     // ── createAnalysisSummary ────────────────────────────────────────────
 
+    @Test
+    void twentyComposerAdvisoriesUseOneFilteredSummaryWhileOtherSecurityIssuesStayInline() throws Exception {
+        var issues = new java.util.ArrayList<CodeAnalysisIssue>();
+        for (long id = 1; id <= 20; id++) {
+            var advisory = buildIssue(id, IssueSeverity.HIGH, false);
+            advisory.setReviewCheckId("composer-audit");
+            advisory.setIssueCategory(IssueCategory.SECURITY);
+            advisory.setFilePath("composer.lock");
+            issues.add(advisory);
+        }
+        var security = buildIssue(21L, IssueSeverity.HIGH, false);
+        security.setIssueCategory(IssueCategory.SECURITY);
+        security.setFilePath("composer.json");
+        issues.add(security);
+        var analysis = buildAnalysis(issues);
+        var summary = generator.createAnalysisSummary(analysis, 100L);
+        assertThat(summary.getTotalIssues()).isEqualTo(21);
+        assertThat(summary.getHighSeverityIssues().getCount()).isEqualTo(21);
+        assertThat(summary.getIssues()).singleElement().satisfies(issue -> assertThat(issue.getIssueId()).isEqualTo(21L));
+        assertThat(generator.createReportAnnotations(analysis, analysis.getProject())).hasSize(1);
+        assertThat(generator.createDetailedIssuesMarkdown(summary, true)).contains("Test issue 21").doesNotContain("Reason for issue 1");
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L))
+                .contains("### Composer audit", "20 open dependency advisories (20 high, 0 medium, 0 low)")
+                .contains("https://app.example.com/dashboard/ws/projects/test-proj?prId=100&version=1&status=open&reviewCheckId=composer-audit&subTab=issues")
+                .doesNotContain("Reason for issue", "Test issue 21");
+        issues.stream().filter(issue -> issue.getReviewCheckId() != null).forEach(issue -> issue.setResolved(true));
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isEmpty();
+    }
+
     @Nested
     class CreateAnalysisSummary {
 

@@ -6,6 +6,15 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SnippetLocatorTest {
+    @Test
+    void composerMemberMustPreserveCommaForExactSourceHighlighting() {
+        String content = "{\n  \"require\": {\n    \"phpmailer/phpmailer\": \"6.4.1\",\n    \"php\": \"^8\"\n  }\n}";
+        String snippet = "    \"phpmailer/phpmailer\": \"6.4.1\",";
+        assertThat(SnippetAnchoringService.anchor(snippet, content, 3, "composer.json").startLine()).isEqualTo(3);
+        assertThat(SnippetLocator.locateExact(snippet, content, 3).line()).isEqualTo(3);
+        assertThat(SnippetLocator.locateExact(snippet.strip().replace(",", ""), content, 3).line()).isZero();
+    }
+
 
     @Test void exactAnchorsRequireTheWholeContiguousSnippet() {
         assertThat(SnippetLocator.locateExact("first();\nsecond();", "first();\nchanged();", 1).line()).isZero();

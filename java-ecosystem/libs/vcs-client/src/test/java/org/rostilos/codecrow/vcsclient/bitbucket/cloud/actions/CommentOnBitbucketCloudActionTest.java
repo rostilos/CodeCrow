@@ -188,6 +188,18 @@ class CommentOnBitbucketCloudActionTest {
     // ── postInlineComment ────────────────────────────────────────────────
 
     @Test
+    void markerLookupFollowsPagesAndIgnoresDeletedComments() throws Exception {
+        ArgumentCaptor<Request> requests = ArgumentCaptor.forClass(Request.class);
+        when(httpClient.newCall(requests.capture())).thenReturn(call);
+        when(call.execute()).thenAnswer(inv -> jsonResponse(requests.getValue(), 200,
+                requests.getValue().url().queryParameter("page") == null
+                        ? "{\"values\":[{\"id\":500,\"deleted\":true,\"content\":{\"raw\":\"[codecrow-review-checks]: #\"}}],\"next\":\"https://api.bitbucket.org/2.0/repositories/my-workspace/my-repo/pullrequests/42/comments?page=2\"}"
+                        : "{\"values\":[{\"id\":700,\"content\":{\"raw\":\"[codecrow-review-checks]: #\"}}]}"));
+        assertThat(action.findCommentByMarker("<!-- codecrow-review-checks -->")).isEqualTo("700");
+        verify(httpClient, times(2)).newCall(any());
+    }
+
+    @Test
     void postInlineComment_shouldSendDestinationLineAnchor() throws Exception {
         ArgumentCaptor<Request> captor = ArgumentCaptor.forClass(Request.class);
         when(httpClient.newCall(captor.capture())).thenReturn(call);

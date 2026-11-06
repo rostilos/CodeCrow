@@ -557,6 +557,7 @@ public class CodeAnalysisService {
             issueClone.setIssueFingerprint(srcIssue.getIssueFingerprint());
             issueClone.setContentFingerprint(srcIssue.getContentFingerprint());
             issueClone.setCodeSnippet(srcIssue.getCodeSnippet());
+            issueClone.setReviewCheckId(srcIssue.getReviewCheckId());
             // Copy PR tracking lineage
             issueClone.setTrackedFromIssueId(srcIssue.getTrackedFromIssueId());
             issueClone.setTrackingConfidence(srcIssue.getTrackingConfidence());
@@ -659,6 +660,8 @@ public class CodeAnalysisService {
 
             issue.setAnchorSide(originalIssue != null ? originalIssue.getAnchorSide()
                     : IssueAnchorSide.fromString((String) issueData.get("anchorSide")));
+            issue.setReviewCheckId(originalIssue != null ? originalIssue.getReviewCheckId()
+                    : (String) issueData.get("reviewCheckId"));
             String severityStr = (String) issueData.get("severity");
             if (severityStr == null) {
                 log.warn("No severity found for issue {}", issueKey);

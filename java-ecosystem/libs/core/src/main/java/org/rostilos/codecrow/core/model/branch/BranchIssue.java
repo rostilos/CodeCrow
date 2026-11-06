@@ -196,6 +196,12 @@ public class BranchIssue implements ReconcilableIssue {
     @Column(name = "code_snippet", columnDefinition = "TEXT")
     private String codeSnippet;
 
+    @Column(name = "review_check_id", length = 128)
+    private String reviewCheckId;
+
+    public String getReviewCheckId() { return reviewCheckId; }
+    public void setReviewCheckId(String reviewCheckId) { this.reviewCheckId = reviewCheckId; }
+
     /** Current line on the branch; zero means the current anchor could not be verified. */
     @Column(name = "current_line_number")
     private Integer currentLineNumber;
@@ -302,6 +308,7 @@ public class BranchIssue implements ReconcilableIssue {
 
         // Detection provenance
         bi.setDetectionSource(cai.getDetectionSource());
+        bi.setReviewCheckId(cai.getReviewCheckId());
         if (cai.getAnalysis() != null) {
             bi.setOriginAnalysisId(cai.getAnalysis().getId());
             bi.setOriginPrNumber(cai.getAnalysis().getPrNumber());

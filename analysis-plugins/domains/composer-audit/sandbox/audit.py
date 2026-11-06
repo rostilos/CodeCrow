@@ -190,7 +190,63 @@ def run_composer(directory):
         return process.returncode, stdout.read(MAX_OUTPUT), stderr.read(MAX_OUTPUT)
 
 
-def findings_from_report(report, selected, path, raw_lock):
+def member_anchor(raw, keys):
+    """Locate a JSON member by its structural path, preserving source spelling."""
+    decoder = json.JSONDecoder()
+    position = 0
+    for key in keys:
+        position = re.compile(r'\s*').match(raw, position).end() + 1
+        index = 0
+        while True:
+            position = re.compile(r'[\s,]*').match(raw, position).end()
+            start = position
+            if isinstance(key, str):
+                candidate, position = decoder.raw_decode(raw, position)
+                position = re.compile(r'\s*:\s*').match(raw, position).end()
+            else:
+                candidate = index
+            value_start = position
+            _, end = decoder.raw_decode(raw, position)
+            if candidate == key:
+                position = value_start
+                break
+            position = end
+            index += 1
+    line_start = raw.rfind('\n', 0, start) + 1
+    line_end = raw.find('\n', end)
+    line_end = len(raw) if line_end < 0 else line_end
+    member = raw[start:end]
+    source_line = raw[line_start:line_end].rstrip('\r')
+    # Never copy neighbouring credentials from a minified document into a finding.
+    snippet = source_line if source_line.strip().rstrip(',') == member else member
+    return raw.count('\n', 0, start) + 1, snippet
+
+
+def dependency_anchor(name, payload, base_manifest, head_manifest, base_lock, head_lock):
+    for group in ('require', 'require-dev'):
+        if (name in head_manifest.get(group, {})
+                and head_manifest[group][name] != base_manifest.get(group, {}).get(name)):
+            line, snippet = member_anchor(payload['headManifest'], (group, name))
+            return {'file': payload.get('path', '') + 'composer.json', 'line': line, 'codeSnippet': snippet}
+    before = packages(base_lock).get(name, {})
+    for group in ('packages', 'packages-dev'):
+        for index, package in enumerate(head_lock.get(group, [])):
+            if package['name'] != name:
+                continue
+            field = ('name',)
+            if package['version'] != before.get('version'):
+                field = ('version',)
+            else:
+                for kind in ('source', 'dist'):
+                    reference = (package.get(kind) or {}).get('reference')
+                    if reference is not None and reference != (before.get(kind) or {}).get('reference'):
+                        field = (kind, 'reference')
+                        break
+            line, snippet = member_anchor(payload['headLock'], (group, index, *field))
+            return {'file': payload.get('path', '') + 'composer.lock', 'line': line, 'codeSnippet': snippet}
+
+
+def findings_from_report(report, selected, anchors):
     advisories = report.get("advisories")
     if not isinstance(advisories, (dict, list)) or (isinstance(advisories, list) and advisories):
         raise ValueError("Invalid advisory response")
@@ -225,9 +281,6 @@ def findings_from_report(report, selected, path, raw_lock):
             title = str(advisory.get("title") or "Known dependency vulnerability")[:500]
             severity = str(advisory.get("severity") or "medium").lower()
             severity = {"critical": "HIGH", "high": "HIGH", "medium": "MEDIUM", "low": "LOW"}.get(severity, "MEDIUM")
-            package_line = re.search(r'"name"\s*:\s*' + re.escape(json.dumps(name)), raw_lock)
-            line = raw_lock.count("\n", 0, package_line.start()) + 1 if package_line else 1
-            snippet = package_line.group(0) if package_line else ""
             version = selected[name]["version"]
             reason = f"Composer audit: {name} {version} is affected by {identifier}. {title}"
             affected = advisory.get("affectedVersions")
@@ -236,10 +289,9 @@ def findings_from_report(report, selected, path, raw_lock):
             link = advisory.get("link")
             if isinstance(link, str) and urlsplit(link).scheme == "https":
                 reason += f" Advisory: {link[:2000]}"
-            findings.append({"file": path + "composer.lock", "line": line, "severity": severity,
+            findings.append({**anchors[name], "severity": severity,
                              "title": f"{name}: {identifier}", "reason": reason,
-                             "suggestedFix": "Update this dependency to a release outside the advisory's affected range and regenerate composer.lock.",
-                             "codeSnippet": snippet})
+                             "suggestedFix": "Update this dependency to a release outside the advisory's affected range and regenerate composer.lock."})
     return findings
 
 
@@ -282,7 +334,9 @@ def audit(payload, runner=run_composer, work_root="/work"):
             report = json.loads(stdout)
             if status not in (0, 1) or not isinstance(report, dict):
                 raise ValueError("Composer audit failed")
-            findings = findings_from_report(report, selected, path, payload["headLock"])
+            anchors = {name: dependency_anchor(name, payload, base_manifest, head_manifest, base_lock, head_lock)
+                       for name in selected}
+            findings = findings_from_report(report, selected, anchors)
             if report.get("unreachable-repositories"):
                 diagnostics.append("repositories-unreachable: advisory coverage is incomplete; available findings are retained")
             diagnostics.append(f"audited: {len(selected)} changed locked dependencies; {len(findings)} security advisories")

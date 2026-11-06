@@ -44,6 +44,24 @@ class CommentOnPullRequestActionTest {
     }
 
     @Test
+    void commentLookupReadsLaterPagesAndDoesNotTreatFailureAsAnEmptyConversation() throws Exception {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true, true, false);
+        when(response.code()).thenReturn(503);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn(
+                new ObjectMapper().writeValueAsString(java.util.Collections.nCopies(100, Map.of("id", 1, "body", "human comment"))),
+                "[{\"id\":700,\"body\":\"<!-- codecrow-review-checks -->\"}]");
+        assertThat(action.listComments("owner", "repo", 42)).hasSize(101)
+                .anySatisfy(comment -> assertThat(comment.get("id")).isEqualTo(700));
+        assertThatThrownBy(() -> action.listComments("owner", "repo", 42)).isInstanceOf(IOException.class);
+        var requests = ArgumentCaptor.forClass(Request.class);
+        verify(okHttpClient, times(3)).newCall(requests.capture());
+        assertThat(requests.getAllValues().get(1).url().queryParameter("page")).isEqualTo("2");
+    }
+
+    @Test
     void testPostComment_SuccessfulResponse_NoException() throws IOException {
         when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
         when(call.execute()).thenReturn(response);

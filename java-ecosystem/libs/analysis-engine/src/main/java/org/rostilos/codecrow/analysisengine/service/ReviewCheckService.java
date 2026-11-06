@@ -42,6 +42,13 @@ public class ReviewCheckService {
         List<Object> issues = new ArrayList<>();
         if (response.get("issues") instanceof List<?> list) issues.addAll(list);
         else if (response.get("issues") instanceof Map<?, ?> map) issues.addAll(map.values());
+        // Only the host assigns check provenance; model output cannot opt out of inline review.
+        issues.replaceAll(value -> {
+            if (!(value instanceof Map<?, ?> issue)) return value;
+            var copy = new LinkedHashMap<>(issue);
+            copy.remove("reviewCheckId");
+            return copy;
+        });
         List<Map<String, Object>> diagnostics = new ArrayList<>();
         if (checks.isEmpty()) {
             diagnostic(events, diagnostics, "review-checks", "unavailable: no optional review checks are installed");
@@ -85,6 +92,7 @@ public class ReviewCheckService {
                     issue.put("line", finding.line());
                     issue.put("severity", finding.severity());
                     issue.put("category", "SECURITY");
+                    issue.put("reviewCheckId", id);
                     issue.put("title", finding.title());
                     issue.put("reason", finding.reason());
                     issue.put("suggestedFixDescription", finding.suggestedFix());

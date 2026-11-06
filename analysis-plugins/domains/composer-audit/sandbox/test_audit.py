@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 
-from audit import audit, auth_config, changed_packages, findings_from_report, repositories
+from audit import audit, auth_config, changed_packages, findings_from_report, member_anchor, repositories
 
 
 def package(name, version='1.0.0', reference=None):
@@ -20,6 +20,9 @@ def payload(before, after, **extra):
 def advisory(identifier='TEST-001', severity='critical'):
     return {'advisoryId': identifier, 'title': 'Test advisory', 'severity': severity,
             'affectedVersions': '<2.0.0', 'link': 'https://example.com/advisory'}
+
+
+ANCHORS = {'a/new': {'file': 'composer.lock', 'line': 3, 'codeSnippet': '"version": "1.0.0",'}}
 
 
 class AuditTest(unittest.TestCase):
@@ -56,9 +59,42 @@ class AuditTest(unittest.TestCase):
         result = self.run_audit(data,runner)
         self.assertEqual([1], calls)
         self.assertEqual(1,len(result['findings']))
-        self.assertEqual('app/composer.lock', result['findings'][0]['file'])
+        self.assertEqual('app/composer.json', result['findings'][0]['file'])
         self.assertEqual('HIGH',result['findings'][0]['severity'])
-        self.assertGreater(result['findings'][0]['line'],1)
+        self.assertEqual(1, result['findings'][0]['line'])
+        self.assertEqual('"a/change":"^1.1"', result['findings'][0]['codeSnippet'])
+
+    def test_added_requirement_anchors_manifest_with_exact_line_and_comma(self):
+        manifest = '{\n  "require": {\n    "phpmailer/phpmailer": "6.4.1",\n    "php": "^8"\n  }\n}\n'
+        data = payload([], [package('phpmailer/phpmailer', 'v6.4.1')], headManifest=manifest)
+        result = self.run_audit(data, lambda _: (1, json.dumps({
+            'advisories': {'phpmailer/phpmailer': [advisory()]}}).encode(), b''))
+        finding = result['findings'][0]
+        self.assertEqual('app/composer.json', finding['file'])
+        self.assertEqual(3, finding['line'])
+        self.assertEqual(manifest.splitlines()[2], finding['codeSnippet'])
+
+    def test_lock_only_changes_anchor_changed_version_or_reference_including_dev_packages(self):
+        for group in ('packages', 'packages-dev'):
+            for field in ('version', 'source', 'dist'):
+                with self.subTest(group=group, field=field):
+                    before = package('a/change')
+                    after = package('a/change')
+                    after[field] = '1.1.0' if field == 'version' else {'reference': 'new-ref'}
+                    data = payload([], [], baseLock=json.dumps({group: [before]}),
+                                   headLock=json.dumps({group: [package('a/unchanged'), after]}, indent=4))
+                    result = self.run_audit(data, lambda _: (1, json.dumps({
+                        'advisories': {'a/change': [advisory()]}}).encode(), b''))
+                    finding = result['findings'][0]
+                    line = data['headLock'].splitlines()[finding['line'] - 1]
+                    self.assertEqual('app/composer.lock', finding['file'])
+                    self.assertEqual(line, finding['codeSnippet'])
+                    self.assertIn('1.1.0' if field == 'version' else 'new-ref', line)
+                    self.assertGreater(finding['line'], 7)
+
+    def test_member_anchor_uses_json_path_and_preserves_escaped_spelling(self):
+        raw = '{\n "extra": {"a/new": "decoy"},\n "require-dev": {\n  "a\\/new": "^1",\n  "php": "^8"\n }\n}'
+        self.assertEqual((4, '  "a\\/new": "^1",'), member_anchor(raw, ('require-dev', 'a/new')))
 
     def test_safe_manifest_auth_and_unreachable_repositories_preserve_findings(self):
         def runner(directory):
@@ -93,11 +129,12 @@ class AuditTest(unittest.TestCase):
               'access-token':'token','access-token-expiration':1799999999}}}
         self.assertEqual(auth,auth_config(json.dumps(auth),[]))
 
-    def test_minified_lock_snippet_contains_only_package_name(self):
-        raw='{"name":"a/new","dist":{"url":"https://secret@example.invalid"}}'
-        finding=findings_from_report({'advisories':{'a/new':[advisory()]}},{'a/new':package('a/new')},'',raw)[0]
-        self.assertEqual('"name":"a/new"',finding['codeSnippet'])
-        self.assertNotIn('secret',json.dumps(finding))
+    def test_minified_lock_snippet_does_not_copy_neighbouring_credentials(self):
+        raw='{"packages":[{"name":"a/new","version":"1.0.0","dist":{"url":"https://secret@example.invalid"}}]}'
+        line, snippet = member_anchor(raw, ('packages', 0, 'version'))
+        self.assertEqual(1, line)
+        self.assertEqual('"version":"1.0.0"', snippet)
+        self.assertNotIn('secret', snippet)
 
     def test_repository_options_and_local_paths_cannot_enter_composer(self):
         diagnostics=[]
@@ -177,14 +214,14 @@ class AuditTest(unittest.TestCase):
         report={'advisories':[], 'abandoned': {'a/new':None}, 'filter': {'a/new':[
             {'listName':'malware','id':'malware-id','reason':'malicious package','constraint':'*'},
             {'listName':'license','id':'policy-only','reason':'license policy','constraint':'*'}]}}
-        findings=findings_from_report(report,{'a/new':package('a/new')},'', '{"name":"a/new"}')
+        findings=findings_from_report(report,{'a/new':package('a/new')},ANCHORS)
         self.assertEqual(1,len(findings))
         self.assertEqual('HIGH',findings[0]['severity'])
         self.assertIn('malware-id',findings[0]['title'])
 
     def test_sparse_advisories_deduplicate_and_ignore_old_packages(self):
         report={'advisories':{'a/new':{'0':advisory(),'2':advisory()}, 'a/old':[advisory()]}}
-        self.assertEqual(1,len(findings_from_report(report,{'a/new':package('a/new')},'', '{"name":"a/new"}')))
+        self.assertEqual(1,len(findings_from_report(report,{'a/new':package('a/new')},ANCHORS)))
 
 
 if __name__=='__main__': unittest.main()

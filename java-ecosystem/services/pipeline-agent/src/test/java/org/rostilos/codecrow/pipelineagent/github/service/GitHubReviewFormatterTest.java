@@ -16,6 +16,19 @@ class GitHubReviewFormatterTest {
     private final GitHubReviewFormatter formatter = new GitHubReviewFormatter();
 
     @Test
+    void composerManifestOnlyChangeProducesInlineCommentInsteadOfOutOfDiffLockfileFinding() {
+        var finding = new AnalysisSummary.IssueSummary(IssueSeverity.HIGH, "SECURITY", "composer.json", 3,
+                "phpmailer/phpmailer: TEST-001", "Known dependency vulnerability", "Update", null,
+                null, 1L, "    \"phpmailer/phpmailer\": \"6.4.1\",");
+        var plan = formatter.planComments(List.of(finding), MARKER, List.of(patch("composer.json",
+                "@@ -3 +3 @@\n-    \"phpmailer/phpmailer\": \"^6.10\",\n+    \"phpmailer/phpmailer\": \"6.4.1\",")));
+
+        assertThat(plan.nonInlineFindings()).isEmpty();
+        assertThat(plan.inlineComments()).singleElement().satisfies(comment -> assertThat(comment)
+                .containsEntry("path", "composer.json").containsEntry("line", 3).containsEntry("side", "RIGHT"));
+    }
+
+    @Test
     void formatsAnchoredIssuesAsGitHubReviewComments() {
         AnalysisSummary.IssueSummary issue = issue(
                 "/src/App.java",

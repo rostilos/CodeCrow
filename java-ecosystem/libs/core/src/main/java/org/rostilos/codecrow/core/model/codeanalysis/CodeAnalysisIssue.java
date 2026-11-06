@@ -151,6 +151,12 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @Column(name = "code_snippet", columnDefinition = "TEXT")
     private String codeSnippet;
 
+    @Column(name = "review_check_id", length = 128)
+    private String reviewCheckId;
+
+    public String getReviewCheckId() { return reviewCheckId; }
+    public void setReviewCheckId(String reviewCheckId) { this.reviewCheckId = reviewCheckId; }
+
     // --- PR cross-iteration tracking fields ---
 
     /**
