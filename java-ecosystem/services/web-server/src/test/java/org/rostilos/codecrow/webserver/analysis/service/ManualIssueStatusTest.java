@@ -22,7 +22,7 @@ class ManualIssueStatusTest {
         when(repository.findByIdWithAnalysis(1L)).thenReturn(Optional.of(issue));
         var service = new AnalysisService(mock(CodeAnalysisService.class), repository,
                 mock(BranchIssueRepository.class), mock(BranchRepository.class),
-                mock(CodeAnalysisRepository.class), mock(QualityGateRepository.class));
+                mock(CodeAnalysisRepository.class), mock(QualityGateRepository.class), mock(org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.class));
         service.updateIssueStatus(1L, true, "Accepted risk", null);
         service.updateIssueStatus(1L, false, "Investigate again", null);
         assertThat(issue.isResolved()).isFalse();

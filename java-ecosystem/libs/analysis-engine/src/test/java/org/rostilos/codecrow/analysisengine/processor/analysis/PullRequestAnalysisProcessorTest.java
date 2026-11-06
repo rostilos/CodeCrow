@@ -250,20 +250,18 @@ class PullRequestAnalysisProcessorTest {
 
                 @ParameterizedTest
                 @EnumSource(EVcsProvider.class)
-                void persistsOptionalSecurityFindingsWithoutAnotherInferenceCall(EVcsProvider provider) throws Exception {
+                void persistsChecksSeparatelyWithoutChangingAiIssuesOrAnotherInferenceCall(EVcsProvider provider) throws Exception {
                         var response = Map.<String, Object>of("comment", "review", "issues", List.of());
                         stubReviewThroughAi(response, provider);
                         stubPersistedUsageResult();
                         var checks = mock(org.rostilos.codecrow.analysisengine.service.ReviewCheckService.class);
                         ReflectionTestUtils.setField(processor, "reviewCheckService", checks);
-                        var finding = Map.of("file", "composer.lock", "category", "SECURITY", "severity", "HIGH", "title", "dependency advisory");
-                        when(checks.enrich(eq(project), eq(aiAnalysisRequest), eq(response), any()))
-                                .thenReturn(Map.of("comment", "review", "issues", List.of(finding)));
                         processor.process(createRequest(), ignored -> {}, project);
                         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
                         verify(codeAnalysisService).createAnalysisFromAiResponse(any(), payload.capture(), anyLong(), anyString(),
                                 anyString(), anyString(), any(), any(), any(), any(), any(), any());
-                        assertThat(payload.getValue().get("issues")).isEqualTo(List.of(finding));
+                        assertThat(payload.getValue().get("issues")).isEqualTo(List.of());
+                        verify(checks).run(eq(project), eq(aiAnalysisRequest), eq(codeAnalysis), any());
                         verify(aiAnalysisClient, times(1)).performAnalysis(any(), any());
                         verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), anyLong(), any(), any());
                 }
@@ -1409,10 +1407,14 @@ class PullRequestAnalysisProcessorTest {
                                         anyString(), anyString()))
                                         .thenReturn(clonedAnalysis);
 
+                        var checks = mock(org.rostilos.codecrow.analysisengine.service.ReviewCheckService.class);
+                        org.springframework.test.util.ReflectionTestUtils.setField(processor, "reviewCheckService", checks);
                         Map<String, Object> result = processor.process(request, consumer, project);
 
                         assertThat(result).containsEntry("status", "cached_by_commit");
                         assertThat(result).containsEntry("cached", true);
+                        verify(checks).copy(eq(sourceAnalysis), eq(clonedAnalysis), any());
+                        verifyNoMoreInteractions(checks);
                         verify(codeAnalysisService).cloneAnalysisForPr(eq(sourceAnalysis), eq(project), eq(42L),
                                         eq("abc123"), eq("main"), eq("feature-branch"), eq(reviewIdentity));
                         verify(taskImplementationEvidenceService)
@@ -1470,10 +1472,14 @@ class PullRequestAnalysisProcessorTest {
                                         anyString(), anyString()))
                                         .thenReturn(clonedAnalysis);
 
+                        var checks = mock(org.rostilos.codecrow.analysisengine.service.ReviewCheckService.class);
+                        org.springframework.test.util.ReflectionTestUtils.setField(processor, "reviewCheckService", checks);
                         Map<String, Object> result = processor.process(request, consumer, project);
 
                         assertThat(result).containsEntry("status", "cached_by_fingerprint");
                         assertThat(result).containsEntry("cached", true);
+                        verify(checks).copy(eq(fingerprintSource), eq(clonedAnalysis), any());
+                        verifyNoMoreInteractions(checks);
                         verify(taskImplementationEvidenceService)
                                         .copyForAnalysis(fingerprintSource, clonedAnalysis);
                         verify(analysisLockService).releaseLock("lock-key");

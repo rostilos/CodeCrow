@@ -301,7 +301,7 @@ def audit(payload, runner=run_composer, work_root="/work"):
     if not isinstance(path, str) or path.startswith("/") or "\\" in path or ".." in path.split("/"):
         raise ValueError("Invalid Composer root")
     if payload.get("headManifest") is None or payload.get("headLock") is None:
-        return {"findings": [], "diagnostics": ["inputs-missing: audit requires composer.json and composer.lock at the PR head"]}
+        return {"findings": [], "complete": False, "diagnostics": ["inputs-missing: audit requires composer.json and composer.lock at the PR head"]}
     try:
         head_manifest = document(payload["headManifest"])
         head_lock = document(payload["headLock"])
@@ -314,7 +314,7 @@ def audit(payload, runner=run_composer, work_root="/work"):
         if payload.get("baseLock") is None and base_manifest:
             diagnostics.append("baseline-unlocked: only changed direct requirements can be compared without a base lockfile")
         if not selected:
-            return {"findings": [], "diagnostics": diagnostics + ["no-changed-dependencies: no changed locked packages to audit"]}
+            return {"findings": [], "diagnostics": diagnostics + ["no-changed-dependencies: no changed locked packages to audit"], "complete": not unresolved and not (payload.get("baseLock") is None and bool(base_manifest))}
         repos = repositories(head_manifest, diagnostics)
         if repos and all(entry in ({"packagist": False}, {"packagist.org": False}) for entry in repos):
             diagnostics.append("advisory-sources-empty: Packagist is disabled and no supported advisory repository remains")
@@ -340,8 +340,11 @@ def audit(payload, runner=run_composer, work_root="/work"):
             if report.get("unreachable-repositories"):
                 diagnostics.append("repositories-unreachable: advisory coverage is incomplete; available findings are retained")
             diagnostics.append(f"audited: {len(selected)} changed locked dependencies; {len(findings)} security advisories")
-            return {"findings": findings, "diagnostics": diagnostics}
+            return {"findings": findings, "diagnostics": diagnostics,
+                    "complete": not unresolved and not report.get("unreachable-repositories")
+                    and not (payload.get("baseLock") is None and bool(base_manifest))
+                    and not any(message.startswith(("repository-omitted:", "advisory-sources-empty:")) for message in diagnostics)}
     except subprocess.TimeoutExpired:
-        return {"findings": [], "diagnostics": diagnostics + ["audit-timeout: Composer exceeded its time limit"]}
+        return {"findings": [], "complete": False, "diagnostics": diagnostics + ["audit-timeout: Composer exceeded its time limit"]}
     except (ValueError, TypeError, KeyError, AttributeError, OSError):
-        return {"findings": [], "diagnostics": diagnostics + ["audit-failed: invalid inputs or unavailable audit output; core review continues"]}
+        return {"findings": [], "complete": False, "diagnostics": diagnostics + ["audit-failed: invalid inputs or unavailable audit output; core review continues"]}

@@ -269,7 +269,6 @@ class CodeAnalysisServiceTest {
 
             List<Object> issues = new ArrayList<>();
             var advisory = createIssueData("HIGH", "App.java", 10, "Security issue");
-            advisory.put("reviewCheckId", "composer-audit");
             issues.add(advisory);
             issues.add(createIssueData("MEDIUM", "Utils.java", 20, "Null check missing"));
 
@@ -281,12 +280,6 @@ class CodeAnalysisServiceTest {
                     "author1", "authorUser");
 
             assertThat(result.getIssues()).hasSize(2);
-            assertThat(result.getIssues().get(0).getReviewCheckId()).isEqualTo("composer-audit");
-            assertThat(org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO.fromEntity(result.getIssues().get(0)).reviewCheckId())
-                    .isEqualTo("composer-audit");
-            var branchIssue = org.rostilos.codecrow.core.model.branch.BranchIssue.fromCodeAnalysisIssue(result.getIssues().get(0), null);
-            assertThat(org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO.fromBranchIssue(branchIssue).reviewCheckId())
-                    .isEqualTo("composer-audit");
             assertThat(result.getIssues().get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
             assertThat(result.getIssues().get(0).getFilePath()).isEqualTo("App.java");
             assertThat(result.getIssues().get(1).getSeverity()).isEqualTo(IssueSeverity.MEDIUM);
@@ -619,7 +612,7 @@ class CodeAnalysisServiceTest {
             assertThat(resolvedIssue.getCodeSnippet()).isEqualTo("obsoleteCall();");
         }
 
-        @Test
+            @Test
         @DisplayName("should evaluate quality gate when project has active QG")
         void shouldEvaluateQualityGate() {
             QualityGate qg = createActiveQualityGate(1L, "Default");
@@ -1143,7 +1136,6 @@ class CodeAnalysisServiceTest {
             srcIssue.setFilePath("App.java");
             srcIssue.setLineNumber(10);
             srcIssue.setReason("Bug found");
-            srcIssue.setReviewCheckId("composer-audit");
             srcIssue.setSuggestedFixDescription("Fix it");
             srcIssue.setSuggestedFixDiff("diff");
             srcIssue.setIssueCategory(IssueCategory.BUG_RISK);
@@ -1169,7 +1161,6 @@ class CodeAnalysisServiceTest {
             assertThat(result.getPrVersion()).isEqualTo(2);
             assertThat(result.getDiffFingerprint()).isEqualTo("fp12345678abcdef");
             assertThat(result.getIssues()).hasSize(1);
-            assertThat(result.getIssues().get(0).getReviewCheckId()).isEqualTo("composer-audit");
             assertThat(result.getIssues().get(0).getFilePath()).isEqualTo("App.java");
             assertThat(result.getIssues().get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
         }

@@ -43,7 +43,8 @@ public class AnalysisService {
             BranchIssueRepository branchIssueRepository,
             BranchRepository branchRepository,
             CodeAnalysisRepository codeAnalysisRepository,
-            QualityGateRepository qualityGateRepository
+            QualityGateRepository qualityGateRepository,
+            QualityGateEvaluator qualityGateEvaluator
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.issueRepository = issueRepository;
@@ -51,7 +52,7 @@ public class AnalysisService {
         this.branchRepository = branchRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.qualityGateRepository = qualityGateRepository;
-        this.qualityGateEvaluator = new QualityGateEvaluator(qualityGateRepository);
+        this.qualityGateEvaluator = qualityGateEvaluator;
     }
 
     public List<CodeAnalysis> getPrAnalyses(Long projectId, Long prNumber) {

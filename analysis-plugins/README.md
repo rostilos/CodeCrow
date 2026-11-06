@@ -322,8 +322,12 @@ deterministic context. Runtime/plugin contract failures remain fatal.
 
 The optional `composer-audit` domain plugin implements the neutral Java
 `ReviewCheckPlugin` contract. A fresh PR result can receive deterministic security
-findings before persistence without importing a concrete contributor into the
-host. Changed Composer roots are compared at pinned base/head revisions and a
+findings in separate `ReviewCheckResult`/`ReviewCheckFinding` entities after
+ordinary issue persistence, without importing a concrete contributor into the
+host. Checks share only mapped finding data with `CodeAnalysisIssue`; normal
+issue queries, tracking and comments never load advisories. One VCS summary
+links to the dedicated Dependency security section, and quality gates explicitly
+combine ordinary issue and check findings. Changed Composer roots are compared at pinned base/head revisions and a
 separate, capability-dropped CLI container executes a checksum-verified
 `composer.phar`. It has no application volumes or credentials and blocks private
 network egress. Missing plugins/workers, malformed auth or inputs, timeouts and

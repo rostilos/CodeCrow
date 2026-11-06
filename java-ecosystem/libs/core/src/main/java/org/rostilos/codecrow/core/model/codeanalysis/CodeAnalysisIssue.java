@@ -8,7 +8,7 @@ import java.time.OffsetDateTime;
 
 @Entity
 @Table(name = "code_analysis_issue")
-public class CodeAnalysisIssue implements ReconcilableIssue {
+public class CodeAnalysisIssue extends AnalysisFinding implements ReconcilableIssue {
 
     @Version
     @Column(name = "row_version", nullable = false)
@@ -23,13 +23,6 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @JoinColumn(name = "analysis_id", nullable = false)
     private CodeAnalysis analysis;
 
-    @Column(name = "severity", nullable = false, length = 10)
-    @Enumerated(EnumType.STRING)
-    private IssueSeverity severity;
-
-    @Column(name = "file_path", nullable = false, length = 500)
-    private String filePath;
-
     @Enumerated(EnumType.STRING)
     @Column(name = "anchor_side", nullable = false, length = 8)
     private IssueAnchorSide anchorSide = IssueAnchorSide.HEAD;
@@ -40,9 +33,6 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     public void setAnchorSide(IssueAnchorSide value) {
         this.anchorSide = value == null ? IssueAnchorSide.HEAD : value;
     }
-
-    @Column(name = "line_number")
-    private Integer lineNumber;
 
     @Column(name = "end_line_number")
     private Integer endLineNumber;
@@ -55,24 +45,8 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @Enumerated(EnumType.STRING)
     private IssueScope issueScope;
 
-    @Column(name = "reason", columnDefinition = "TEXT")
-    private String reason;
-
-    @Column(name = "title", length = 255)
-    private String title;
-
-    @Column(name = "suggested_fix_description", columnDefinition = "TEXT")
-    private String suggestedFixDescription;
-
     @Column(name = "suggested_fix_diff", columnDefinition = "TEXT")
     private String suggestedFixDiff;
-
-    @Column(name = "issue_category", length = 50)
-    @Enumerated(EnumType.STRING)
-    private IssueCategory issueCategory;
-
-    @Column(name = "is_resolved", nullable = false)
-    private boolean resolved;
 
     // Resolution tracking fields - populated when issue is marked as resolved
     @Column(name = "resolved_description", columnDefinition = "TEXT")
@@ -142,21 +116,6 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @Column(name = "content_fingerprint", length = 64)
     private String contentFingerprint;
 
-    /**
-     * Verbatim source line the LLM referenced when reporting this issue.
-     * Persisted for content-based line anchoring: at any later stage
-     * (branch reconciliation, IssueTracker, serve-time) the snippet hash
-     * can be looked up in the current file to find where the issue actually lives.
-     */
-    @Column(name = "code_snippet", columnDefinition = "TEXT")
-    private String codeSnippet;
-
-    @Column(name = "review_check_id", length = 128)
-    private String reviewCheckId;
-
-    public String getReviewCheckId() { return reviewCheckId; }
-    public void setReviewCheckId(String reviewCheckId) { this.reviewCheckId = reviewCheckId; }
-
     // --- PR cross-iteration tracking fields ---
 
     /**
@@ -187,15 +146,6 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     public CodeAnalysis getAnalysis() { return analysis; }
     public void setAnalysis(CodeAnalysis analysis) { this.analysis = analysis; }
 
-    public IssueSeverity getSeverity() { return severity; }
-    public void setSeverity(IssueSeverity severity) { this.severity = severity; }
-
-    public String getFilePath() { return filePath; }
-    public void setFilePath(String filePath) { this.filePath = filePath; }
-
-    public Integer getLineNumber() { return lineNumber; }
-    public void setLineNumber(Integer lineNumber) { this.lineNumber = lineNumber; }
-
     @Override
     public Integer getLine() { return lineNumber; }
 
@@ -208,23 +158,8 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     public IssueScope getIssueScope() { return issueScope; }
     public void setIssueScope(IssueScope issueScope) { this.issueScope = issueScope; }
 
-    public String getReason() { return reason; }
-    public void setReason(String reason) { this.reason = reason; }
-
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
-
-    public String getSuggestedFixDescription() { return suggestedFixDescription; }
-    public void setSuggestedFixDescription(String suggestedFixDescription) { this.suggestedFixDescription = suggestedFixDescription; }
-
     public String getSuggestedFixDiff() { return suggestedFixDiff; }
     public void setSuggestedFixDiff(String suggestedFixDiff) { this.suggestedFixDiff = suggestedFixDiff; }
-
-    public IssueCategory getIssueCategory() { return issueCategory; }
-    public void setIssueCategory(IssueCategory issueCategory) { this.issueCategory = issueCategory; }
-
-    public boolean isResolved() { return resolved; }
-    public void setResolved(boolean resolved) { this.resolved = resolved; }
 
     public String getResolvedDescription() { return resolvedDescription; }
     public void setResolvedDescription(String resolvedDescription) { this.resolvedDescription = resolvedDescription; }
@@ -277,9 +212,6 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
 
     public String getContentFingerprint() { return contentFingerprint; }
     public void setContentFingerprint(String contentFingerprint) { this.contentFingerprint = contentFingerprint; }
-
-    public String getCodeSnippet() { return codeSnippet; }
-    public void setCodeSnippet(String codeSnippet) { this.codeSnippet = codeSnippet; }
 
     public Long getTrackedFromIssueId() { return trackedFromIssueId; }
     public void setTrackedFromIssueId(Long trackedFromIssueId) { this.trackedFromIssueId = trackedFromIssueId; }

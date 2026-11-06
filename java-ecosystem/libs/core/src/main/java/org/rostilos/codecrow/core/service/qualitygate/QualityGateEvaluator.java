@@ -32,8 +32,11 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
     private static final Logger log = LoggerFactory.getLogger(QualityGateEvaluator.class);
 
     private final QualityGateRepository qualityGateRepository;
+    private final org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks;
 
-    public QualityGateEvaluator(QualityGateRepository qualityGateRepository) {
+    public QualityGateEvaluator(QualityGateRepository qualityGateRepository,
+                                org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks) {
+        this.reviewChecks = reviewChecks;
         this.qualityGateRepository = qualityGateRepository;
     }
 
@@ -80,6 +83,8 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
             return QualityGateResult.skipped();
         }
 
+        var checkFindings = reviewChecks.findForAnalysis(analysis).stream()
+                .flatMap(result -> result.getFindings().stream()).toList();
         List<ConditionResult> conditionResults = new ArrayList<>();
         boolean overallPass = true;
 
@@ -88,7 +93,15 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
                 continue;
             }
 
-            int actualValue = getMetricValue(analysis, condition);
+            int actualValue = getMetricValue(analysis, condition) + (int) checkFindings.stream().filter(finding -> {
+                if (condition.getMetric() == QualityGateMetric.ISSUES_BY_SEVERITY && condition.getSeverity() == IssueSeverity.RESOLVED) return finding.isResolved();
+                if (finding.isResolved()) return false;
+                return switch (condition.getMetric()) {
+                    case NEW_ISSUES -> true;
+                    case ISSUES_BY_SEVERITY -> condition.getSeverity() == null || finding.getSeverity() == condition.getSeverity();
+                    case ISSUES_BY_CATEGORY -> condition.getCategory() == null || finding.getIssueCategory() == condition.getCategory();
+                };
+            }).count();
             boolean conditionFails = condition.fails(actualValue);
             
             if (conditionFails) {

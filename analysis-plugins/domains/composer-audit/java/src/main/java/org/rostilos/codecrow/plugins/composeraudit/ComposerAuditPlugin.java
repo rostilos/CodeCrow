@@ -52,6 +52,12 @@ public final class ComposerAuditPlugin implements ReviewCheckPlugin {
     @Override
     public boolean appliesTo(List<String> changedPaths) { return !composerRoots(changedPaths).isEmpty(); }
 
+    @Override
+    public String findingKey(Finding finding) {
+        String root = finding.file().substring(0, finding.file().lastIndexOf('/') + 1);
+        return root + "\0" + finding.title();
+    }
+
     private static TreeSet<String> composerRoots(List<String> changedPaths) {
         TreeSet<String> roots = new TreeSet<>();
         for (String path : changedPaths) {
@@ -68,17 +74,19 @@ public final class ComposerAuditPlugin implements ReviewCheckPlugin {
     @Override
     public Result check(Context context) throws InterruptedException {
         var roots = composerRoots(context.changedPaths());
-        if (roots.isEmpty()) return new Result(List.of(), List.of());
+        if (roots.isEmpty()) return new Result(List.of(), List.of(), true);
         if (context.baseRevision() == null || context.baseRevision().isBlank()
                 || context.headRevision() == null || context.headRevision().isBlank()) {
-            return new Result(List.of(), List.of("comparison-unavailable: pinned PR revisions are missing"));
+            return new Result(List.of(), List.of("comparison-unavailable: pinned PR revisions are missing"), false);
         }
         List<Finding> findings = new ArrayList<>();
         List<String> diagnostics = new ArrayList<>();
+        boolean complete = true;
         long deadline = System.nanoTime() + Duration.ofMinutes(3).toNanos();
         for (String root : roots) {
             if (System.nanoTime() >= deadline) {
                 diagnostics.add("time-limit: remaining Composer roots were not audited");
+                complete = false;
                 break;
             }
             try {
@@ -106,11 +114,13 @@ public final class ComposerAuditPlugin implements ReviewCheckPlugin {
                 Result result = JSON.readValue(response.body(), Result.class);
                 findings.addAll(result.findings());
                 diagnostics.addAll(result.diagnostics());
+                complete &= result.complete();
             } catch (IOException | RuntimeException unavailable) {
                 // Exception text can contain provider URLs or credential-bearing Composer output.
                 diagnostics.add("audit-unavailable: a Composer root could not be audited; core review continues");
+                complete = false;
             }
         }
-        return new Result(findings, diagnostics);
+        return new Result(findings, diagnostics, complete);
     }
 }

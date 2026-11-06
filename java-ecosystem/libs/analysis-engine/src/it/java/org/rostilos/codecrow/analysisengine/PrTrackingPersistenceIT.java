@@ -38,7 +38,7 @@ class PrTrackingPersistenceIT {
         @Bean org.rostilos.codecrow.core.service.CodeAnalysisService analysisService(CodeAnalysisIssueRepository issues, CodeAnalysisRepository analyses,
                 org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository gates) {
             return new org.rostilos.codecrow.core.service.CodeAnalysisService(analyses, issues, gates,
-                new org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator(gates),
+                new org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator(gates, org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService.class)),
                 new org.rostilos.codecrow.core.service.IssueDeduplicationService(),
                 new org.rostilos.codecrow.core.service.PrChangeSummaryService(analyses, new com.fasterxml.jackson.databind.ObjectMapper()));
         }

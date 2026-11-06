@@ -26,6 +26,19 @@ ANCHORS = {'a/new': {'file': 'composer.lock', 'line': 3, 'codeSnippet': '"versio
 
 
 class AuditTest(unittest.TestCase):
+    def test_only_complete_coverage_can_clear_last_known_findings(self):
+        data = payload([], [package('a/new')])
+        clean = self.run_audit(data, lambda _: (0, b'{"advisories":[]}', b''))
+        self.assertIs(clean['complete'], True)
+        partial = self.run_audit(data, lambda _: (0, b'{"advisories":[], "unreachable-repositories":["private"]}', b''))
+        self.assertIs(partial['complete'], False)
+        failure = self.run_audit(data, lambda _: (2, b'not JSON', b''))
+        self.assertIs(failure['complete'], False)
+        missing = self.run_audit({**data, 'headLock': None}, lambda _: self.fail('must not run'))
+        self.assertIs(missing['complete'], False)
+        unchanged = self.run_audit(payload([], []), lambda _: self.fail('must not run'))
+        self.assertIs(unchanged['complete'], True)
+
     def run_audit(self, data, runner):
         with tempfile.TemporaryDirectory() as directory:
             result = audit(data, runner=runner, work_root=directory)

@@ -7,6 +7,9 @@ import java.util.List;
 public interface ReviewCheckPlugin extends CodeCrowPlugin {
     default boolean appliesTo(List<String> changedPaths) { return true; }
 
+    /** Stable identity within this check, independent of narrative and source-line changes. */
+    default String findingKey(Finding finding) { return finding.file() + "\0" + finding.title(); }
+
     Result check(Context context) throws IOException, InterruptedException;
 
     @FunctionalInterface
@@ -21,7 +24,7 @@ public interface ReviewCheckPlugin extends CodeCrowPlugin {
     record Finding(String file, int line, String severity, String title, String reason,
                    String suggestedFix, String codeSnippet) {}
 
-    record Result(List<Finding> findings, List<String> diagnostics) {
+    record Result(List<Finding> findings, List<String> diagnostics, boolean complete) {
         public Result {
             findings = List.copyOf(findings);
             diagnostics = List.copyOf(diagnostics);

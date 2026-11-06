@@ -40,7 +40,7 @@ class PrIssueTrackingServiceTest {
         lenient().when(analyses.save(any())).thenAnswer(inv -> inv.getArgument(0));
         var gateRepository = mock(org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository.class);
         var analysisService = new org.rostilos.codecrow.core.service.CodeAnalysisService(analyses, issueRepository,
-                gateRepository, new org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator(gateRepository),
+                gateRepository, new org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator(gateRepository, org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService.class)),
                 new org.rostilos.codecrow.core.service.IssueDeduplicationService(),
                 new org.rostilos.codecrow.core.service.PrChangeSummaryService(analyses, new com.fasterxml.jackson.databind.ObjectMapper()));
         service = new PrIssueTrackingService(issueRepository, reconciliationEngine, astScopeEnricher, analysisService);

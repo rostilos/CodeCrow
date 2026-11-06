@@ -1,6 +1,9 @@
 package org.rostilos.codecrow.core.persistence;
 
 import jakarta.persistence.EntityManager;
+import org.rostilos.codecrow.core.model.reviewcheck.*;
+import org.rostilos.codecrow.core.persistence.repository.reviewcheck.*;
+import org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -35,7 +38,7 @@ import static org.assertj.core.api.Assertions.*;
 class RepositoryBoundaryIT {
     @SpringBootConfiguration @EnableAutoConfiguration
     @EntityScan("org.rostilos.codecrow.core.model")
-    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class})
+    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class, ReviewCheckResultRepository.class})
     static class Config {
         @org.springframework.context.annotation.Bean
         org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer inspectSql() {
@@ -52,6 +55,64 @@ class RepositoryBoundaryIT {
     @Autowired VcsRepoBindingRepository bindings;
     @Autowired DataSource dataSource;
     @Autowired ReconcileTaskRepository reconcileTasks;
+    @Autowired ReviewCheckResultRepository checkResults;
+    @Autowired ReviewCheckFindingRepository checkFindings;
+
+    @Test @Transactional
+    void reviewChecksHaveIndependentPersistenceAndScopedHistory() {
+        var owner = binding("checks", "repo", "owner", workspace()).getProject();
+        var other = binding("checks", "repo", "other", workspace()).getProject();
+        var first = reviewAnalysis(owner, 42L, 1);
+        var ordinary = new CodeAnalysisIssue(); ordinary.setAnalysis(first);
+        ordinary.setSeverity(IssueSeverity.HIGH); ordinary.setFilePath("composer.json");
+        ordinary.setTitle("Ordinary security finding"); em.persist(ordinary);
+        var result = new ReviewCheckResult(); result.setCheckId("composer-audit"); result.setComplete(true);
+        var advisory = new ReviewCheckFinding(); advisory.setFindingKey(ReviewCheckFinding.key("composer.lock\0CVE-2026-test"));
+        advisory.setTitle("CVE-2026-test"); advisory.setFilePath("composer.lock"); advisory.setSeverity(IssueSeverity.HIGH);
+        advisory.setResolved(true); advisory.setManualStatusResolved(true);
+        result.addFinding(advisory);
+        var service = new ReviewCheckResultService(checkResults);
+        service.save(first, java.util.List.of(result));
+        em.flush(); em.clear();
+
+        assertThat(issues.findByAnalysisIdOrderBySeverityDescLineNumberAsc(first.getId()))
+                .extracting(CodeAnalysisIssue::getTitle).containsExactly("Ordinary security finding");
+        assertThat(checkResults.findByAnalysis_Project_IdAndAnalysis_IdOrderByCheckId(other.getId(), first.getId())).isEmpty();
+        assertThat(checkFindings.findByIdAndResult_Analysis_Project_Id(advisory.getId(), other.getId())).isEmpty();
+        assertThat(checkFindings.findByIdAndResult_Analysis_Project_Id(advisory.getId(), owner.getId())).isPresent();
+
+        var second = reviewAnalysis(owner, 42L, 2);
+        service.copyForAnalysis(first, second);
+        assertThat(service.findForAnalysis(second).get(0).getFindings()).singleElement()
+                .satisfies(copy -> { assertThat(copy.getId()).isNotEqualTo(advisory.getId()); assertThat(copy.isResolved()).isTrue(); });
+        var anotherPr = reviewAnalysis(owner, 43L, 1);
+        service.copyForAnalysis(first, anotherPr);
+        assertThat(service.findForAnalysis(anotherPr).get(0).getFindings()).singleElement()
+                .satisfies(copy -> { assertThat(copy.isResolved()).isFalse(); assertThat(copy.getManualStatusResolved()).isNull(); });
+        var foreign = reviewAnalysis(other, 42L, 1);
+        assertThatThrownBy(() -> service.copyForAnalysis(first, foreign)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(service.findForAnalysis(foreign)).isEmpty();
+        assertThat(checkFindings.findByResult_Analysis_Project_IdAndResult_Analysis_PrNumberAndResult_CheckIdAndFindingKey(
+                owner.getId(), 42L, "composer-audit", advisory.getFindingKey())).hasSize(2);
+
+        var clean = reviewAnalysis(owner, 42L, 3);
+        var cleanCheck = new ReviewCheckResult(); cleanCheck.setCheckId("composer-audit"); cleanCheck.setComplete(true);
+        service.save(clean, java.util.List.of(cleanCheck));
+        var next = reviewAnalysis(owner, 42L, 4);
+        assertThat(service.findPrevious(next)).singleElement().satisfies(previous -> {
+            assertThat(previous.getAnalysis().getId()).isEqualTo(clean.getId());
+            assertThat(previous.getFindings()).isEmpty();
+        });
+        em.remove(em.find(CodeAnalysis.class, first.getId())); em.flush(); em.clear();
+        assertThat(checkResults.findByAnalysis_Project_IdAndAnalysis_IdOrderByCheckId(owner.getId(), first.getId())).isEmpty();
+        assertThat(checkFindings.findByIdAndResult_Analysis_Project_Id(advisory.getId(), owner.getId())).isEmpty();
+        assertThat(service.findForAnalysis(second)).hasSize(1);
+    }
+
+    private CodeAnalysis reviewAnalysis(Project project, Long pr, int version) {
+        var analysis = new CodeAnalysis(); analysis.setProject(project); analysis.setPrNumber(pr); analysis.setPrVersion(version);
+        analysis.setAnalysisType(AnalysisType.PR_REVIEW); em.persist(analysis); return analysis;
+    }
 
     @Test
     void partialStatusMigrationUpgradesExistingConstraintWithoutLosingAnalyses() throws Exception {

@@ -52,8 +52,7 @@ public record IssueDTO (
     String introducingAuthorName,
     String introducingAuthorEmail,
     String authorProvenanceConfidence,
-    String anchorSide,
-    String reviewCheckId
+    String anchorSide
 ) {
 
     /** Backward-compatible constructor for callers predating SCM provenance. */
@@ -78,7 +77,7 @@ public record IssueDTO (
                 resolvedDescription, resolvedByPr, resolvedCommitHash,
                 resolvedAnalysisId, resolvedAt, resolvedBy, vcsAuthorId,
                 vcsAuthorUsername, detectionSource, issueScope,
-                endLineNumber, originIssueId, null, null, null, null, "HEAD", null);
+                endLineNumber, originIssueId, null, null, null, null, "HEAD");
     }
 
     /**
@@ -145,8 +144,7 @@ public record IssueDTO (
                 bi.getIntroducingAuthorName(),
                 bi.getIntroducingAuthorEmail(),
                 bi.getAuthorProvenanceConfidence(),
-                bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD",
-                bi.getReviewCheckId()
+                bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD"
         );
     }
 
@@ -205,8 +203,7 @@ public record IssueDTO (
                 issue.getIntroducingAuthorName(),
                 issue.getIntroducingAuthorEmail(),
                 issue.getAuthorProvenanceConfidence(),
-                issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD",
-                issue.getReviewCheckId()
+                issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD"
         );
     }
 }

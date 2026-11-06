@@ -337,12 +337,6 @@ public class PullRequestAnalysisProcessor {
                 return aiResponse;
             }
 
-            if (reviewCheckService != null) {
-                aiResponse = reviewCheckService.enrich(project, aiRequest, aiResponse,
-                        event -> emitEvent(consumer, event));
-                requireConfirmedLease(lockLease);
-            }
-
             // === Extract file contents from enrichment data for line hash computation ===
             Map<String, String> fileContents = new java.util.HashMap<>(proposedFileContents);
             java.util.Set<String> allChangedFiles = new java.util.HashSet<>(aiRequest.getChangedFiles());
@@ -422,6 +416,11 @@ public class PullRequestAnalysisProcessor {
                 }
             } catch (Exception trackEx) {
                 log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());
+            }
+
+            if (reviewCheckService != null) {
+                requireConfirmedLease(lockLease);
+                reviewCheckService.run(project, aiRequest, newAnalysis, event -> emitEvent(consumer, event));
             }
 
             // Ownership may have changed after persistence but before external
@@ -812,6 +811,7 @@ public class PullRequestAnalysisProcessor {
                 request.getCommitHash(), request.getTargetBranchName(),
                 request.getSourceBranchName(), diffFingerprint);
         requireConfirmedLease(lockLease);
+        if (reviewCheckService != null) reviewCheckService.copy(fingerprintHit.get(), cloned, event -> log.info("Review check cache: {}", event));
         copyTaskImplementationEvidence(fingerprintHit.get(), cloned);
         // Persist PR-level snapshots for the source code viewer
         persistPrSnapshotsForCacheHit(pullRequest, cloned, fingerprintHit.get(), project,
@@ -880,6 +880,7 @@ public class PullRequestAnalysisProcessor {
                     commitHash, targetBranch,
                     sourceBranch, commitHashHit.get().getDiffFingerprint());
             requireConfirmedLease(lockLease);
+            if (reviewCheckService != null) reviewCheckService.copy(commitHashHit.get(), cloned, event -> log.info("Review check cache: {}", event));
             copyTaskImplementationEvidence(commitHashHit.get(), cloned);
             // Persist PR-level snapshots for the source code viewer
             persistPrSnapshotsForCacheHit(pullRequest, cloned, commitHashHit.get(), project,
