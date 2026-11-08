@@ -127,12 +127,7 @@ public class GitHubReportingService implements VcsReportingService {
             fullComment += "\n\n---\n\n" + detailedIssuesMarkdown;
         }
 
-        // Post or update comment with full content (summary + issues)
-        if (placeholderCommentId != null) {
-            updatePlaceholderComment(httpClient, vcsRepoInfo, pullRequestNumber, fullComment, placeholderCommentId);
-        } else {
-            postSummaryComment(httpClient, vcsRepoInfo, pullRequestNumber, fullComment);
-        }
+        postSummaryComment(httpClient, vcsRepoInfo, pullRequestNumber, fullComment, placeholderCommentId);
 
         // Publish findings as a submitted COMMENT review so they appear inline in
         // "Files changed" and as grouped reviewer comments in the PR conversation.
@@ -201,60 +196,30 @@ public class GitHubReportingService implements VcsReportingService {
     /**
      * Post summary as a regular comment.
      */
-    private void postSummaryComment(
-            OkHttpClient httpClient,
-            VcsRepoInfo vcsRepoInfo,
-            Long pullRequestNumber,
-            String summaryMarkdown
-    ) throws IOException {
-        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
-        
-        // Delete previous CodeCrow summary comments first
+    private void postSummaryComment(OkHttpClient httpClient, VcsRepoInfo repository, Long prNumber,
+                                    String markdown, String placeholderCommentId) throws IOException {
+        var action = new CommentOnPullRequestAction(httpClient);
+        String owner = repository.getRepoWorkspace(), repo = repository.getRepoSlug();
+        List<Long> existing;
         try {
-            commentAction.deletePreviousComments(
-                    vcsRepoInfo.getRepoWorkspace(),
-                    vcsRepoInfo.getRepoSlug(),
-                    pullRequestNumber.intValue(),
-                    CODECROW_COMMENT_MARKER
-            );
-        } catch (Exception e) {
-            log.warn("Failed to delete previous summary comments: {}", e.getMessage());
+            existing = action.listComments(owner, repo, prNumber.intValue()).stream()
+                .filter(comment -> String.valueOf(comment.get("body")).contains(CODECROW_COMMENT_MARKER))
+                .map(comment -> ((Number) comment.get("id")).longValue()).distinct().toList();
+        } catch (IOException unavailable) {
+            if (placeholderCommentId == null) throw unavailable;
+            log.warn("Could not list previous reports; updating the known placeholder: {}", unavailable.getMessage());
+            existing = List.of();
         }
-        
-        String markedBody = CODECROW_COMMENT_MARKER + "\n" + summaryMarkdown;
-        
-        commentAction.postComment(
-                vcsRepoInfo.getRepoWorkspace(),
-                vcsRepoInfo.getRepoSlug(),
-                pullRequestNumber.intValue(),
-                markedBody
-        );
-        
-        log.debug("Posted summary comment to PR {}", pullRequestNumber);
-    }
-    
-    /**
-     * Update placeholder comment with summary.
-     */
-    private void updatePlaceholderComment(
-            OkHttpClient httpClient,
-            VcsRepoInfo vcsRepoInfo,
-            Long pullRequestNumber,
-            String summaryMarkdown,
-            String placeholderCommentId
-    ) throws IOException {
-        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
-        
-        String markedBody = CODECROW_COMMENT_MARKER + "\n" + summaryMarkdown;
-        
-        commentAction.updateComment(
-                vcsRepoInfo.getRepoWorkspace(),
-                vcsRepoInfo.getRepoSlug(),
-                Long.parseLong(placeholderCommentId),
-                markedBody
-        );
-        
-        log.debug("Updated placeholder comment {} with summary", placeholderCommentId);
+        Long keep = placeholderCommentId != null ? Long.valueOf(placeholderCommentId) : existing.stream().findFirst().orElse(null);
+        String content = CODECROW_COMMENT_MARKER + "\n" + markdown;
+        if (keep == null) action.postComment(owner, repo, prNumber.intValue(), content);
+        else action.updateComment(owner, repo, keep, content);
+        for (Long id : existing) {
+            if (!id.equals(keep)) {
+                try { action.deleteComment(owner, repo, id); }
+                catch (IOException failed) { log.warn("Could not remove superseded review comment {}: {}", id, failed.getMessage()); }
+            }
+        }
     }
 
     private void postInlineReviewComments(

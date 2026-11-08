@@ -17,6 +17,28 @@ class GitLabMergeRequestApiTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Test
+    void discussionsAreReadAcrossPagesBeforeIndividualBotNotesCanBeRemoved() throws Exception {
+        try (MockWebServer gitLab = new MockWebServer()) {
+            gitLab.enqueue(jsonResponse(OBJECT_MAPPER.writeValueAsString(java.util.Collections.nCopies(100,
+                    java.util.Map.of("id", "human-thread", "notes", java.util.List.of())))));
+            gitLab.enqueue(jsonResponse("[{\"id\":\"bot-thread\",\"notes\":[{\"id\":700}]}]"));
+            gitLab.enqueue(new MockResponse().setResponseCode(204));
+            gitLab.enqueue(new MockResponse().setResponseCode(503));
+            gitLab.start();
+            var api = new GitLabMergeRequestApi(new GitLabApiContext(new OkHttpClient(), gitLab.url("/").toString()));
+            assertThat(api.listDiscussions("team", "repo", 17)).hasSize(101);
+            api.deleteDiscussionNote("team", "repo", 17, "bot-thread", 700);
+            assertThatThrownBy(() -> api.listDiscussions("team", "repo", 17)).isInstanceOf(IOException.class);
+            assertThat(gitLab.getRequestCount()).isEqualTo(4);
+            gitLab.takeRequest();
+            assertThat(gitLab.takeRequest().getRequestUrl().queryParameter("page")).isEqualTo("2");
+            var delete = gitLab.takeRequest();
+            assertThat(delete.getMethod()).isEqualTo("DELETE");
+            assertThat(delete.getPath()).endsWith("/merge_requests/17/discussions/bot-thread/notes/700");
+        }
+    }
+
+    @Test
     void markerLookupReadsLaterPagesAndPropagatesUnavailableConversation() throws Exception {
         try (MockWebServer gitLab = new MockWebServer()) {
             gitLab.enqueue(jsonResponse(OBJECT_MAPPER.writeValueAsString(java.util.Collections.nCopies(100,

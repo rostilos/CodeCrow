@@ -253,16 +253,7 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         try {
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(EVcsProvider.GITLAB);
             
-            // Delete any previous analysis comments before posting placeholder
-            try {
-                int deleted = reportingService.deleteCommentsByMarker(project, mergeRequestIid, CODECROW_ANALYSIS_MARKER);
-                if (deleted > 0) {
-                    log.info("Deleted {} previous analysis comment(s) before posting placeholder", deleted);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to delete previous comments: {}", e.getMessage());
-            }
-            
+            // Keep the last report until its replacement has been acknowledged.
             String commentId = reportingService.postComment(
                 project, 
                 mergeRequestIid, 

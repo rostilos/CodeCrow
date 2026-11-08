@@ -861,6 +861,15 @@ public class GitLabClient implements VcsClient {
                 body, baseSha, headSha, startSha, filePath, newLine, anchorSide);
     }
 
+    public List<JsonNode> listMergeRequestDiscussions(String workspaceId, String repoIdOrSlug, long mergeRequestIid) throws IOException {
+        return mergeRequestApi.listDiscussions(workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public void deleteMergeRequestDiscussionNote(String workspaceId, String repoIdOrSlug, long mergeRequestIid,
+                                                String discussionId, long noteId) throws IOException {
+        mergeRequestApi.deleteDiscussionNote(workspaceId, repoIdOrSlug, mergeRequestIid, discussionId, noteId);
+    }
+
     public List<Map<String, Object>> listMergeRequestNotes(
             String workspaceId,
             String repoIdOrSlug,

@@ -276,6 +276,26 @@ public final class GitLabMergeRequestApi {
                         api.objectMapper().writeValueAsString(payload)));
     }
 
+    public List<JsonNode> listDiscussions(String namespace, String project, long mergeRequestIid) throws IOException {
+        List<JsonNode> discussions = new java.util.ArrayList<>();
+        for (int page = 1; ; page++) {
+            JsonNode entries = api.executeJson("list merge request discussions", api.get(
+                    mergeRequestUrl(namespace, project, mergeRequestIid) + "/discussions?per_page=100&page=" + page));
+            if (!entries.isArray()) throw new IOException("Invalid GitLab discussion list");
+            entries.forEach(discussions::add);
+            if (entries.size() < 100) return List.copyOf(discussions);
+        }
+    }
+
+    public void deleteDiscussionNote(String namespace, String project, long mergeRequestIid,
+                                     String discussionId, long noteId) throws IOException {
+        try (Response response = api.execute(api.delete(
+                discussionUrl(namespace, project, mergeRequestIid, discussionId) + "/notes/" + noteId))) {
+            if (!response.isSuccessful() && response.code() != 404)
+                throw new IOException("Could not remove GitLab discussion note: HTTP " + response.code());
+        }
+    }
+
     public List<Map<String, Object>> listNotes(
             String namespace,
             String project,

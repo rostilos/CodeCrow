@@ -251,16 +251,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         try {
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD);
             
-            // Delete any previous review comments before posting placeholder
-            try {
-                int deleted = reportingService.deleteCommentsByMarker(project, pullRequestNumber, CODECROW_REVIEW_MARKER);
-                if (deleted > 0) {
-                    log.info("Deleted {} previous review comment(s) before posting placeholder", deleted);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to delete previous comments: {}", e.getMessage());
-            }
-            
+            // Keep the last report until its replacement has been acknowledged.
             String commentId = reportingService.postComment(
                 project, 
                 pullRequestNumber, 

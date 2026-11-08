@@ -266,6 +266,82 @@ class PullRequestAnalysisProcessorTest {
                         verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), anyLong(), any(), any());
                 }
 
+                @ParameterizedTest @EnumSource(EVcsProvider.class)
+                void repeatedReviewAndEquivalentDiffReuseTheResultDespiteNewHistory(EVcsProvider provider) throws Exception {
+                        stubReviewThroughAi(Map.of("comment", "review", "issues", List.of()), provider);
+                        stubPersistedUsageResult();
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeDeletedFiles()).thenReturn(List.of());
+                        String descriptors = "sha256:" + "a".repeat(64);
+                        var evidence = Map.of("java", List.of("extension:.java"));
+                        when(aiAnalysisRequest.getProjectCapabilities()).thenReturn(new org.rostilos.codecrow.plugins.ProjectCapabilities(
+                                List.of("java"), Map.of("file.java", List.of("java")), evidence, List.of(), "sha256:" + "1".repeat(64), descriptors));
+                        var persistedIdentity = new java.util.concurrent.atomic.AtomicReference<String>();
+                        when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(),
+                                anyString(), anyString(), any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
+                            persistedIdentity.set(call.getArgument(8)); return codeAnalysis;
+                        });
+                        when(codeAnalysis.getDiffFingerprint()).thenAnswer(call -> persistedIdentity.get());
+                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
+                                .thenAnswer(call -> persistedIdentity.get() == null ? Optional.empty() : Optional.of(codeAnalysis));
+                        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(1L), anyString()))
+                                .thenAnswer(call -> java.util.Objects.equals(call.getArgument(1), persistedIdentity.get())
+                                        ? Optional.of(codeAnalysis) : Optional.empty());
+                        var policy = installUsagePolicy();
+                        when(policy.begin(any())).thenReturn(mock(ReviewUsagePolicy.Reservation.class));
+                        processor.process(createRequest(), event -> {}, project);
+
+                        // These inputs are produced by the completed review itself.
+                        lenient().when(aiAnalysisRequest.getPreviousCommitHash()).thenReturn("abc123");
+                        lenient().when(aiAnalysisRequest.getAnalysisMode()).thenReturn(org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode.INCREMENTAL);
+                        lenient().when(aiAnalysisRequest.getTaskHistoryContext()).thenReturn("new review history");
+                        lenient().when(aiAnalysisRequest.getPreviousCodeAnalysisIssues()).thenReturn(List.of(
+                                mock(org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO.class)));
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of());
+                        when(aiAnalysisRequest.getProjectCapabilities()).thenReturn(new org.rostilos.codecrow.plugins.ProjectCapabilities(
+                                List.of("java"), Map.of(), evidence, List.of(), "sha256:" + "2".repeat(64), descriptors));
+                        var events = new ArrayList<Map<String, Object>>();
+                        assertThat(processor.process(createRequest(), events::add, project)).containsEntry("cached", true);
+                        assertThat(events).anyMatch(event -> "cache_hit".equals(event.get("state")));
+
+                        // An equivalent full diff at a different head uses the fingerprint layer.
+                        var equivalent = createRequest(); equivalent.commitHash = "next-head";
+                        lenient().when(aiAnalysisRequest.getCurrentCommitHash()).thenReturn("next-head");
+                        when(aiAnalysisRequest.getProjectCapabilities()).thenReturn(new org.rostilos.codecrow.plugins.ProjectCapabilities(
+                                List.of("java"), Map.of(), evidence, List.of(), "sha256:" + "3".repeat(64), descriptors));
+                        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(), anyString(), anyString()))
+                                .thenReturn(codeAnalysis);
+                        assertThat(processor.process(equivalent, event -> {}, project)).containsEntry("status", "cached_by_fingerprint");
+                        verify(aiAnalysisClient, times(1)).performAnalysis(any(), any());
+                        verify(policy, times(1)).begin(any());
+                        verify(reportingService, times(3)).postAnalysisResults(eq(codeAnalysis), eq(project), eq(42L), any(), any());
+
+                        // Failed republication must not fall through to another paid review.
+                        doThrow(new IOException("accepted report, response lost")).when(reportingService)
+                                .postAnalysisResults(any(), any(), anyLong(), any(), any());
+                        assertThat(processor.process(createRequest(), event -> {}, project)).containsEntry("cached", true);
+                        verify(aiAnalysisClient, times(1)).performAnalysis(any(), any());
+                        verify(policy, times(1)).begin(any());
+                        doNothing().when(reportingService).postAnalysisResults(any(), any(), anyLong(), any(), any());
+
+                        List<Runnable> changes = List.of(
+                                () -> when(aiAnalysisRequest.getAiModel()).thenReturn("different-model"),
+                                () -> when(aiAnalysisRequest.getProjectRules()).thenReturn("new review rules"),
+                                () -> when(aiAnalysisRequest.getProjectCapabilities()).thenReturn(new org.rostilos.codecrow.plugins.ProjectCapabilities(
+                                        List.of("java"), Map.of(), evidence, List.of(), "sha256:" + "4".repeat(64), "sha256:" + "b".repeat(64))),
+                                () -> when(aiAnalysisRequest.getTargetHeadCommitHash()).thenReturn("new-target"),
+                                () -> when(aiAnalysisRequest.getTaskContext()).thenReturn(Map.of("requirements", "new requirement")),
+                                () -> when(aiAnalysisRequest.getRawDiff()).thenReturn("diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+different\n"));
+                        int paidCalls = 1;
+                        for (Runnable change : changes) {
+                            change.run();
+                            processor.process(createRequest(), event -> {}, project);
+                            verify(aiAnalysisClient, times(++paidCalls)).performAnalysis(any(), any());
+                            assertThat(processor.process(createRequest(), event -> {}, project)).containsEntry("cached", true);
+                            verify(aiAnalysisClient, times(paidCalls)).performAnalysis(any(), any());
+                        }
+                }
+
                 @Test
                 void persistsHostReviewSourcesAndPublishesTheExactAnalysisId() throws Exception {
                         var response = Map.<String, Object>of("comment", "review", "issues", List.of());
@@ -600,7 +676,7 @@ class PullRequestAnalysisProcessorTest {
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
                         Map<String, Object> dryRunResponse = Map.of(
                                         "dryRun", true,
                                         "status", "prompt_capture_completed",
@@ -662,7 +738,7 @@ class PullRequestAnalysisProcessorTest {
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
                         when(lockLease.confirmOwnership()).thenReturn(true, false);
                         when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(Map.of(
                                         "comment", "must not be published",
@@ -761,7 +837,7 @@ class PullRequestAnalysisProcessorTest {
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("diff");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        lenient().when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
                         lenient().when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
                 }
 
@@ -801,12 +877,12 @@ class PullRequestAnalysisProcessorTest {
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(request));
                         when(request.getRawDiff()).thenReturn("diff");
-                        when(request.getChangedFiles()).thenReturn(changedFiles);
-                        when(request.getDeletedFiles()).thenReturn(deletedFiles);
+                        lenient().when(request.getChangedFiles()).thenReturn(changedFiles);
+                        lenient().when(request.getDeletedFiles()).thenReturn(deletedFiles);
                         when(request.getProposedTreeChangedFiles()).thenReturn(proposedTreeChangedFiles);
                         when(request.getProposedTreeDeletedFiles()).thenReturn(proposedTreeDeletedFiles);
                         when(request.getUseMcpTools()).thenReturn(true);
-                        when(request.getCurrentCommitHash()).thenReturn(sourceRevision);
+                        lenient().when(request.getCurrentCommitHash()).thenReturn(sourceRevision);
                         when(request.getTargetHeadCommitHash()).thenReturn("target-head-sha");
                         when(request.getTargetBranchName()).thenReturn("main");
                         when(request.getEnrichmentData()).thenReturn(enrichment);
@@ -1038,7 +1114,7 @@ class PullRequestAnalysisProcessorTest {
                         when(aiAnalysisRequest.getProposedTreeChangedFiles())
                                         .thenReturn(List.of("file.java"));
                         when(aiAnalysisRequest.getProposedTreeDeletedFiles()).thenReturn(List.of());
-                        when(aiAnalysisRequest.getDeletedFiles()).thenReturn(List.of());
+
                         var prepared = mock(LocalRepositorySnapshotService.PreparedSnapshot.class);
                         LocalRepositorySnapshot transport = new LocalRepositorySnapshot(
                                         "/tmp/codecrow-pr-review-test",
@@ -1095,7 +1171,7 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(pullRequest);
                         when(aiAnalysisRequest.getRawDiff()).thenReturn(
                                         "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
                         return processor.computeReviewIdentity(aiAnalysisRequest);
                 }
 
@@ -1299,7 +1375,7 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn(
                                         "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
                         String reviewIdentity = processor.computeReviewIdentity(aiAnalysisRequest);
                         when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                                         .thenReturn(Optional.of(codeAnalysis));
@@ -1390,7 +1466,7 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn(
                                         "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
                         String reviewIdentity = processor.computeReviewIdentity(aiAnalysisRequest);
 
                         // No exact cache match, but commit hash matches from another PR
@@ -1611,7 +1687,7 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn(
                                         "diff --git a/file.java b/file.java\n@@ -1 +1 @@\n-old\n+new\n");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getProposedTreeChangedFiles()).thenReturn(List.of("file.java"));
                         String reviewIdentity = processor.computeReviewIdentity(aiAnalysisRequest);
 
                         when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))

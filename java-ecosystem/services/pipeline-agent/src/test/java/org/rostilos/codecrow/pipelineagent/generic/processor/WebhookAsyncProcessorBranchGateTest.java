@@ -3,6 +3,13 @@ package org.rostilos.codecrow.pipelineagent.generic.processor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
+import org.rostilos.codecrow.pipelineagent.generic.utils.CommentPlaceholders;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.assertj.core.api.Assertions.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -56,6 +63,51 @@ class WebhookAsyncProcessorBranchGateTest {
     void tearDown() {
         System.clearProperty(PromptDryRunMode.ENABLED_KEY);
         System.clearProperty(PromptDryRunMode.PROJECT_IDS_KEY);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = EVcsProvider.class, names = {"BITBUCKET_CLOUD", "GITHUB", "GITLAB"})
+    void cachedCommandsOnlyCleanTheirTemporaryCommentAfterProcessorPublication(EVcsProvider provider) throws Exception {
+        var reporting = mock(VcsReportingService.class);
+        when(vcsServiceFactory.getReportingService(provider)).thenReturn(reporting);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(jobService.claimWebhookJobForExecution(any())).thenReturn(true);
+        when(reporting.postComment(eq(project), eq(42L), anyString(), anyString())).thenReturn("temporary");
+        for (String command : java.util.List.of("analyze", "review")) {
+            var job = new Job(); job.setJobType(command.equals("analyze") ? JobType.ANALYZE_COMMAND : JobType.REVIEW_COMMAND);
+            var payload = new WebhookPayload(provider, "comment", "repo-id", "repo", "owner", "42", "feature", "main", "head", null,
+                    new WebhookPayload.CommentData("command", "/codecrow " + command, "user", "user", null, false, null, null), "user", "user");
+            when(handler.handle(eq(payload), eq(project), any())).thenReturn(WebhookHandler.WebhookResult.success("republished",
+                    Map.of("cached", true, "commandType", command)));
+            processor.processWebhookInTransaction(provider, 1L, payload, handler, job);
+            verify(jobService).completeJob(job);
+        }
+        assertThat(CommentPlaceholders.getMarkerForCommandType("review")).isNotEqualTo("<!-- codecrow-review -->");
+        verify(reporting).deleteCommentsByMarker(project, 42L, CommentPlaceholders.getMarkerForCommandType("analyze"));
+        verify(reporting).deleteCommentsByMarker(project, 42L, CommentPlaceholders.getMarkerForCommandType("review"));
+        verify(reporting, times(2)).postComment(eq(project), eq(42L), anyString(), anyString());
+        verify(reporting, times(2)).deleteComment(project, 42L, "temporary");
+        verifyNoMoreInteractions(reporting);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = EVcsProvider.class, names = {"BITBUCKET_CLOUD", "GITHUB", "GITLAB"})
+    void automaticPlaceholderDoesNotDeleteTheLastReport(EVcsProvider provider) throws Exception {
+        var reporting = mock(VcsReportingService.class);
+        when(vcsServiceFactory.getReportingService(provider)).thenReturn(reporting);
+        Class<?> handlerClass = switch (provider) {
+            case BITBUCKET_CLOUD -> org.rostilos.codecrow.pipelineagent.bitbucket.webhookhandler.BitbucketCloudPullRequestWebhookHandler.class;
+            case GITHUB -> org.rostilos.codecrow.pipelineagent.github.webhookhandler.GitHubPullRequestWebhookHandler.class;
+            case GITLAB -> org.rostilos.codecrow.pipelineagent.gitlab.webhookhandler.GitLabMergeRequestWebhookHandler.class;
+            default -> throw new IllegalArgumentException();
+        };
+        Object automaticHandler = mock(handlerClass, CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(automaticHandler, "vcsServiceFactory", vcsServiceFactory);
+        when(reporting.postComment(eq(project), eq(42L), anyString(), anyString())).thenReturn("temporary");
+        assertThat((String) ReflectionTestUtils.invokeMethod(automaticHandler, "postPlaceholderComment", project, 42L))
+                .isEqualTo("temporary");
+        verify(reporting).postComment(eq(project), eq(42L), anyString(), anyString());
+        verifyNoMoreInteractions(reporting);
     }
 
     @Test

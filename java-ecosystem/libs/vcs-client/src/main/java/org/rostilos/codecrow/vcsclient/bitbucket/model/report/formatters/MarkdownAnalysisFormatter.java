@@ -66,7 +66,8 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
     public String format(AnalysisSummary summary) {
         StringBuilder md = new StringBuilder();
 
-        if (summary.getTotalUnresolvedIssues() == 0) {
+        if (summary.getTotalUnresolvedIssues() == 0
+                && summary.getReviewChecks().stream().allMatch(check -> check.total() == 0 && check.complete())) {
             md.append(String.format("## %s Code Analysis - No Issues Found\n\n", EMOJI_SUCCESS));
         } else {
             md.append(String.format("## %s Code Analysis Results\n\n", EMOJI_WARNING));
@@ -88,7 +89,7 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
                     summary.getResolvedIssues().getUrl()));
         }
 
-        if (summary.getTotalUnresolvedIssues() > 0) {
+        if (summary.getTotalUnresolvedIssues() > 0 || !summary.getReviewChecks().isEmpty()) {
             md.append("### Issues Overview\n");
             md.append("| Severity | Count | |\n");
             md.append("|----------|-------|---|\n");
@@ -129,7 +130,15 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
                 ));
             }
 
+            for (var check : summary.getReviewChecks()) {
+                md.append(String.format("| 🔒 %s | [%d](%s) | Dependency advisories: %d high, %d medium, %d low, %d info |\n",
+                        check.label(), check.total(), check.url(), check.high(), check.medium(), check.low(), check.info()));
+            }
             md.append("\n");
+            for (var check : summary.getReviewChecks()) {
+                md.append(String.format("[View %s dependency details](%s)\n\n", check.label(), check.url()));
+                if (!check.complete()) md.append("Audit coverage is incomplete; showing available and last-known findings.\n\n");
+            }
 
             // Only include detailed issues if explicitly requested
             if (includeDetailedIssues) {

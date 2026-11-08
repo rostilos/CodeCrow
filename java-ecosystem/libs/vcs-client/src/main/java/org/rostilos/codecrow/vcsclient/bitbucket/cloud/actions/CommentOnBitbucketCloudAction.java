@@ -317,6 +317,11 @@ public class CommentOnBitbucketCloudAction {
      * @return Number of comments deleted
      */
     public String findCommentByMarker(String marker) throws IOException {
+        return findCommentsByMarkers(java.util.List.of(marker)).stream().findFirst().orElse(null);
+    }
+
+    public java.util.List<String> findCommentsByMarkers(java.util.List<String> markers) throws IOException {
+        var ids = new java.util.LinkedHashSet<String>();
         String url = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments",
                 vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(), prNumber);
         while (url != null) {
@@ -324,58 +329,22 @@ public class CommentOnBitbucketCloudAction {
                 JsonNode page = new ObjectMapper().readTree(validate(response));
                 for (JsonNode comment : page.path("values")) {
                     String content = comment.path("content").path("raw").asText();
-                    if (!comment.path("deleted").asBoolean() && content.contains(hideCodeCrowMarkers(marker))) {
-                        return comment.path("id").asText();
+                    if (!comment.path("deleted").asBoolean() && markers.stream().anyMatch(marker ->
+                            content.contains(marker) || content.contains(hideCodeCrowMarkers(marker)))) {
+                        ids.add(comment.path("id").asText());
                     }
                 }
                 url = page.hasNonNull("next") ? page.get("next").asText() : null;
             }
         }
-        return null;
+        return java.util.List.copyOf(ids);
     }
 
     public int deleteCommentsByMarker(String marker) throws IOException {
-        String workspace = vcsRepoInfo.getRepoWorkspace();
-        String repoSlug = vcsRepoInfo.getRepoSlug();
-        int deletedCount = 0;
-
-        String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments", workspace, repoSlug, prNumber);
-
-        while (apiUrl != null) {
-            Request request = new Request.Builder()
-                    .get()
-                    .url(apiUrl)
-                    .build();
-
-            try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    throw new IOException("Failed to fetch comments: " + response.code());
-                }
-                ObjectMapper objectMapper = new ObjectMapper();
-                JsonNode root = objectMapper.readTree(response.body().string());
-                JsonNode comments = root.get("values");
-
-                if (comments != null && comments.isArray()) {
-                    for (JsonNode comment : comments) {
-                        JsonNode content = comment.path("content").path("raw");
-                        String contentText = content.asText();
-
-                        String hiddenMarker = hideCodeCrowMarkers(marker);
-                        if (contentText.contains(marker) || contentText.contains(hiddenMarker)) {
-                            String commentId = comment.get("id").asText();
-                            deleteCommentById(commentId);
-                            deletedCount++;
-                        }
-                    }
-                }
-
-                JsonNode nextNode = root.get("next");
-                apiUrl = nextNode != null && !nextNode.isNull() ? nextNode.asText() : null;
-            }
-        }
-        
-        LOGGER.info("Deleted {} comments with marker: {}", deletedCount, marker);
-        return deletedCount;
+        // Collect every page before deleting; mutation otherwise shifts pagination.
+        var ids = findCommentsByMarkers(java.util.List.of(marker));
+        for (String id : ids) deleteCommentById(id);
+        return ids.size();
     }
 
     private void deleteOldSummarizeComments() throws IOException {

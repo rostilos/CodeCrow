@@ -27,6 +27,7 @@ public final class AnalysisSummary {
     private final List<IssueSummary> issues;
     private final Map<String, Integer> fileIssueCount;
     private final QualityGateResult qualityGateResult;
+    private final List<CheckSummary> reviewChecks;
 
     private AnalysisSummary(Builder builder) {
         this.projectNamespace = builder.projectNamespace;
@@ -45,6 +46,7 @@ public final class AnalysisSummary {
         this.fileIssueCount = builder.fileIssueCount;
         this.resolvedIssues = builder.resolvedIssues;
         this.qualityGateResult = builder.qualityGateResult;
+        this.reviewChecks = List.copyOf(builder.reviewChecks);
     }
 
     public String getProjectNamespace() {
@@ -109,6 +111,12 @@ public final class AnalysisSummary {
         return qualityGateResult;
     }
 
+    public List<CheckSummary> getReviewChecks() { return reviewChecks; }
+
+    public record CheckSummary(String label, String url, boolean complete, int high, int medium, int low, int info) {
+        public int total() { return high + medium + low + info; }
+    }
+
     /**
      * Formats the analysis summary for display in pull request comments
      *
@@ -157,6 +165,7 @@ public final class AnalysisSummary {
         private List<IssueSummary> issues;
         private Map<String, Integer> fileIssueCount;
         private QualityGateResult qualityGateResult;
+        private List<CheckSummary> reviewChecks = List.of();
 
         private Builder() {
             super();
@@ -234,6 +243,11 @@ public final class AnalysisSummary {
 
         public Builder withFileIssueCount(Map<String, Integer> fileIssueCount) {
             this.fileIssueCount = fileIssueCount;
+            return this;
+        }
+
+        public Builder withReviewChecks(List<CheckSummary> checks) {
+            this.reviewChecks = checks;
             return this;
         }
 

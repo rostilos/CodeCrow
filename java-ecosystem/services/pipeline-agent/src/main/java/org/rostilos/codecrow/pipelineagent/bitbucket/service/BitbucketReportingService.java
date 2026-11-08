@@ -194,17 +194,29 @@ public class BitbucketReportingService implements VcsReportingService {
                 pullRequestNumber
         );
 
-        if (placeholderCommentId != null) {
-            // Update the placeholder comment with the analysis results
-            String fullContent = markdownSummary + "\n\n" + CODECROW_REVIEW_MARKER;
-            commentAction.updateComment(placeholderCommentId, fullContent);
-            log.debug("Updated placeholder comment {} with analysis results", placeholderCommentId);
-            return placeholderCommentId;
-        } else {
-            return commentAction.postSummaryResultWithId(markdownSummary);
+        List<String> existing;
+        try {
+            existing = commentAction.findCommentsByMarkers(List.of(
+                    CODECROW_REVIEW_MARKER, "[codecrow-ai-summarize]: #", "[Codecrow AI Summarize]"));
+        } catch (IOException unavailable) {
+            if (placeholderCommentId == null) throw unavailable;
+            log.warn("Could not list previous reports; updating the known placeholder: {}", unavailable.getMessage());
+            existing = List.of();
         }
+        String keep = placeholderCommentId != null ? placeholderCommentId : existing.stream().findFirst().orElse(null);
+        String content = markdownSummary + "\n\n" + CODECROW_REVIEW_MARKER;
+        if (keep == null) keep = commentAction.postSimpleComment(content);
+        else commentAction.updateComment(keep, content);
+        // Preserve the prior report until the replacement write is acknowledged.
+        for (String id : existing) {
+            if (!id.equals(keep)) {
+                try { commentAction.deleteCommentById(id); }
+                catch (IOException failed) { log.warn("Could not remove superseded review comment {}: {}", id, failed.getMessage()); }
+            }
+        }
+        return keep;
     }
-    
+
     private void postInlineIssueComments(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,

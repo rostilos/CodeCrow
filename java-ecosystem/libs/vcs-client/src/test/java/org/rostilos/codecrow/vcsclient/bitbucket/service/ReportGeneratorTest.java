@@ -107,8 +107,36 @@ class ReportGeneratorTest {
                 .contains("### Composer audit", "20 open dependency advisories (20 high, 0 medium, 0 low)")
                 .contains("https://app.example.com/dashboard/ws/projects/test-proj?prId=100&version=1&status=open&reviewCheckId=composer-audit&subTab=checks")
                 .doesNotContain("Reason for issue", "Test issue 21");
+        for (boolean github : List.of(false, true)) {
+            String markdown = generator.createMarkdownSummary(analysis, summary, github);
+            assertThat(markdown).contains("| 🔒 Composer audit | [20](", "View Composer audit dependency details")
+                    .contains("subTab=checks").doesNotContain("Advisory 1");
+        }
         check.getFindings().forEach(finding -> finding.setResolved(true));
         assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isEmpty();
+        check.getFindings().forEach(finding -> finding.setResolved(false));
+        analysis.getIssues().clear();
+        var onlyChecks = generator.createAnalysisSummary(analysis, 100L);
+        assertThat(generator.createMarkdownSummary(analysis, onlyChecks))
+                .contains("| 🔒 Composer audit | [20](").doesNotContain("No Issues Found");
+        check.getFindings().clear(); check.setComplete(false);
+        assertThat(generator.createMarkdownSummary(analysis, generator.createAnalysisSummary(analysis, 100L)))
+                .contains("coverage is incomplete").doesNotContain("No Issues Found");
+        check.setComplete(true);
+        check.getFindings().forEach(finding -> finding.setResolved(true));
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isEmpty();
+    }
+
+    @Test
+    void unavailableChecksKeepSourceReviewPublishableWithoutClaimingACleanAudit() throws Exception {
+        var analysis = buildAnalysis(List.of(buildIssue(1L, IssueSeverity.HIGH, false)));
+        when(checks.findForAnalysis(analysis)).thenThrow(new IllegalStateException("unavailable"));
+        var summary = generator.createAnalysisSummary(analysis, 100L);
+        assertThat(summary.getIssues()).hasSize(1);
+        assertThat(generator.createMarkdownSummary(analysis, summary))
+                .contains("Dependency checks unavailable", "coverage is incomplete", "subTab=checks")
+                .doesNotContain("No Issues Found");
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isNull();
     }
 
     @Nested

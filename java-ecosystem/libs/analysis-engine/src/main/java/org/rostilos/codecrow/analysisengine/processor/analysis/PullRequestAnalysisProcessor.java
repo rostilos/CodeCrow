@@ -242,6 +242,8 @@ public class PullRequestAnalysisProcessor {
                         reportingService, request.getPlaceholderCommentId(), request.getTargetBranchName(),
                         request.getSourceBranchName(), diffFingerprint, lockLease);
                 if (cacheHit != CacheHitType.NONE) {
+                    emitEvent(consumer, Map.of("type", "info", "state", "cache_hit",
+                            "message", "Reused saved review (" + cacheHit + ")"));
                     requireConfirmedLease(lockLease);
                     publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
@@ -256,6 +258,8 @@ public class PullRequestAnalysisProcessor {
                     requireConfirmedLease(lockLease);
                     publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                             AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                    emitEvent(consumer, Map.of("type", "info", "state", "cache_hit",
+                            "message", "Reused saved review (diff fingerprint)"));
                     return Map.of("status", "cached_by_fingerprint", "cached", true);
                 }
             } else {
@@ -954,8 +958,6 @@ public class PullRequestAnalysisProcessor {
         TreeMap<String, String> inputs = new TreeMap<>();
         putIdentity(inputs, "baseCommit", request.getBaseCommitHash());
         putIdentity(inputs, "targetHeadCommit", request.getTargetHeadCommitHash());
-        putIdentity(inputs, "headCommit", request.getCurrentCommitHash());
-        putIdentity(inputs, "previousCommit", request.getPreviousCommitHash());
         putIdentity(inputs, "targetBranch", request.getTargetBranchName());
         putIdentity(inputs, "sourceBranch", request.getSourceBranchName());
         putIdentity(inputs, "provider", request.getAiProvider());
@@ -967,11 +969,14 @@ public class PullRequestAnalysisProcessor {
         putIdentity(inputs, "useMcpTools", request.getUseMcpTools());
         putIdentity(inputs, "ragEnabled", request.getRagEnabled());
         putIdentity(inputs, "analysisType", request.getAnalysisType());
-        putIdentity(inputs, "analysisMode", request.getAnalysisMode());
         putIdentity(inputs, "projectRules", request.getProjectRules());
-        putIdentity(inputs, "taskHistory", request.getTaskHistoryContext());
         if (request.getProjectCapabilities() != null) {
-            putIdentity(inputs, "pluginSelection", request.getProjectCapabilities().fingerprint());
+            var capabilities = request.getProjectCapabilities();
+            // The transport fingerprint also embeds the head revision and incremental file assignments.
+            putIdentity(inputs, "pluginDescriptors", capabilities.descriptorFingerprint());
+            putIdentity(inputs, "repositoryPlugins", capabilities.repositoryPlugins());
+            putIdentity(inputs, "pluginEvidence", capabilities.detectionEvidence());
+            putIdentity(inputs, "unavailableCapabilities", capabilities.unavailableCapabilities());
         }
         if (request.getTaskContext() != null) {
             request.getTaskContext().entrySet().stream()
@@ -979,17 +984,10 @@ public class PullRequestAnalysisProcessor {
                     .forEach(entry -> putIdentity(
                             inputs, "taskContext:" + entry.getKey(), entry.getValue()));
         }
-        List<String> previousIssues = request.getPreviousCodeAnalysisIssues() == null
-                ? List.of()
-                : request.getPreviousCodeAnalysisIssues().stream()
-                        .map(String::valueOf)
-                        .sorted()
-                        .toList();
-        for (int index = 0; index < previousIssues.size(); index++) {
-            putIdentity(inputs, "previousIssue:" + index, previousIssues.get(index));
-        }
-        putIdentity(inputs, "changedFiles", sortedValues(request.getChangedFiles()));
-        putIdentity(inputs, "deletedFiles", sortedValues(request.getDeletedFiles()));
+        // Execution history and incremental selection change after a successful review;
+        // the cache describes the full proposed change, not the next invocation's prompt.
+        putIdentity(inputs, "changedFiles", sortedValues(request.getProposedTreeChangedFiles()));
+        putIdentity(inputs, "deletedFiles", sortedValues(request.getProposedTreeDeletedFiles()));
         return inputs;
     }
 

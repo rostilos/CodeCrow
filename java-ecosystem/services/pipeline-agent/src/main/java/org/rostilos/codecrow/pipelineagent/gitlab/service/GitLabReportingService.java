@@ -34,6 +34,7 @@ public class GitLabReportingService implements VcsReportingService {
      * Marker text used to identify CodeCrow comments for deletion.
      * This should be unique enough to not match user comments.
      */
+    private static final String CODECROW_INLINE_MARKER = "<!-- codecrow-inline-issue -->";
     private static final String CODECROW_COMMENT_MARKER = "<!-- codecrow-analysis-comment -->";
 
     private final ReportGenerator reportGenerator;
@@ -137,12 +138,11 @@ public class GitLabReportingService implements VcsReportingService {
             AnalysisSummary summary
     ) {
         List<AnalysisSummary.IssueSummary> issues = summary.getIssues();
-        if (issues == null || issues.isEmpty()) {
-            log.debug("No issues to post as inline comments");
-            return;
-        }
-        
         try {
+            if (issues == null || issues.isEmpty()) {
+                cleanupInlineComments(client, vcsRepoInfo, mergeRequestIid);
+                return;
+            }
             // Get MR metadata for diff refs (base_sha, head_sha, start_sha)
             JsonNode mrData = client.getMergeRequest(
                     vcsRepoInfo.getRepoWorkspace(),
@@ -169,6 +169,7 @@ public class GitLabReportingService implements VcsReportingService {
             
             log.debug("MR diff refs: base={}, head={}, start={}", baseSha, headSha, startSha);
             
+            cleanupInlineComments(client, vcsRepoInfo, mergeRequestIid);
             // Limit number of inline comments to avoid spam
             int maxInlineComments = 20;
             int posted = 0;
@@ -224,6 +225,20 @@ public class GitLabReportingService implements VcsReportingService {
         }
     }
     
+    private void cleanupInlineComments(GitLabClient client, VcsRepoInfo repository, Long prNumber) throws IOException {
+        var discussions = client.listMergeRequestDiscussions(repository.getRepoWorkspace(), repository.getRepoSlug(), prNumber);
+        for (var discussion : discussions) {
+            for (var note : discussion.path("notes")) {
+                String body = note.path("body").asText();
+                boolean inline = "DiffNote".equals(note.path("type").asText()) || note.hasNonNull("position");
+                if (inline && (body.contains(CODECROW_INLINE_MARKER) || body.contains(CODECROW_COMMENT_MARKER))) {
+                    client.deleteMergeRequestDiscussionNote(repository.getRepoWorkspace(), repository.getRepoSlug(),
+                            prNumber, discussion.path("id").asText(), note.path("id").asLong());
+                }
+            }
+        }
+    }
+
     /**
      * Builds the body content for an inline comment.
      */
@@ -275,7 +290,7 @@ public class GitLabReportingService implements VcsReportingService {
         }
         
         // Add CodeCrow marker for identification
-        body.append("\n\n").append(CODECROW_COMMENT_MARKER);
+        body.append("\n\n").append(CODECROW_INLINE_MARKER);
         
         return body.toString();
     }
@@ -298,81 +313,32 @@ public class GitLabReportingService implements VcsReportingService {
         }
     }
 
-    private void postOrUpdateComment(
-            GitLabClient client,
-            VcsRepoInfo vcsRepoInfo,
-            Long mergeRequestIid,
-            String markdownSummary,
-            String placeholderCommentId
-    ) throws IOException {
-
-        log.debug("Posting/updating summary comment to MR {} (placeholderCommentId={})", 
-            mergeRequestIid, placeholderCommentId);
-
-        if (placeholderCommentId != null) {
-            // Update the placeholder comment with the analysis results
-            String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
-            client.updateMergeRequestNote(
-                    vcsRepoInfo.getRepoWorkspace(),
-                    vcsRepoInfo.getRepoSlug(),
-                    mergeRequestIid,
-                    Long.parseLong(placeholderCommentId),
-                    markedComment
-            );
-            log.debug("Updated placeholder comment {} with analysis results", placeholderCommentId);
-        } else {
-            // Delete previous CodeCrow comments before posting new one
-            try {
-                deletePreviousComments(client, vcsRepoInfo, mergeRequestIid);
-                log.debug("Deleted previous CodeCrow comments from MR {}", mergeRequestIid);
-            } catch (Exception e) {
-                log.warn("Failed to delete previous comments: {}", e.getMessage());
-            }
-            
-            // Add marker to the comment for future identification
-            String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
-            
-            client.postMergeRequestComment(
-                    vcsRepoInfo.getRepoWorkspace(),
-                    vcsRepoInfo.getRepoSlug(),
-                    mergeRequestIid,
-                    markedComment
-            );
+    private void postOrUpdateComment(GitLabClient client, VcsRepoInfo repository, Long prNumber,
+                                     String markdown, String placeholderCommentId) throws IOException {
+        String owner = repository.getRepoWorkspace(), repo = repository.getRepoSlug();
+        List<Long> existing;
+        try {
+            existing = client.listMergeRequestNotes(owner, repo, prNumber).stream()
+                .filter(note -> !"DiffNote".equals(note.get("type")) && note.get("position") == null)
+                .filter(note -> String.valueOf(note.get("body")).contains(CODECROW_COMMENT_MARKER))
+                .map(note -> ((Number) note.get("id")).longValue()).distinct().toList();
+        } catch (IOException unavailable) {
+            if (placeholderCommentId == null) throw unavailable;
+            log.warn("Could not list previous reports; updating the known placeholder: {}", unavailable.getMessage());
+            existing = List.of();
         }
-    }
-    
-    private void deletePreviousComments(
-            GitLabClient client,
-            VcsRepoInfo vcsRepoInfo,
-            long mergeRequestIid
-    ) throws IOException {
-        List<Map<String, Object>> notes = client.listMergeRequestNotes(
-                vcsRepoInfo.getRepoWorkspace(),
-                vcsRepoInfo.getRepoSlug(),
-                mergeRequestIid
-        );
-        
-        for (Map<String, Object> note : notes) {
-            Object bodyObj = note.get("body");
-            if (bodyObj != null && bodyObj.toString().contains(CODECROW_COMMENT_MARKER)) {
-                Object idObj = note.get("id");
-                if (idObj instanceof Number) {
-                    long noteId = ((Number) idObj).longValue();
-                    try {
-                        client.deleteMergeRequestNote(
-                                vcsRepoInfo.getRepoWorkspace(),
-                                vcsRepoInfo.getRepoSlug(),
-                                mergeRequestIid,
-                                noteId
-                        );
-                        log.debug("Deleted previous CodeCrow comment {}", noteId);
-                    } catch (Exception e) {
-                        log.warn("Failed to delete comment {}: {}", noteId, e.getMessage());
-                    }
-                }
+        Long keep = placeholderCommentId != null ? Long.valueOf(placeholderCommentId) : existing.stream().findFirst().orElse(null);
+        String content = CODECROW_COMMENT_MARKER + "\n" + markdown;
+        if (keep == null) client.postMergeRequestComment(owner, repo, prNumber, content);
+        else client.updateMergeRequestNote(owner, repo, prNumber, keep, content);
+        for (Long id : existing) {
+            if (!id.equals(keep)) {
+                try { client.deleteMergeRequestNote(owner, repo, prNumber, id); }
+                catch (IOException failed) { log.warn("Could not remove superseded review comment {}: {}", id, failed.getMessage()); }
             }
         }
     }
+
     
     @Override
     public String postComment(

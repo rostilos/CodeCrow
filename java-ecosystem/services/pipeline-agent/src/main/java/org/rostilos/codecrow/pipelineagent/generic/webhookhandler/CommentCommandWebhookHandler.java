@@ -185,18 +185,14 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
 
         boolean promptDryRun = PromptDryRunMode.isEnabledForProject(project.getId());
         if (promptDryRun) {
-            // A full-pipeline capture must traverse immutable PR acquisition,
-            // enrichment, structural retrieval, and Stage 0-3 even when this
-            // commit already has an analysis. PullRequestAnalysisProcessor also
-            // bypasses its persistence caches; bypass this command-level shortcut so
-            // the normal user trigger reaches that processor.
+            // Prompt capture must reach the full pipeline even for a previously reviewed commit.
             eventConsumer.accept(Map.of(
                 "type", "status",
                 "state", "cache_bypassed",
-                "message", "Prompt dry run bypassing the command analysis cache"
+                "message", "Prompt dry run bypassing the analysis cache"
             ));
             log.warn(
-                "Prompt dry run bypassing comment-command analysis cache for project={}, PR={}",
+                "Prompt dry run bypassing analysis cache for project={}, PR={}",
                 project.getId(), payload.pullRequestId());
         } else {
             eventConsumer.accept(Map.of(
@@ -206,32 +202,8 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             ));
         }
 
-        // Check for cached analysis only for a normal paid review. Prompt dry-run
-        // must reach the complete processor path regardless of prior results.
-        if (!promptDryRun && payload.commitHash() != null && payload.pullRequestId() != null) {
-            Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
-                project.getId(),
-                payload.commitHash(),
-                Long.parseLong(payload.pullRequestId())
-            );
-            
-            if (cachedAnalysis.isPresent()) {
-                eventConsumer.accept(Map.of(
-                    "type", "status",
-                    "state", "cache_hit",
-                    "message", "Found existing analysis, posting results..."
-                ));
-                
-                // Return cached result - the VCS reporting service will post it
-                return WebhookResult.success("Analysis retrieved from cache", Map.of(
-                    "cached", true,
-                    "analysisId", cachedAnalysis.get().getId(),
-                    "commandType", "analyze"
-                ));
-            }
-        }
-        
-        // Run PR analysis using the processor
+        // The shared processor resolves canonical revisions, checks every cache layer,
+        // and publishes both cached and fresh results under the PR lease.
         return runPrAnalysis(payload, project, eventConsumer, "analyze");
     }
     
@@ -467,16 +439,13 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             }
             
             boolean cached = Boolean.TRUE.equals(result.get("cached"));
-            Object analysisId = result.get("analysisId");
             
-            if (cached && analysisId != null) {
+            if (cached) {
                 return WebhookResult.success("Analysis result retrieved from cache", Map.of(
-                    "cached", true,
-                    "analysisId", analysisId,
-                    "commandType", commandType
-                ));
+                    "cached", true, "commandType", commandType));
             }
             
+            Object analysisId = result.get("analysisId");
             // Check if analysis was successful - analysisId may be null if result was posted directly
             if (analysisId != null) {
                 return WebhookResult.success("Analysis completed successfully", Map.of(
