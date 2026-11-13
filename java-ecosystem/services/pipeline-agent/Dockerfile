@@ -20,4 +20,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 ENV JAVA_OPTS="-Xms512m -Xmx1g -XX:+UseG1GC -XX:G1HeapRegionSize=16m -XX:+UseStringDeduplication"
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["sh", "-c", "java $JAVA_OPTS -Dloader.path=/app/plugins -jar app.jar"]
+CMD ["sh", "-c", "exec java $JAVA_OPTS -XX:+ExitOnOutOfMemoryError -Dloader.path=/app/plugins -jar app.jar"]

@@ -15,6 +15,7 @@ import java.util.Optional;
 
 @Repository
 public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long> {
+    // Fetch issues separately: collection joins repeat the large saved source payload per issue.
     interface PendingQaDocumentation {
         Long getId();
         Long getProjectId();
@@ -141,8 +142,14 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
 
     List<CodeAnalysis> findByProjectIdAndPrNumberOrderByPrVersionDescIdDesc(Long projectId, Long prNumber);
 
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findLatestByProjectId(Long projectId) {
+        var analyses = findLatestWithoutIssuesByProjectId(projectId);
+        analyses.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
             "project",
             "project.workspace",
             "project.vcsBinding",
@@ -153,15 +160,21 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
             "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
             "ORDER BY ca2.createdAt DESC LIMIT 1)")
-    Optional<CodeAnalysis> findLatestByProjectId(@Param("projectId") Long projectId);
+    Optional<CodeAnalysis> findLatestWithoutIssuesByProjectId(@Param("projectId") Long projectId);
 
     void deleteByProjectId(Long projectId);
 
     @Query("SELECT COALESCE(MAX(a.prVersion), 0) FROM CodeAnalysis a WHERE a.project.id = :projectId AND a.prNumber = :prNumber")
     Optional<Integer> findMaxPrVersion(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findByProjectIdAndPrNumberWithMaxPrVersion(Long projectId, Long prNumber) {
+        var analyses = findLatestPrWithoutIssues(projectId, prNumber);
+        analyses.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
             "project",
             "project.workspace",
             "project.vcsBinding",
@@ -170,7 +183,7 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.aiBinding.aiConnection"
     })
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId AND a.prNumber = :prNumber AND a.prVersion = (SELECT MAX(b.prVersion) FROM CodeAnalysis b WHERE b.project.id = :projectId AND b.prNumber = :prNumber)")
-    Optional<CodeAnalysis> findByProjectIdAndPrNumberWithMaxPrVersion(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
+    Optional<CodeAnalysis> findLatestPrWithoutIssues(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 
     /**
      * Paginated search for analyses with optional filters.
@@ -189,20 +202,32 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
      * Find analysis by ID with issues eagerly loaded for quality gate evaluation.
      * Note: Quality gate conditions are fetched separately to avoid MultipleBagFetchException.
      */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findByIdWithIssues(Long id) {
+        var analyses = findForQualityGateWithoutIssues(id);
+        analyses.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
             "project",
             "project.workspace"
     })
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = :id")
-    Optional<CodeAnalysis> findByIdWithIssues(@Param("id") Long id);
+    Optional<CodeAnalysis> findForQualityGateWithoutIssues(@Param("id") Long id);
 
     /**
      * Find the most recent ACCEPTED analysis for a project with the same diff fingerprint.
      * Used for content-based cache: reuse analysis when the same code changes appear in a different PR.
      */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findTopByProjectIdAndDiffFingerprint(Long projectId, String diffFingerprint) {
+        var analyses = findTopWithoutIssuesByProjectIdAndDiffFingerprint(projectId, diffFingerprint);
+        analyses.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
             "project",
             "project.workspace",
             "project.vcsBinding",
@@ -214,7 +239,7 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "AND ca2.diffFingerprint = :diffFingerprint " +
             "AND ca2.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
             "ORDER BY ca2.createdAt DESC LIMIT 1)")
-    Optional<CodeAnalysis> findTopByProjectIdAndDiffFingerprint(
+    Optional<CodeAnalysis> findTopWithoutIssuesByProjectIdAndDiffFingerprint(
             @Param("projectId") Long projectId,
             @Param("diffFingerprint") String diffFingerprint);
 
@@ -222,8 +247,14 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
      * Find the most recent ACCEPTED analysis for a project + commit hash (any PR number).
      * Fallback cache for close/reopen scenarios where the same commit gets a new PR number.
      */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default Optional<CodeAnalysis> findTopByProjectIdAndCommitHash(Long projectId, String commitHash) {
+        var analyses = findTopWithoutIssuesByProjectIdAndCommitHash(projectId, commitHash);
+        analyses.ifPresent(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
             "project",
             "project.workspace",
             "project.vcsBinding",
@@ -235,7 +266,7 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "AND ca2.commitHash = :commitHash " +
             "AND ca2.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
             "ORDER BY ca2.createdAt DESC LIMIT 1)")
-    Optional<CodeAnalysis> findTopByProjectIdAndCommitHash(
+    Optional<CodeAnalysis> findTopWithoutIssuesByProjectIdAndCommitHash(
             @Param("projectId") Long projectId,
             @Param("commitHash") String commitHash);
 
@@ -259,15 +290,27 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
      * Find all analyses for a PR across all versions, ordered by version descending.
      * Used to provide LLM with full issue history including resolved issues.
      */
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default List<CodeAnalysis> findAllByProjectIdAndPrNumberOrderByPrVersionDesc(Long projectId, Long prNumber) {
+        var analyses = findHistoryWithoutIssues(projectId, prNumber);
+        analyses.forEach(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId AND ca.prNumber = :prNumber ORDER BY ca.prVersion DESC")
-    List<CodeAnalysis> findAllByProjectIdAndPrNumberOrderByPrVersionDesc(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
+    List<CodeAnalysis> findHistoryWithoutIssues(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 
     /**
      * Find the latest-version PR analyses associated with the same task key.
      * Used to provide a bounded cross-PR task history context for reopened tasks.
      */
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default List<CodeAnalysis> findLatestPrAnalysesByProjectIdAndTaskId(Long projectId, String taskId, Long excludedPrNumber, Pageable pageable) {
+        var analyses = findTaskHistoryWithoutIssues(projectId, taskId, excludedPrNumber, pageable);
+        analyses.forEach(value -> org.hibernate.Hibernate.initialize(value.getIssues()));
+        return analyses;
+    }
+
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
             "AND a.taskId = :taskId " +
             "AND a.prNumber IS NOT NULL " +
@@ -279,7 +322,7 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "AND b.taskId = :taskId " +
             "AND b.analysisType = org.rostilos.codecrow.core.model.codeanalysis.AnalysisType.PR_REVIEW) " +
             "ORDER BY a.createdAt DESC")
-    List<CodeAnalysis> findLatestPrAnalysesByProjectIdAndTaskId(
+    List<CodeAnalysis> findTaskHistoryWithoutIssues(
             @Param("projectId") Long projectId,
             @Param("taskId") String taskId,
             @Param("excludedPrNumber") Long excludedPrNumber,

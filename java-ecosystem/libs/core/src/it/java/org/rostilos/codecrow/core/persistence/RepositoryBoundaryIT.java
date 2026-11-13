@@ -427,17 +427,21 @@ class RepositoryBoundaryIT {
 
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
 
-    @ParameterizedTest @ValueSource(booleans = {true, false})
-    void reviewLookupLoadsIssuesWithoutRepeatingTheSavedPayload(boolean byId) {
+    @ParameterizedTest @ValueSource(strings = {"id", "commitPr", "latest", "version", "fingerprint",
+            "commit", "history", "task", "idWithIssues",
+            "fileIssues", "branchIssues", "prIssues", "multiPrIssues"})
+    void reviewLookupLoadsIssuesWithoutRepeatingTheSavedPayload(String lookup) {
         var source = new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> {
             var project = binding("qa-payload-" + UUID.randomUUID(), "repo", "one", workspace()).getProject();
             var analysis = new CodeAnalysis(); analysis.setProject(project);
             analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
             analysis.setCommitHash("qa-head"); analysis.setPrVersion(1);
             analysis.setSourceBranchName("feature/QA-1");
+            analysis.setTaskId("QA-1"); analysis.setDiffFingerprint("qa-fingerprint");
+            analysis.setBranchName("main");
             analysis.setPrChangeSummaryPayload("x".repeat(1_000_000));
             for (int i = 0; i < 30; i++) {
-                var issue = new CodeAnalysisIssue(); issue.setFilePath("file-" + i + ".java");
+                var issue = new CodeAnalysisIssue(); issue.setFilePath("file.java");
                 issue.setSeverity(IssueSeverity.LOW); issue.setReason("test issue");
                 analysis.addIssue(issue);
             }
@@ -446,9 +450,36 @@ class RepositoryBoundaryIT {
         });
         SQL.set(new java.util.ArrayList<>());
         try {
-            var loaded = (byId ? changeSummaries.findByIdAndProjectId(source[0], source[1])
-                    : changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "qa-head", 9L))
-                    .orElseThrow();
+            if (lookup.endsWith("Issues") && !lookup.equals("idWithIssues")) {
+                var history = switch (lookup) {
+                    case "fileIssues" -> issues.findByProjectIdAndFilePath(source[1], "file.java");
+                    case "branchIssues" -> issues.findByProjectIdAndBranchNameAndFilePath(source[1], "main", "file.java");
+                    case "prIssues" -> issues.findByProjectIdAndPrNumberAndFilePathNewestFirst(source[1], 9L, "file.java");
+                    case "multiPrIssues" -> issues.findByProjectIdAndPrNumberInAndFilePathNewestFirst(source[1], java.util.Set.of(9L), "file.java");
+                    default -> throw new AssertionError(lookup);
+                };
+                assertThat(history).hasSize(30).allSatisfy(issue -> {
+                    assertThat(issue.getAnalysis().getPrChangeSummaryPayload()).hasSize(1_000_000);
+                    if (lookup.equals("fileIssues")) {
+                        assertThat(issue.getAnalysis().getProject().getWorkspace().getName()).isNotBlank();
+                    }
+                });
+                assertThat(SQL.get()).noneMatch(sql -> sql.contains("pr_change_summary_payload")
+                        && sql.contains("code_analysis_issue"));
+                return;
+            }
+            var loaded = switch (lookup) {
+                case "id" -> changeSummaries.findByIdAndProjectId(source[0], source[1]).orElseThrow();
+                case "commitPr" -> changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "qa-head", 9L).orElseThrow();
+                case "latest" -> changeSummaries.findLatestByProjectId(source[1]).orElseThrow();
+                case "version" -> changeSummaries.findByProjectIdAndPrNumberWithMaxPrVersion(source[1], 9L).orElseThrow();
+                case "fingerprint" -> changeSummaries.findTopByProjectIdAndDiffFingerprint(source[1], "qa-fingerprint").orElseThrow();
+                case "commit" -> changeSummaries.findTopByProjectIdAndCommitHash(source[1], "qa-head").orElseThrow();
+                case "history" -> changeSummaries.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(source[1], 9L).get(0);
+                case "task" -> changeSummaries.findLatestPrAnalysesByProjectIdAndTaskId(source[1], "QA-1", null, PageRequest.of(0, 1)).get(0);
+                case "idWithIssues" -> changeSummaries.findByIdWithIssues(source[0]).orElseThrow();
+                default -> throw new AssertionError(lookup);
+            };
             assertThat(loaded.getPrChangeSummaryPayload()).hasSize(1_000_000);
             assertThat(loaded.getIssues()).as("issues remain available after the repository transaction").hasSize(30);
             assertThat(SQL.get()).as("the saved payload must not be repeated for each issue row")
@@ -460,6 +491,59 @@ class RepositoryBoundaryIT {
             assertThat(changeSummaries.findSourceBranchForQa(source[0], source[1] + 100000)).isEmpty();
             assertThat(changeSummaries.findByIdAndProjectId(source[0], source[1] + 100000)).isEmpty();
             assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "other-head", 9L)).isEmpty();
+        } finally { SQL.remove(); }
+    }
+
+    @Test void reviewHistoryPreservesVersionsTenantScopeAndDatabasePagination() {
+        var projects = new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> {
+            var owner = binding("history-owner-" + UUID.randomUUID(), "repo", "one", workspace()).getProject();
+            var other = binding("history-other-" + UUID.randomUUID(), "repo", "two", workspace()).getProject();
+            for (var project : java.util.List.of(owner, other)) {
+                for (long pr : new long[] {41, 42}) {
+                    for (int version = 1; version <= 3; version++) {
+                        var analysis = reviewAnalysis(project, pr, version);
+                        analysis.setTaskId("TASK-1");
+                        org.springframework.test.util.ReflectionTestUtils.setField(analysis, "createdAt",
+                                OffsetDateTime.now().minusDays(100 - pr - version));
+                        analysis.setPrChangeSummaryPayload("saved-" + pr + "-" + version);
+                        var issue = new CodeAnalysisIssue(); issue.setFilePath("file.java");
+                        issue.setSeverity(IssueSeverity.LOW); issue.setReason("version-" + version);
+                        issue.setResolved(version == 1); analysis.addIssue(issue);
+                        em.persist(issue);
+                    }
+                }
+            }
+            em.flush();
+            return new Long[] {owner.getId(), other.getId()};
+        });
+        SQL.set(new java.util.ArrayList<>());
+        try {
+            var history = changeSummaries.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projects[0], 41L);
+            assertThat(history).extracting(CodeAnalysis::getPrVersion).containsExactly(3, 2, 1);
+            assertThat(history).allSatisfy(analysis -> {
+                assertThat(analysis.getProject().getId()).isEqualTo(projects[0]);
+                assertThat(analysis.getIssues()).singleElement().satisfies(issue -> {
+                    assertThat(issue.getReason()).isEqualTo("version-" + analysis.getPrVersion());
+                    assertThat(issue.isResolved()).isEqualTo(analysis.getPrVersion() == 1);
+                });
+            });
+            SQL.get().clear();
+            var page = changeSummaries.findLatestPrAnalysesByProjectIdAndTaskId(
+                    projects[0], "TASK-1", null, PageRequest.of(0, 1));
+            assertThat(page).singleElement().satisfies(analysis -> {
+                assertThat(analysis.getPrNumber()).isEqualTo(42L);
+                assertThat(analysis.getPrVersion()).isEqualTo(3);
+                assertThat(analysis.getProject().getId()).isEqualTo(projects[0]);
+                assertThat(analysis.getIssues()).hasSize(1);
+            });
+            assertThat(SQL.get()).anyMatch(sql -> sql.contains("pr_change_summary_payload")
+                    && sql.contains("fetch first"));
+            assertThat(SQL.get()).noneMatch(sql -> sql.contains("pr_change_summary_payload")
+                    && sql.contains("join code_analysis_issue"));
+            assertThat(changeSummaries.findLatestPrAnalysesByProjectIdAndTaskId(
+                    projects[0], "TASK-1", 42L, PageRequest.of(0, 1)))
+                    .extracting(CodeAnalysis::getPrNumber).containsExactly(41L);
+            assertThat(changeSummaries.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projects[1] + 100000, 41L)).isEmpty();
         } finally { SQL.remove(); }
     }
 
