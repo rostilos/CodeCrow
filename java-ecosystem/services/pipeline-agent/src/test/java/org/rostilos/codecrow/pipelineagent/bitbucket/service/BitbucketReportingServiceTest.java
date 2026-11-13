@@ -83,6 +83,73 @@ class BitbucketReportingServiceTest {
     }
 
     @Test
+    void postsComposerAdvisoriesOnTheirManifestAndLockfileAnchors() throws IOException {
+        List<CapturedRequest> requests = new ArrayList<>();
+        when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(capturingClient(requests, false));
+        when(summary.getIssues()).thenReturn(List.of(
+                new AnalysisSummary.IssueSummary(IssueSeverity.HIGH, "SECURITY", "composer.json", 3,
+                        "phpmailer/phpmailer: TEST-001", "Known dependency vulnerability", "Update", null,
+                        null, 1L, "    \"phpmailer/phpmailer\": \"6.4.1\","),
+                new AnalysisSummary.IssueSummary(IssueSeverity.HIGH, "SECURITY", "app/composer.lock", 7,
+                        "a/change: TEST-002", "Known dependency vulnerability", "Update", null,
+                        null, 2L, "    \"version\": \"1.1.0\",")));
+
+        service.postAnalysisResults(analysis, project, 42L, 77L, "99");
+
+        var comments = requests.stream().filter(request -> request.method().equals("POST"))
+                .filter(request -> request.path().endsWith("/comments")).toList();
+        assertThat(comments).hasSize(2);
+        var manifest = OBJECT_MAPPER.readTree(comments.get(0).body()).path("inline");
+        var lock = OBJECT_MAPPER.readTree(comments.get(1).body()).path("inline");
+        assertThat(manifest.path("path").asText()).isEqualTo("composer.json");
+        assertThat(manifest.path("to").asInt()).isEqualTo(3);
+        assertThat(lock.path("path").asText()).isEqualTo("app/composer.lock");
+        assertThat(lock.path("to").asInt()).isEqualTo(7);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"new", "existing", "resolved", "read-failure", "lost-response"})
+    void publishesOneCheckSummaryAndDoesNotRetryAmbiguousWrites(String scenario) throws Exception {
+        List<CapturedRequest> requests = new ArrayList<>();
+        var builder = capturingClient(requests, false).newBuilder();
+        builder.interceptors().add(0, chain -> {
+            var request = chain.request();
+            String path = request.url().encodedPath();
+            if (request.method().equals("GET") && path.endsWith("/pullrequests/42/comments")) {
+                String json = scenario.equals("existing") || scenario.equals("resolved")
+                        ? "{\"values\":[{\"id\":700,\"content\":{\"raw\":\"[codecrow-review-checks]: # old report\"}}]}"
+                        : "{\"values\":[]}";
+                return new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                        .code(scenario.equals("read-failure") ? 503 : 200).message("fixture")
+                        .body(ResponseBody.create(json, MediaType.get("application/json"))).build();
+            }
+            if (scenario.equals("lost-response") && request.method().equals("POST")) {
+                Buffer buffer = new Buffer(); request.body().writeTo(buffer);
+                String body = buffer.readUtf8();
+                if (body.contains("codecrow-review-checks")) {
+                    requests.add(new CapturedRequest(request.method(), path, body));
+                    throw new IOException("Response lost after write");
+                }
+            }
+            return chain.proceed(request);
+        });
+        when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any())).thenReturn(builder.build());
+        when(reportGenerator.createReviewChecksMarkdown(analysis, 77L)).thenReturn(
+                scenario.equals("resolved") ? "" : "### Composer audit\n20 open dependency advisories\n[View](https://app.example?reviewCheckId=composer-audit)");
+
+        service.postAnalysisResults(analysis, project, 42L, 77L, "99");
+
+        var grouped = requests.stream().filter(request -> request.body().contains("codecrow-review-checks")
+                || request.path().endsWith("/comments/700")).toList();
+        assertThat(grouped).hasSize(scenario.equals("read-failure") ? 0 : 1);
+        if (!grouped.isEmpty()) assertThat(grouped.get(0).method()).isEqualTo(
+                scenario.equals("existing") ? "PUT" : scenario.equals("resolved") ? "DELETE" : "POST");
+        assertThat(requests).anyMatch(request -> request.method().equals("POST") && request.body().contains("\"inline\""));
+        assertThat(requests).anyMatch(request -> request.path().endsWith("/commit/head-sha/reports/org.rostilos.codecrow"));
+    }
+
+    @Test
     void postsNativeInlineCommentsWithoutDetailedIssuesReply() throws IOException {
         List<CapturedRequest> requests = new ArrayList<>();
         when(vcsClientProvider.getHttpClient(org.mockito.ArgumentMatchers.any()))

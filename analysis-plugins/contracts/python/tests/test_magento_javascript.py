@@ -193,3 +193,19 @@ def test_template_event_parser_keeps_only_direct_literal_browser_events():
             3,
         ),
     )
+
+
+def test_template_event_parser_rejects_long_literal_event_names():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    plugin = catalog.implementation("magento")
+    javascript = importlib.import_module(plugin.__class__.__module__ + ".javascript")
+    event_name = "checkout:" + ("x" * 180)
+
+    references = javascript.extract_template_event_references(f"""
+        <script>
+            window.addEventListener("{event_name}", update);
+            window.dispatchEvent(new CustomEvent("{event_name}"));
+        </script>
+    """)
+
+    assert references == ()

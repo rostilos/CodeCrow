@@ -18,9 +18,11 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.net.http.HttpClient;
+import java.net.http.HttpTimeoutException;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.crypto.KeyGenerator;
 
@@ -37,6 +39,17 @@ class QaDocGenerationServiceTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private Project project;
 
+    @Test
+    void cancelledPreparationDoesNotSubmitQaGeneration() {
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(() -> service.generateQaDocumentation(
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                    .isInstanceOf(java.io.InterruptedIOException.class);
+            assertThat(mockWebServer.getRequestCount()).isZero();
+        } finally { Thread.interrupted(); }
+    }
+
     @BeforeEach
     void setUp() throws IOException {
         mockWebServer = new MockWebServer();
@@ -48,7 +61,9 @@ class QaDocGenerationServiceTest {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
 
-        service = new QaDocGenerationService(baseUrl, TEST_SERVICE_SECRET, createTestEncryptionService());
+        service = new QaDocGenerationService(baseUrl, TEST_SERVICE_SECRET, createTestEncryptionService(),
+                org.mockito.Mockito.mock(org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService.class),
+                org.mockito.Mockito.mock(org.rostilos.codecrow.vcsclient.VcsClientProvider.class));
 
         project = new Project();
         ReflectionTestUtils.setField(project, "id", 42L);
@@ -102,6 +117,34 @@ class QaDocGenerationServiceTest {
                 "High", "Story", OffsetDateTime.now(), OffsetDateTime.now(),
                 "https://test.atlassian.net/browse/PROJ-123"
         );
+    }
+
+    @Test
+    void forwardsProjectContextLimitThroughHttpToQaMetadata() throws Exception {
+        var config = new org.rostilos.codecrow.core.model.project.config.ProjectConfig();
+        config.setMaxAnalysisTokenLimit(32768);
+        project.setConfiguration(config);
+        mockWebServer.enqueue(new MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("{\"documentation\":\"QA document\",\"documentation_needed\":true}"));
+        service.generateQaDocumentation(project, 9L, 0, 1, Map.of(), ctx(baseConfig(), null, null, null, null));
+        JsonNode body = mapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(body.path("pr_metadata").path("maxAllowedTokens").asInt()).isEqualTo(32768);
+    }
+
+    @Test
+    void expiredReviewPathsAreNotForwardedWhenQaSnapshotCannotBeRebuilt() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setBody("{\"documentation\":\"QA document\"}"));
+        var savedRepository = Map.<String, Object>of("localRepoPath", "/gone/review",
+                "localReviewOverlayPath", "/gone/overlay", "localRepoRevision", "target-old");
+        var summary = Map.<String, Object>of("projectId", 42L, "pullRequestId", 7L,
+                "sourceRevision", "head", "toolContext", Map.of("repository", savedRepository));
+        var context = QaDocGenerationContext.builder().qaConfig(baseConfig()).sourceRevision("head")
+                .prChangeSummary(summary).build();
+        service.generateQaDocumentation(project, 7L, 0, 0, Map.of(), context);
+        JsonNode sent = mapper.readTree(mockWebServer.takeRequest().getBody().readUtf8());
+        assertThat(sent.at("/pr_change_summary/toolContext/repository/localRepoPath").isMissingNode()).isTrue();
+        assertThat(sent.at("/pr_change_summary/toolContext/repository/localReviewOverlayPath").isMissingNode()).isTrue();
+        assertThat(savedRepository.get("localRepoPath")).isEqualTo("/gone/review");
     }
 
     /**
@@ -219,8 +262,8 @@ class QaDocGenerationServiceTest {
         }
 
         @Test
-        @DisplayName("should omit pr_metadata when empty")
-        void shouldOmitPrMetadataWhenEmpty() throws Exception {
+        @DisplayName("should include the effective context limit without optional metadata")
+        void shouldIncludeContextLimitWhenMetadataEmpty() throws Exception {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
                     .setHeader("Content-Type", "application/json")
@@ -230,7 +273,8 @@ class QaDocGenerationServiceTest {
 
             RecordedRequest request = mockWebServer.takeRequest();
             JsonNode body = mapper.readTree(request.getBody().readUtf8());
-            assertThat(body.has("pr_metadata")).isFalse();
+            assertThat(body.path("pr_metadata").path("maxAllowedTokens").asInt())
+                    .isEqualTo(project.getEffectiveConfig().maxAnalysisTokenLimit());
         }
 
         @Test
@@ -268,7 +312,6 @@ class QaDocGenerationServiceTest {
         @Test
         @DisplayName("should throw IOException when server returns 5xx")
         void shouldThrowOn5xx() {
-            // RetryExecutor will retry on 5xx, but all attempts return 500 → IOException
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
@@ -276,7 +319,57 @@ class QaDocGenerationServiceTest {
 
             assertThatThrownBy(() ->
                     service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
-            ).isInstanceOf(Exception.class);
+            ).isInstanceOf(IOException.class).hasMessageContaining("not automatically retried");
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+        }
+
+        @Test
+        void preservesSafeFailureDiagnosticsWithoutReplayingGeneration() {
+            mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("""
+                    {"detail":{"error":"qa_generation_failed",
+                    "error_id":"ce9d800a-4103-4b92-9565-09da9b69b475",
+                    "error_type":"ServiceUnavailable","upstream_status":503,
+                    "message":"secret provider response"}}
+                    """));
+
+            assertThatThrownBy(() -> service.generateQaDocumentation(
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Inference orchestrator returned 500")
+                    .hasMessageContaining("error_id=ce9d800a-4103-4b92-9565-09da9b69b475")
+                    .hasMessageContaining("error_type=ServiceUnavailable")
+                    .hasMessageContaining("upstream_status=503")
+                    .hasMessageContaining("not automatically retried")
+                    .hasMessageNotContaining("secret provider response");
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+        }
+
+        @Test
+        void proxyAndMalformedErrorsDoNotExposeResponseBodies() {
+            for (String body : List.of("<html>secret proxy response</html>", "null", "",
+                    "{\"detail\":{\"error\":\"qa_generation_failed\",\"error_id\":\"secret\"}}",
+                    "secret".repeat(3_000))) {
+                mockWebServer.enqueue(new MockResponse().setResponseCode(503).setBody(body));
+                assertThatThrownBy(() -> service.generateQaDocumentation(
+                        project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                        .isInstanceOf(IOException.class)
+                        .hasMessage("Inference orchestrator returned 503; not automatically retried");
+            }
+            assertThat(mockWebServer.getRequestCount()).isEqualTo(5);
+        }
+
+        @Test
+        void timeoutDoesNotRepeatPaidGeneration() throws Exception {
+            var client = org.mockito.Mockito.mock(HttpClient.class);
+            ReflectionTestUtils.setField(service, "httpClient", client);
+            org.mockito.Mockito.when(client.send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                    .thenThrow(new HttpTimeoutException("request timed out"));
+
+            assertThatThrownBy(() -> service.generateQaDocumentation(
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
+                    .isInstanceOf(IOException.class).hasMessageContaining("not automatically retried");
+            org.mockito.Mockito.verify(client, org.mockito.Mockito.times(1))
+                    .send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
 
         @Test
@@ -398,6 +491,44 @@ class QaDocGenerationServiceTest {
 
             assertThat(result).contains("[LOW]");
             assertThat(result).contains("Unused import");
+        }
+
+        @Test
+        @DisplayName("should preserve complete issue records beyond the former field and summary limits")
+        void shouldPreserveCompleteLargeIssueRecords() {
+            CodeAnalysis analysis = new CodeAnalysis();
+
+            String completeReason = "reason-body-" + "r".repeat(12_000) + "-REASON-END";
+            String completeFix = "fix-body-" + "f".repeat(1_000) + "-FIX-END";
+            CodeAnalysisIssue largeIssue = new CodeAnalysisIssue();
+            largeIssue.setSeverity(IssueSeverity.HIGH);
+            largeIssue.setFilePath("src/Large.java");
+            largeIssue.setTitle("Large evidence record");
+            largeIssue.setReason(completeReason);
+            largeIssue.setSuggestedFixDescription(completeFix);
+            largeIssue.setLineNumber(7);
+            analysis.addIssue(largeIssue);
+
+            CodeAnalysisIssue trailingIssue = new CodeAnalysisIssue();
+            trailingIssue.setSeverity(IssueSeverity.MEDIUM);
+            trailingIssue.setFilePath("src/AfterLimit.java");
+            trailingIssue.setTitle("TRAILING-ISSUE-TITLE");
+            trailingIssue.setReason("TRAILING-ISSUE-REASON");
+            trailingIssue.setSuggestedFixDescription("TRAILING-ISSUE-FIX");
+            trailingIssue.setLineNumber(99);
+            analysis.addIssue(trailingIssue);
+
+            String result = QaDocGenerationService.buildAnalysisSummary(analysis);
+
+            assertThat(result)
+                    .hasSizeGreaterThan(10_000)
+                    .contains(completeReason)
+                    .contains(completeFix)
+                    .containsOnlyOnce("TRAILING-ISSUE-TITLE")
+                    .containsOnlyOnce("TRAILING-ISSUE-REASON")
+                    .containsOnlyOnce("TRAILING-ISSUE-FIX")
+                    .contains("`src/AfterLimit.java`")
+                    .doesNotContain("... (truncated");
         }
 
         @Test

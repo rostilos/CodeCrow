@@ -42,6 +42,10 @@ public final class AuthorizedVcsTransport {
         return Optional.ofNullable(accessToken);
     }
 
+    public AuthorizedVcsTransport withHttpClient(OkHttpClient client) {
+        return new AuthorizedVcsTransport(client, accessToken);
+    }
+
     @Override
     public String toString() {
         return "AuthorizedVcsTransport{httpClient=" + httpClient.getClass().getSimpleName()

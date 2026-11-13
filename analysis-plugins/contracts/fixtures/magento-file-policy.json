@@ -1,0 +1,287 @@
+{
+  "policyCases": [
+    {
+      "name": "generated code",
+      "path": "generated/code/Magento/Catalog/Model/Product/Proxy.php",
+      "expected": "generated"
+    },
+    {
+      "name": "runtime var output",
+      "path": "var/cache/mage-tags/cache-entry",
+      "expected": "generated"
+    },
+    {
+      "name": "deployed static output",
+      "path": "pub/static/frontend/Acme/theme/en_US/app.js",
+      "expected": "generated"
+    },
+    {
+      "name": "development tree",
+      "path": "dev/tests/integration/testsuite/Acme/Fixture.php",
+      "expected": "excluded"
+    },
+    {
+      "name": "vendor Test segment",
+      "path": "vendor/acme/module/Test/Unit/ProductTest.php",
+      "expected": "excluded"
+    },
+    {
+      "name": "vendor tests segment is case insensitive",
+      "path": "vendor/acme/module/TESTS/integration/ProductTest.php",
+      "expected": "excluded"
+    },
+    {
+      "name": "vendor non-test php",
+      "path": "vendor/acme/module/Contest/Product.php",
+      "expected": "full"
+    },
+    {
+      "name": "direct module config",
+      "path": "app/code/Acme/Checkout/etc/module.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "adminhtml config",
+      "path": "app/code/Acme/Checkout/etc/adminhtml/events.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "crontab config",
+      "path": "app/code/Acme/Checkout/etc/crontab/di.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "frontend config",
+      "path": "app/code/Acme/Checkout/etc/frontend/routes.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "graphql config",
+      "path": "app/code/Acme/Checkout/etc/graphql/di.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "rest config",
+      "path": "app/code/Acme/Checkout/etc/webapi_rest/di.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "soap config",
+      "path": "app/code/Acme/Checkout/etc/webapi_soap/di.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "custom etc payload is not config",
+      "path": "app/code/Acme/Checkout/etc/samples/payload.xml",
+      "expected": "full"
+    },
+    {
+      "name": "nested known area payload is not config",
+      "path": "app/code/Acme/Checkout/etc/frontend/nested/routes.xml",
+      "expected": "full"
+    },
+    {
+      "name": "vendor custom etc payload is excluded",
+      "path": "vendor/acme/module/etc/samples/payload.xml",
+      "expected": "excluded"
+    },
+    {
+      "name": "graphql schema",
+      "path": "vendor/acme/module/etc/schema.graphqls",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "declarative schema whitelist",
+      "path": "vendor/acme/module/etc/db_schema_whitelist.json",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "layout handle",
+      "path": "vendor/acme/module/view/frontend/layout/catalog_product_view.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "page layout",
+      "path": "vendor/acme/module/view/frontend/page_layout/checkout.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "ui component",
+      "path": "vendor/acme/module/view/adminhtml/ui_component/catalog_form.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "base module layouts manifest",
+      "path": "vendor/acme/module/view/base/layouts.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "frontend module layouts manifest",
+      "path": "vendor/acme/module/view/frontend/layouts.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "adminhtml module layouts manifest",
+      "path": "vendor/acme/module/view/adminhtml/layouts.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "standalone theme component layouts manifest",
+      "path": "vendor/acme/theme-frontend/Magento_Theme/layouts.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "non-Magento layouts document",
+      "path": "docs/layouts.xml",
+      "expected": "full"
+    },
+    {
+      "name": "vendor non-Magento layouts document",
+      "path": "vendor/acme/module/docs/layouts.xml",
+      "expected": "excluded"
+    },
+    {
+      "name": "unknown view area layouts document",
+      "path": "vendor/acme/module/view/email/layouts.xml",
+      "expected": "excluded"
+    },
+    {
+      "name": "vendor phtml view source",
+      "path": "vendor/acme/theme/web/source/component.phtml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor javascript view source",
+      "path": "vendor/acme/theme/web/source/component.js",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor module javascript view source",
+      "path": "vendor/acme/theme/web/source/component.mjs",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor typescript view source",
+      "path": "vendor/acme/theme/web/source/component.ts",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor tsx view source",
+      "path": "vendor/acme/theme/web/source/component.tsx",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor jsx view source",
+      "path": "vendor/acme/theme/web/source/component.jsx",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor css view source",
+      "path": "vendor/acme/theme/web/source/component.css",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor less view source",
+      "path": "vendor/acme/theme/web/source/component.less",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor html view source",
+      "path": "vendor/acme/theme/web/source/component.html",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor gql view source",
+      "path": "vendor/acme/theme/web/graphql/cart.gql",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor graphql view source",
+      "path": "vendor/acme/theme/web/graphql/cart.graphql",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "supported vendor suffix outside view tree",
+      "path": "vendor/acme/module/docs/component.tsx",
+      "expected": "excluded"
+    },
+    {
+      "name": "unsupported vendor view suffix",
+      "path": "vendor/acme/theme/web/source/component.vue",
+      "expected": "excluded"
+    },
+    {
+      "name": "vendor composer manifest",
+      "path": "vendor/acme/module/composer.json",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor registration entrypoint",
+      "path": "vendor/acme/module/registration.php",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor theme manifest",
+      "path": "vendor/acme/theme/theme.xml",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor requirejs config",
+      "path": "vendor/acme/module/view/frontend/requirejs-config.js",
+      "expected": "architecture-only"
+    },
+    {
+      "name": "vendor php source",
+      "path": "vendor/acme/module/Model/Product.php",
+      "expected": "full"
+    },
+    {
+      "name": "vendor inc source",
+      "path": "vendor/acme/module/bootstrap.inc",
+      "expected": "full"
+    },
+    {
+      "name": "application frontend source remains full",
+      "path": "app/code/Acme/Checkout/view/frontend/web/component.tsx",
+      "expected": "full"
+    }
+  ],
+  "runtimeCases": [
+    {
+      "name": "deepest nested framework root is used",
+      "path": "services/shop/generated/code/Acme/Proxy.php",
+      "evidence": ["root:services", "root:services/shop"],
+      "expected": "generated"
+    },
+    {
+      "name": "unrelated generated-looking path is outside framework root",
+      "path": "generated/code/Outside/Proxy.php",
+      "evidence": ["root:services/shop"],
+      "expected": "full"
+    },
+    {
+      "name": "legacy manual selection without root remains authoritative",
+      "path": "generated/code/Manual/Proxy.php",
+      "evidence": ["manual-project-type:magento"],
+      "expected": "generated"
+    },
+    {
+      "name": "manual selection respects its explicit root",
+      "path": "packages/shop/dev/tests/integration/Fixture.php",
+      "evidence": ["manual-project-type:magento", "root:packages/shop"],
+      "expected": "excluded"
+    },
+    {
+      "name": "repository root evidence applies without rebasing",
+      "path": "pub/static/frontend/Acme/theme/en_US/app.js",
+      "evidence": ["root:."],
+      "expected": "generated"
+    },
+    {
+      "name": "incomplete derived evidence never widens framework scope",
+      "path": "generated/code/Incomplete/Proxy.php",
+      "evidence": ["file:services/shop/composer.json"],
+      "expected": "full"
+    }
+  ]
+}

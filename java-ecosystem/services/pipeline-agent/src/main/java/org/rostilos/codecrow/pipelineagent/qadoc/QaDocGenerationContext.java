@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Immutable context object that carries all the data needed for a single
@@ -49,7 +50,10 @@ public record QaDocGenerationContext(
         /** Source branch of the PR. May be null. */
         String sourceBranch,
         /** Target branch of the PR. May be null. */
-        String targetBranch
+        String targetBranch,
+        String sourceRevision,
+        Map<String, Object> prChangeSummary,
+        Map<String, Object> reviewSource
 ) {
     /**
      * Builder for constructing a context step-by-step as data becomes available.
@@ -73,6 +77,9 @@ public record QaDocGenerationContext(
         private String repoSlug;
         private String sourceBranch;
         private String targetBranch;
+        private String sourceRevision;
+        private Map<String, Object> prChangeSummary;
+        private Map<String, Object> reviewSource;
 
         private Builder() {}
 
@@ -91,13 +98,17 @@ public record QaDocGenerationContext(
         public Builder sourceBranch(String v) { this.sourceBranch = v; return this; }
         public Builder targetBranch(String v) { this.targetBranch = v; return this; }
 
+        public Builder sourceRevision(String v) { this.sourceRevision = v; return this; }
+        public Builder reviewSource(Map<String, Object> v) { this.reviewSource = v; return this; }
+        public Builder prChangeSummary(Map<String, Object> v) { this.prChangeSummary = v; return this; }
+
         public QaDocGenerationContext build() {
             return new QaDocGenerationContext(
                     qaConfig, taskDetails, analysis,
                     diff, deltaDiff,
                     enrichmentData, changedFilePaths,
                     previousDocumentation, isSamePrRerun,
-                    vcsProvider, workspaceSlug, repoSlug, sourceBranch, targetBranch);
+                    vcsProvider, workspaceSlug, repoSlug, sourceBranch, targetBranch, sourceRevision, prChangeSummary, reviewSource);
         }
     }
 }

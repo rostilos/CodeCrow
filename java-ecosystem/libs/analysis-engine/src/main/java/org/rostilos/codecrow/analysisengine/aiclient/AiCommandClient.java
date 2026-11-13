@@ -111,6 +111,7 @@ public class AiCommandClient {
             Consumer<Map<String, Object>> eventHandler) throws IOException {
         String eventQueueKey = "codecrow:analysis:events:" + jobId;
         String jobsQueueKey = "codecrow:queue:commands";
+        String ownerKey = RedisQueueService.JOB_OWNER_KEY_PREFIX + jobId;
         String jsonPayload = null;
 
         try {
@@ -124,6 +125,7 @@ public class AiCommandClient {
                     "request", request);
 
             jsonPayload = objectMapper.writeValueAsString(jobPayload);
+            queueService.startJobLease(ownerKey);
             queueService.leftPush(jobsQueueKey, jsonPayload);
             queueService.setExpiry(eventQueueKey, COMMAND_TIMEOUT_MINUTES + 1);
 
@@ -131,6 +133,9 @@ public class AiCommandClient {
             boolean workerAcknowledged = false;
 
             while (true) {
+                if (!queueService.renewJobLease(ownerKey)) {
+                    throw new IOException("Command caller lease expired; paid execution is no longer owned");
+                }
                 long now = System.currentTimeMillis();
                 if (!workerAcknowledged) {
                     if (!queueService.hasKey(CONSUMER_HEARTBEAT_KEY)) {
@@ -197,6 +202,11 @@ public class AiCommandClient {
             log.error("Failed to communicate with AI async queue", e);
             throw new IOException("AI queue communication failed: " + e.getMessage(), e);
         } finally {
+            try {
+                queueService.deleteKey(ownerKey);
+            } catch (Exception cleanupError) {
+                log.warn("Could not revoke command caller lease {}; it expires within 60 seconds", jobId);
+            }
             if (jsonPayload != null) {
                 try {
                     queueService.removeFromList(jobsQueueKey, jsonPayload);
@@ -256,7 +266,10 @@ public class AiCommandClient {
             boolean supportsMermaid,
             Integer maxAllowedTokens,
             String vcsProvider,
-            String vcsBaseUrl) {
+            String vcsBaseUrl,
+            Map<String, Object> prChangeSummary,
+            String vcsQuotaIdentity,
+            String vcsJobId) {
     }
 
     /**
@@ -274,7 +287,10 @@ public class AiCommandClient {
             String aiBaseUrl,
             String question,
             Long pullRequestId,
-            String commitHash,
+            String branch,
+            String repositoryRevision,
+            String ragGenerationManifestSha256,
+            String ragCollectionTarget,
             String oAuthClient,
             String oAuthSecret,
             String accessToken,
@@ -282,7 +298,9 @@ public class AiCommandClient {
             String vcsProvider,
             String vcsBaseUrl,
             String analysisContext,
-            java.util.List<String> issueReferences) {
+            java.util.List<String> issueReferences,
+            String vcsQuotaIdentity,
+            String vcsJobId) {
     }
 
     /**
@@ -323,7 +341,9 @@ public class AiCommandClient {
             String accessToken,
             Integer maxAllowedTokens,
             String vcsProvider,
-            String vcsBaseUrl) {
+            String vcsBaseUrl,
+            String vcsQuotaIdentity,
+            String vcsJobId) {
     }
 
     /**

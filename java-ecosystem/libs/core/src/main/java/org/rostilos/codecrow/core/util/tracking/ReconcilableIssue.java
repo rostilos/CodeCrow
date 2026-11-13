@@ -22,6 +22,10 @@ import org.rostilos.codecrow.core.model.codeanalysis.IssueScope;
  * </ul>
  */
 public interface ReconcilableIssue extends Trackable {
+    default org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide getAnchorSide() {
+        return org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD;
+    }
+
 
     /** Database primary key. */
     Long getId();

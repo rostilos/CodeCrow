@@ -1,0 +1,269 @@
+{
+  "status": "ambiguous",
+  "error": "Graph target resolves to multiple structural units",
+  "snapshot": {
+    "kind": "proposed_tree",
+    "branch": "base_pr_25799_20260125_6554",
+    "revision": "d3184872c4837be0457b6311bc9113538d871db1",
+    "generationManifestSha256": "2e3aaf45feb027a738076d73412a051c56710c802d060172ec74fb2d813a7631",
+    "baseRevision": "18c03d2522d44f458b717120ceb3caa3521ee751",
+    "baseCollectionTarget": "cc_http_g_16388233380b4a8ab67502b6bf696930",
+    "baseGenerationManifestSha256": "1427e578e14f350a146a4d88147baf02cda42c3d9001d5d4cc02a2fb667f066b",
+    "sourceRevision": "d3184872c4837be0457b6311bc9113538d871db1",
+    "targetSourceTreeSha256": "59ddbc499991c4dd6f5a148666684bf801fb20270ee6b70c0fbd5261c872c244",
+    "overlaySha256": "5c3fabed4fe99b514d8622f11492e8afb43112de9952b7c38230efe53f0e65fa"
+  },
+  "pattern": "importers_of",
+  "target": "ghost/core/core/server/services/xmlrpc.js",
+  "candidates": [
+    {
+      "unitId": "unit:304b2cb6534b6c44c1f6beaa26f0e85a1c6de4f62d8109f32e98953f96ad6dd6",
+      "path": ".github/scripts/bump-version.js",
+      "kind": "file",
+      "name": "bump-version.js",
+      "qualifiedName": ".github/scripts/bump-version.js",
+      "startLine": 1,
+      "endLine": 46,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:ee013a9ac1cb9858ae4a2fd4875d3fa9f140c5a4bd98aa4ebd9e1cffb9d04337",
+      "path": ".github/scripts/bump-version.js",
+      "kind": "simplified",
+      "name": "bump-version.js",
+      "qualifiedName": ".github/scripts/bump-version.js:1-46:bump-version.js",
+      "startLine": 1,
+      "endLine": 46,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:80841fc34052d20a86fca85571d168d102e4cef3537b3be84ec08b19564dbbd1",
+      "path": ".github/scripts/bump-version.js",
+      "kind": "arrow_function",
+      "name": "bump-version.js",
+      "qualifiedName": ".github/scripts/bump-version.js:8-45:bump-version.js",
+      "startLine": 8,
+      "endLine": 45,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:0c125a728f62285b1d537529abc85b5e1cbbc3b8cabc8d82c03d6057486339aa",
+      "path": ".github/scripts/clean.js",
+      "kind": "file",
+      "name": "clean.js",
+      "qualifiedName": ".github/scripts/clean.js",
+      "startLine": 1,
+      "endLine": 56,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:c231db9cfd34ce172a2b427f5e1303dd00f0a32cede69b0ab9eaae862012a504",
+      "path": ".github/scripts/clean.js",
+      "kind": "simplified",
+      "name": "clean.js",
+      "qualifiedName": ".github/scripts/clean.js:1-56:clean.js",
+      "startLine": 1,
+      "endLine": 56,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:165280837eac03b0c950757c6fede7acb84aa4eaded777d329e2cb7280c511c5",
+      "path": ".github/scripts/dependency-inspector.js",
+      "kind": "file",
+      "name": "dependency-inspector.js",
+      "qualifiedName": ".github/scripts/dependency-inspector.js",
+      "startLine": 1,
+      "endLine": 629,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:f4fe4998a003b81297c15bc866de6c634906ba6f5273034fde1e6b78135d556f",
+      "path": ".github/scripts/dependency-inspector.js",
+      "kind": "simplified",
+      "name": "dependency-inspector.js",
+      "qualifiedName": ".github/scripts/dependency-inspector.js:1-629:dependency-inspector.js",
+      "startLine": 1,
+      "endLine": 629,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:7c34d514eee759ef695a7569acd89f0d21a307f00065e2f32c8c6b7a79d50f9f",
+      "path": ".github/scripts/dev-with-tinybird.js",
+      "kind": "simplified",
+      "name": "dev-with-tinybird.js",
+      "qualifiedName": ".github/scripts/dev-with-tinybird.js:1-147:dev-with-tinybird.js",
+      "startLine": 1,
+      "endLine": 147,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:d5171a4586c4689553d95a24d538cce87130a6a528dff146ac06a2b9df053fc3",
+      "path": ".github/scripts/dev-with-tinybird.js",
+      "kind": "file",
+      "name": "dev-with-tinybird.js",
+      "qualifiedName": ".github/scripts/dev-with-tinybird.js",
+      "startLine": 1,
+      "endLine": 147,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:9ae6755dfcdcc6dbacaaed1357e5d7052f8c2b6b027c639021205923b44a99c8",
+      "path": ".github/scripts/dev.js",
+      "kind": "file",
+      "name": "dev.js",
+      "qualifiedName": ".github/scripts/dev.js",
+      "startLine": 1,
+      "endLine": 306,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:e7f53de71a513234e317a30d5cb2f8847cff0ad7243b0905146f9e170ad5f4c7",
+      "path": ".github/scripts/dev.js",
+      "kind": "simplified",
+      "name": "dev.js",
+      "qualifiedName": ".github/scripts/dev.js:1-306:dev.js",
+      "startLine": 1,
+      "endLine": 306,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:04c903f1e200d27cdb591a0ca0a8f538689353ce94667d8b7b7284ee7e2dbab2",
+      "path": ".github/scripts/release-apps.js",
+      "kind": "file",
+      "name": "release-apps.js",
+      "qualifiedName": ".github/scripts/release-apps.js",
+      "startLine": 1,
+      "endLine": 216,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:c88e8627733a8c75b3b1ec115f8bd6c3fb2efa0dd10edca6be11158e59bfdd16",
+      "path": ".github/scripts/release-apps.js",
+      "kind": "simplified",
+      "name": "release-apps.js",
+      "qualifiedName": ".github/scripts/release-apps.js:1-216:release-apps.js",
+      "startLine": 1,
+      "endLine": 216,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:1f58d9fa8dc896013c2409966a6a368ec130b6e93647de8e48828e2fa4b4280c",
+      "path": ".github/scripts/setup.js",
+      "kind": "simplified",
+      "name": "setup.js",
+      "qualifiedName": ".github/scripts/setup.js:1-144:setup.js",
+      "startLine": 1,
+      "endLine": 144,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:4f720b8053099bd0d50b60730df474170aca38f93fd91f0f013c7f9105592af6",
+      "path": ".github/scripts/setup.js",
+      "kind": "file",
+      "name": "setup.js",
+      "qualifiedName": ".github/scripts/setup.js",
+      "startLine": 1,
+      "endLine": 144,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:5c87ee214efcf2f4cbdc262b3ae3da6f05166292e932dcde1bd2d3d36976df0f",
+      "path": "apps/admin-x-settings/test/utils/files/pintura-umd.js",
+      "kind": "fallback",
+      "name": "pintura-umd.js",
+      "qualifiedName": "apps/admin-x-settings/test/utils/files/pintura-umd.js:1-1:pintura-umd.js",
+      "startLine": 1,
+      "endLine": 1,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:ea6470c22b4b175d551aab791a900a4f733ecbbb4cffb5214c960b169b49af22",
+      "path": "apps/admin-x-settings/test/utils/files/pintura-umd.js",
+      "kind": "file",
+      "name": "pintura-umd.js",
+      "qualifiedName": "apps/admin-x-settings/test/utils/files/pintura-umd.js",
+      "startLine": 1,
+      "endLine": 1,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:238f4b330110da29431b7dfc3f228947c17c10db824fd3ea0a8c0e34098d346b",
+      "path": "apps/admin/eslint.config.js",
+      "kind": "file",
+      "name": "eslint.config.js",
+      "qualifiedName": "apps/admin/eslint.config.js",
+      "startLine": 1,
+      "endLine": 59,
+      "language": "javascript",
+      "recordType": "structural_file"
+    },
+    {
+      "unitId": "unit:2b33eed1c7f9773f2839cde74e66892d91239b3bf8311c7d55b6f7ef3af87c1b",
+      "path": "apps/admin/eslint.config.js",
+      "kind": "fallback",
+      "name": "eslint.config.js",
+      "qualifiedName": "apps/admin/eslint.config.js:1-59:eslint.config.js",
+      "startLine": 1,
+      "endLine": 59,
+      "language": "javascript",
+      "recordType": "source_unit"
+    },
+    {
+      "unitId": "unit:4fa5b0234083d152e802347c133c691ac8e3c45a7df7f070a5a1beba1de8b1ba",
+      "path": "apps/admin/postcss.config.js",
+      "kind": "file",
+      "name": "postcss.config.js",
+      "qualifiedName": "apps/admin/postcss.config.js",
+      "startLine": 1,
+      "endLine": 3,
+      "language": "javascript",
+      "recordType": "structural_file"
+    }
+  ],
+  "candidateCount": 6444,
+  "candidateResultCount": 20,
+  "candidatesTruncated": true,
+  "hint": "Retry with a candidate unitId; request the same pattern and target with nextCursor to inspect additional candidates.",
+  "results": [],
+  "cursor": 0,
+  "nextCursor": 20,
+  "truncated": true,
+  "resultCount": 0,
+  "operation": "query_review_graph",
+  "sourceWindows": [],
+  "coverage": {
+    "state": "bounded",
+    "truncated": true,
+    "partialReasons": [
+      "ambiguous_target"
+    ],
+    "maxResults": 20,
+    "returnedResults": 0,
+    "sourceIncluded": true,
+    "source": {
+      "state": "unavailable",
+      "truncated": false,
+      "availableSourceUnits": 0,
+      "returnedSourceUnits": 0,
+      "omittedSourceUnits": 0,
+      "truncatedSourceWindows": 0
+    }
+  }
+}

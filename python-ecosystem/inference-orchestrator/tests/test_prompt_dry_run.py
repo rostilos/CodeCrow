@@ -15,16 +15,16 @@ from llm.llm_factory import LLMFactory
 from model.dtos import ReviewRequestDto
 from model.enrichment import FileContentDto, PrEnrichmentDataDto
 from model.multi_stage import CrossFileAnalysisResult, CrossFileIssue
-from service.review.orchestrator.orchestrator import (
-    MultiStageReviewOrchestrator,
-    PrIndexPreconditionError,
-)
+from service.review.orchestrator.orchestrator import MultiStageReviewOrchestrator
 from service.review.prompt_dry_run import PromptCaptureLLM, PromptCaptureSession
 from service.review.prompt_dry_run import capture_review_prompts
 from service.review.prompt_dry_run import capture_and_store_review_prompts
 from service.review.evidence_scopes import process_review_evidence_scopes
 from service.review.review_service import ReviewService
-from service.review.snapshot_identity import validate_review_snapshot_identity
+from service.review.snapshot_identity import (
+    ReviewSnapshotPreconditionError,
+    validate_review_snapshot_identity,
+)
 from utils.diff_processor import DiffProcessor, HunkDisposition
 from utils.hunk_coverage import ReviewManifestPreconditionError
 from .prompt_dry_run_neutral_fixture import (
@@ -65,18 +65,16 @@ async def test_non_reviewable_hunk_manifest_completes_without_model_stage():
 
     assert result["issues"] == []
     assert "No text source hunks required model review" in result["comment"]
-    assert rag.index_requests == []
     assert rag.requests == []
-    assert rag.semantic_requests == []
+    assert rag.code_search_requests == []
     terminal_event = next(
         event
         for event in events
         if event.get("state") == "review_evidence_completed"
     )
-    assert terminal_event["revisionBinding"]["prIndexed"] is False
     assert (
         terminal_event["revisionBinding"]["baseGenerationManifestSha256"]
-        is None
+        == "3" * 64
     )
 
 
@@ -104,9 +102,8 @@ async def test_metadata_only_diff_completes_without_model_or_rag_stage():
 
     assert result["issues"] == []
     assert "No text source hunks required model review" in result["comment"]
-    assert rag.index_requests == []
     assert rag.requests == []
-    assert rag.semantic_requests == []
+    assert rag.code_search_requests == []
 
 
 @pytest.mark.asyncio
@@ -135,7 +132,6 @@ async def test_diff_path_mismatch_fails_before_indexing_or_stage_zero(
             processed_diff=processed,
         )
 
-    assert rag.index_requests == []
     stage_0.assert_not_awaited()
 
 
@@ -173,7 +169,6 @@ async def test_malformed_changed_text_fails_before_indexing_or_stage_zero(
             processed_diff=processed,
         )
 
-    assert rag.index_requests == []
     stage_0.assert_not_awaited()
 
 
@@ -230,7 +225,7 @@ def _single_language_request(language: str) -> ReviewRequestDto:
 
 
 @pytest.mark.asyncio
-async def test_dry_run_captures_complete_baseline_without_provider_or_semantic_calls(
+async def test_dry_run_captures_complete_baseline_without_provider_calls(
     monkeypatch,
 ):
     def fail_provider_construction(*_args, **_kwargs):
@@ -252,7 +247,6 @@ async def test_dry_run_captures_complete_baseline_without_provider_or_semantic_c
     assert result["dryRun"] is True
     assert result["providerCalls"] == 0
     assert result["providerCallsScope"] == "review-llm-only"
-    assert result["embeddingProviderCallsMeasured"] is False
     assert result["providerConstructionGuard"] == {
         "enabled": True,
         "boundary": "LLMFactory.create_llm",
@@ -265,13 +259,15 @@ async def test_dry_run_captures_complete_baseline_without_provider_or_semantic_c
         "fullPipelineContext": False,
         "deterministicRagEnabled": True,
         "deterministicRagRequests": len(rag.requests),
-        "semanticRagEnabled": False,
-        "duplicationRagEnabled": False,
-        "prIndexMutationEnabled": False,
-        "mcpToolsEnabled": False,
+        "mcpToolsEnabled": True,
     }
-    assert list(result["promptCountsByStage"]) == ["stage_0", "stage_1", "stage_3"]
-    assert [prompt["sequence"] for prompt in result["prompts"]] == [1, 2, 3]
+    assert list(result["promptCountsByStage"]) == ["stage_0", "stage_1"]
+    assert [prompt["sequence"] for prompt in result["prompts"]] == [1, 2]
+    # Empty final verification still completes the pipeline without a model prompt.
+    assert result["pipeline"]["completed"] is True
+    assert "stage_3_started" in result["pipeline"]["eventStates"]
+    assert result["pipeline"]["evidence"]["candidates"]["published"] == 0
+    assert result["pipeline"]["evidence"]["candidates"]["verification"]["candidates"] == 0
     assert result["promptCount"] == len(result["prompts"])
     assert result["totalCharacterCount"] == sum(
         prompt["characterCount"] for prompt in result["prompts"]
@@ -289,25 +285,71 @@ async def test_dry_run_captures_complete_baseline_without_provider_or_semantic_c
     assert result["qualitySignals"]["stage1"][
         "maxEstimatedInputTokens"
     ] > 0
+    # Tool-free capture records the graph-first prompt, not a synthetic MCP
+    # observation that the dry-run agent never executed.
+    assert result["qualitySignals"]["stage1"][
+        "structuralEvidenceEntries"
+    ] == 0
+    assert result["qualitySignals"]["stage1"][
+        "structuralRelationMaps"
+    ] == 0
     assert result["qualitySignals"]["stage1"][
         "addedSourceDuplicateOmissions"
     ] == 0
     stage_0 = result["prompts"][0]
-    assert stage_0["responseSchema"] == "ReviewPlan"
-    assert stage_0["responseSchemaDefinition"]["title"] == "ReviewPlan"
+    assert stage_0["responseSchema"] == "CumulativeChanges"
+    assert stage_0["responseSchemaDefinition"]["title"] == "CumulativeChanges"
     assert stage_0["characterCount"] > stage_0["renderedPromptCharacterCount"]
 
     serialized = json.dumps(result)
     assert "value_0 = 1" in serialized
-    assert "SHARED_CONTEXT_SENTINEL" in serialized
+    assert 'relation:' + "a" * 64 not in serialized
+    assert '"evidenceId"' not in serialized
+    assert "src/shared.py" not in serialized
+    # Structural prompt capture must not revive the retired behavior of
+    # stuffing retrieved source bodies into the Stage 1 prompt.
+    assert "SHARED_CONTEXT_SENTINEL" not in serialized
     assert SECRET_API_KEY not in serialized
     assert request.useMcpTools is True
-    assert any("useMcpTools was disabled" in warning for warning in result["warnings"])
+    assert any(
+        "without executing iterative repository tool calls" in warning
+        for warning in result["warnings"]
+    )
     assert any("JSON-repair" in warning for warning in result["warnings"])
 
 
 @pytest.mark.asyncio
-async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch):
+async def test_agent_dry_run_without_structural_retrieval_is_vcs_only(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "llm.llm_factory.LLMFactory.create_llm",
+        lambda *_args, **_kwargs: pytest.fail("provider construction is forbidden"),
+    )
+
+    result = await capture_review_prompts(
+        _request(use_mcp_tools=True),
+        None,
+        include_deterministic_rag=False,
+    )
+
+    stage_1_prompt = next(
+        prompt["renderedPrompt"]
+        for prompt in result["prompts"]
+        if prompt["stage"] == "stage_1"
+    )
+    assert result["simulation"]["mcpToolsEnabled"] is True
+    assert "## Repository File Tool" in stage_1_prompt
+    assert "getBranchFileContent" in stage_1_prompt
+    assert "PRELOADED STRUCTURAL RELATION MAP" not in stage_1_prompt
+    assert "getStructuralRelations" not in stage_1_prompt
+    assert "queryCodeGraph" not in stage_1_prompt
+    assert "getStructuralUnit" not in stage_1_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("findings_per_file", [0, 1])
+async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch, findings_per_file):
     monkeypatch.setattr(
         "llm.llm_factory.LLMFactory.create_llm",
         lambda *_args, **_kwargs: pytest.fail("provider construction is forbidden"),
@@ -318,13 +360,15 @@ async def test_dry_run_preserves_neutral_mixed_language_manifest(monkeypatch):
         request,
         DeterministicRagSpy(),
         include_deterministic_rag=True,
+        simulated_findings_per_file=findings_per_file,
     )
 
     serialized = json.dumps(result)
     assert result["providerCalls"] == 0
     assert result["promptCountsByStage"]["stage_0"] == 1
     assert result["promptCountsByStage"]["stage_1"] >= 1
-    assert result["promptCountsByStage"]["stage_3"] == 1
+    assert result["promptCountsByStage"].get("stage_3", 0) == findings_per_file
+    assert result["pipeline"]["completed"] is True
     assert all(path in serialized for path in request.changedFiles)
     assert "return account.active" in serialized
     assert "record Account(boolean active)" in serialized
@@ -559,7 +603,7 @@ def _incremental_task_request() -> tuple[ReviewRequestDto, str, str]:
 
 
 @pytest.mark.asyncio
-async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_pr_aware(
+async def test_incremental_prompt_pipeline_shares_full_pr_context_but_reviews_delta(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -587,7 +631,11 @@ async def test_incremental_prompt_pipeline_keeps_review_delta_small_and_stage_2_
     )
     assert stage_0_and_1
     assert all(delta_path in prompt for prompt in stage_0_and_1)
-    assert all(prior_path not in prompt for prompt in stage_0_and_1)
+    assert all(prior_path in prompt for prompt in stage_0_and_1)
+    stage_1_prompts = [prompt["renderedPrompt"] for prompt in result["prompts"] if prompt["stage"] == "stage_1"]
+    assert all("PR-WIDE CHANGE CONTEXT" in prompt for prompt in stage_1_prompts)
+    # Earlier changes are descriptive context, not new incremental review units.
+    assert all(f"FILE #1: {prior_path}" not in prompt for prompt in stage_1_prompts)
     assert "FULL PR STATE LEDGER (base to current PR head)" in stage_2
     assert prior_path in stage_2
     assert "recordCustomEvent" in stage_2
@@ -652,12 +700,15 @@ async def test_pipeline_suppresses_incremental_missing_task_false_positive():
         event.get("state") == "task_coverage_candidates_suppressed"
         for event in events
     )
-    stage_3_prompt = next(
-        prompt["renderedPrompt"]
-        for prompt in session.prompts
-        if prompt["stage"] == "stage_3"
+    assert not any(
+        prompt["stage"] == "stage_3" for prompt in session.prompts
     )
-    assert "PR does not implement" not in stage_3_prompt
+    assert "No active findings" in result["comment"]
+    completion = next(
+        event for event in events if event.get("state") == "review_evidence_completed"
+    )
+    assert completion["candidates"]["published"] == 0
+    assert completion["candidates"]["verification"]["candidates"] == 0
 
 
 @pytest.mark.asyncio
@@ -727,6 +778,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     request = _request().model_copy(update={
         "promptDryRun": True,
         "promptDryRunId": "queue-job-123",
+        "useMcpTools": True,
     })
 
     summary = await capture_and_store_review_prompts(
@@ -745,9 +797,6 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     assert summary["promptArtifact"][
         "providerCallsScope"
     ] == "review-llm-only"
-    assert summary["promptArtifact"][
-        "embeddingProviderCallsMeasured"
-    ] is False
     assert summary["promptArtifact"]["providerConstructionGuard"] == {
         "enabled": True,
         "boundary": "LLMFactory.create_llm",
@@ -755,7 +804,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     assert summary["promptArtifact"]["pipeline"]["completed"] is True
     assert report["providerCalls"] == 0
     assert report["simulation"]["fullPipelineContext"] is True
-    assert report["simulation"]["semanticRagEnabled"] is True
+    assert report["simulation"]["deterministicRagEnabled"] is True
     assert report["pipeline"]["completed"] is True
     assert report["pipeline"]["evidence"]["hunkCoverage"]["completed"] == 1
     assert report["pipeline"]["evidence"]["reviewUnits"] == {
@@ -771,7 +820,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     assert len(candidate_record["promptHunkIds"]) == 1
     assert candidate_record["anchorHunkIds"] == candidate_record["promptHunkIds"]
     assert candidate_record["evidenceRefs"] == []
-    assert candidate_record["visibleEvidenceIds"]
+    assert candidate_record["visibleEvidenceIds"] == []
     assert candidate_record["terminalState"] == "published"
     assert report["pipeline"]["evidence"]["hunkReceipts"] == [{
         "hunkId": candidate_record["anchorHunkIds"][0],
@@ -784,7 +833,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     }]
     assert report["pipeline"]["evidence"]["retrieval"][
         "deterministicStates"
-    ] == ["complete"]
+    ] == []
     assert report["pluginDiagnostics"] == {
         "count": 0,
         "exceptionCount": 0,
@@ -800,7 +849,7 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     assert assembly[0]["totalPromptChars"] > 0
     assert assembly[0]["currentSourceChars"] > 0
     assert assembly[0]["diffChars"] > 0
-    assert assembly[0]["ragChars"] > 0
+    assert assembly[0]["structuralContextChars"] == 0
     assert assembly[0]["pluginChars"] <= 6_000
     assert "promptAssemblyDiagnostics" not in summary["promptArtifact"]
     assert report["pipeline"]["events"] == forwarded_events
@@ -814,18 +863,15 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
         if event.get("state") == "review_evidence_completed"
     )
     assert terminal_event["revisionBinding"] == {
-        "prIndexed": True,
         "pullRequestId": request.pullRequestId,
         "targetBranch": "main",
         "sourceRevision": HEAD_REVISION,
         "baseRevision": BASE_REVISION,
         "baseGenerationManifestSha256": "3" * 64,
-        "prGenerationFingerprint": "sha256:" + "4" * 64,
-        "prOverlayGenerationManifestSha256": "5" * 64,
-        "basePluginFingerprint": "sha256:" + "6" * 64,
-        "basePluginDescriptorFingerprint": "sha256:" + "7" * 64,
-        "basePluginImplementationFingerprint": "sha256:" + "8" * 64,
-        "baseIndexRepresentationFingerprint": "sha256:" + "9" * 64,
+        "basePluginFingerprint": None,
+        "basePluginDescriptorFingerprint": None,
+        "basePluginImplementationFingerprint": None,
+        "baseIndexRepresentationFingerprint": None,
     }
     assert report["reviewIdentity"]["targetBranch"] == "main"
     assert report["reviewIdentity"]["sourceBranch"] == "feature/dry-run"
@@ -834,61 +880,9 @@ async def test_full_pipeline_capture_persists_real_context_artifact(
     assert report["reviewIdentity"]["changedFiles"] == ["src/file_0.py"]
     assert summary["promptArtifact"]["qualitySignals"] == report["qualitySignals"]
     assert SECRET_API_KEY not in artifact_path.read_text(encoding="utf-8")
-    assert rag.index_requests
-    assert rag.index_requests[0]["source_revision"] == HEAD_REVISION
-    assert rag.index_requests[0]["base_revision"] == BASE_REVISION
-    assert rag.requests
-    assert all(
-        request["source_revision"] == HEAD_REVISION
-        and request["base_revision"] == BASE_REVISION
-        and request["base_generation_manifest_sha256"] == "3" * 64
-        and request["pr_generation_fingerprint"]
-        == "sha256:" + "4" * 64
-        and request["pr_overlay_generation_manifest_sha256"]
-        == "5" * 64
-        for request in rag.requests
-    )
-    assert {
-        file_info["content_state"]
-        for file_info in rag.index_requests[0]["files"]
-    } == {"complete"}
-    # The normal review pipeline keeps the PR overlay available for subsequent
-    # context queries. Dry-run exercises the same RAG lifecycle.
-    assert rag.delete_requests == []
-
-
-@pytest.mark.asyncio
-async def test_full_pipeline_capture_continues_when_pr_overlay_is_not_indexed(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setenv("ANALYSIS_PROMPT_DRY_RUN_OUTPUT_DIR", str(tmp_path))
-    rag = DeterministicRagSpy()
-
-    async def reject_overlay(**kwargs):
-        rag.index_requests.append(kwargs)
-        return {
-            "status": "error",
-            "status_code": 409,
-            "error": "target branch must be reindexed",
-        }
-
-    rag.index_pr_files = reject_overlay
-    request = _request().model_copy(update={
-        "promptDryRun": True,
-        "promptDryRunId": "queue-job-failure",
-    })
-
-    artifact = await capture_and_store_review_prompts(
-        request,
-        rag,
-        simulated_findings_per_file=1,
-    )
-
-    assert rag.index_requests
-    assert artifact["status"] == "prompt_capture_completed"
-    assert artifact["promptArtifact"]["pipeline"]["completed"] is True
-    assert list(tmp_path.iterdir())
+    # The dry run captures the graph-first agent prompt without pretending to
+    # execute its initial MCP call or preloading a synthetic relation result.
+    assert len(rag.requests) == 0
 
 
 @pytest.mark.asyncio
@@ -917,15 +911,14 @@ async def test_review_snapshot_identity_fails_before_indexing_or_stage_zero(
         rag_client=rag,
     )
 
-    with pytest.raises(PrIndexPreconditionError, match=expected_field):
+    with pytest.raises(ReviewSnapshotPreconditionError, match=expected_field):
         await orchestrator.orchestrate_review(
             request,
             processed_diff=DiffProcessor().process(request.rawDiff),
         )
 
-    assert rag.index_requests == []
     assert rag.requests == []
-    assert rag.semantic_requests == []
+    assert rag.code_search_requests == []
     stage_0.assert_not_awaited()
 
 
@@ -938,7 +931,8 @@ def test_review_snapshot_allows_missing_optional_pr_identity():
     identity = validate_review_snapshot_identity(request)
 
     assert identity.source_branch is None
-    assert identity.base_revision is None
+    assert identity.target_head_revision is None
+    assert identity.merge_base_revision is None
 
 
 @pytest.mark.parametrize("revision", ["abc123", "HEAD", "release/10x"])
@@ -951,7 +945,20 @@ def test_review_snapshot_accepts_provider_native_git_revisions(revision):
     identity = validate_review_snapshot_identity(request)
 
     assert identity.head_revision == revision
-    assert identity.base_revision == revision
+    assert identity.target_head_revision == revision
+    assert identity.merge_base_revision == revision
+
+
+def test_review_snapshot_uses_target_head_instead_of_merge_base():
+    request = _request().model_copy(update={
+        "targetHeadCommitHash": "target-head",
+        "baseCommitHash": "merge-base",
+    })
+
+    identity = validate_review_snapshot_identity(request)
+
+    assert identity.target_head_revision == "target-head"
+    assert identity.merge_base_revision == "merge-base"
 
 
 @pytest.mark.asyncio
@@ -975,29 +982,9 @@ async def test_review_service_rejects_diff_manifest_before_provider_construction
 
 
 @pytest.mark.asyncio
-async def test_project_disabled_rag_skips_pr_overlay():
-    rag = DeterministicRagSpy()
-    request = _request().model_copy(update={"ragEnabled": False})
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert rag.index_requests == []
-
-
-@pytest.mark.asyncio
 async def test_project_disabled_rag_clears_bindings_and_never_queries_client():
     request = _request().model_copy(update={
         "ragEnabled": False,
-        "ragPrGenerationFingerprint": "sha256:" + "a" * 64,
-        "ragPrOverlayGenerationManifestSha256": "b" * 64,
         "ragBasePluginFingerprint": "sha256:" + "c" * 64,
         "ragBasePluginDescriptorFingerprint": "sha256:" + "d" * 64,
         "ragBasePluginImplementationFingerprint": "sha256:" + "e" * 64,
@@ -1006,17 +993,11 @@ async def test_project_disabled_rag_clears_bindings_and_never_queries_client():
         "taskContext": {"task_key": "SHOP-42"},
     })
     rag = DeterministicRagSpy()
-    rag.index_pr_files = AsyncMock(
-        side_effect=AssertionError("disabled RAG must not index")
-    )
-    rag.get_deterministic_context = AsyncMock(
+    rag.get_structural_relations = AsyncMock(
         side_effect=AssertionError("disabled RAG must not retrieve")
     )
-    rag.get_pr_context = AsyncMock(
-        side_effect=AssertionError("disabled RAG must not retrieve")
-    )
-    rag.search_for_duplicates = AsyncMock(
-        side_effect=AssertionError("disabled RAG must not query duplicates")
+    rag.search_code = AsyncMock(
+        side_effect=AssertionError("disabled repository context must not search")
     )
     session = PromptCaptureSession(request=request)
     orchestrator = MultiStageReviewOrchestrator(
@@ -1027,22 +1008,17 @@ async def test_project_disabled_rag_clears_bindings_and_never_queries_client():
 
     result = await orchestrator.orchestrate_review(
         request,
-        rag_context={"relevant_code": ["DISABLED_GLOBAL_RAG_SENTINEL"]},
         processed_diff=DiffProcessor().process(request.rawDiff),
     )
 
     assert result["issues"] == []
-    rag.index_pr_files.assert_not_awaited()
-    rag.get_deterministic_context.assert_not_awaited()
-    rag.get_pr_context.assert_not_awaited()
-    rag.search_for_duplicates.assert_not_awaited()
+    rag.get_structural_relations.assert_not_awaited()
+    rag.search_code.assert_not_awaited()
     assert all(
         getattr(request, field_name) is None
         for field_name in (
             "ragCollectionTarget",
             "ragBaseGenerationManifestSha256",
-            "ragPrGenerationFingerprint",
-            "ragPrOverlayGenerationManifestSha256",
             "ragBasePluginFingerprint",
             "ragBasePluginDescriptorFingerprint",
             "ragBasePluginImplementationFingerprint",
@@ -1053,264 +1029,6 @@ async def test_project_disabled_rag_clears_bindings_and_never_queries_client():
         "DISABLED_GLOBAL_RAG_SENTINEL" not in prompt["renderedPrompt"]
         for prompt in session.prompts
     )
-
-
-@pytest.mark.asyncio
-async def test_pr_overlay_receives_one_exact_snapshot_identity():
-    rag = DeterministicRagSpy()
-    request = _request()
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert len(rag.index_requests) == 1
-    assert rag.index_requests[0]["branch"] == "main"
-    assert rag.index_requests[0]["base_branch"] == "main"
-    assert rag.index_requests[0]["source_revision"] == HEAD_REVISION
-    assert rag.index_requests[0]["base_revision"] == BASE_REVISION
-
-
-@pytest.mark.asyncio
-async def test_pr_index_failure_is_optional_for_normal_review():
-    rag = DeterministicRagSpy()
-
-    async def reject_overlay(**kwargs):
-        rag.index_requests.append(kwargs)
-        return {
-            "status": "error",
-            "status_code": 409,
-            "error": (
-                "target branch is missing repository-analysis snapshots for "
-                "magento; reindex it before review"
-            ),
-        }
-
-    rag.index_pr_files = reject_overlay
-    request = _request()
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert rag.index_requests
-    assert orchestrator._pr_indexed is False
-    assert request.ragCollectionTarget == "cc_workspace_project_main_generation"
-    assert request.ragBaseGenerationManifestSha256 == "3" * 64
-    assert request.ragPrGenerationFingerprint is None
-    assert request.ragPrOverlayGenerationManifestSha256 is None
-
-
-@pytest.mark.asyncio
-async def test_incomplete_pr_overlay_receipt_degrades_to_exact_base_binding():
-    rag = DeterministicRagSpy()
-    complete_index = rag.index_pr_files
-
-    async def omit_overlay_manifest(**kwargs):
-        result = await complete_index(**kwargs)
-        result.pop("overlay_generation_manifest_sha256")
-        result["review_groups"] = [["src/file_0.py"]]
-        return result
-
-    rag.index_pr_files = omit_overlay_manifest
-    request = _request()
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert orchestrator._pr_indexed is False
-    assert orchestrator._repository_review_groups == ()
-    assert request.ragCollectionTarget == "cc_workspace_project_main_generation"
-    assert request.ragBaseGenerationManifestSha256 == "3" * 64
-    assert request.ragPrGenerationFingerprint is None
-    assert request.ragPrOverlayGenerationManifestSha256 is None
-
-
-@pytest.mark.asyncio
-async def test_pr_overlay_review_groups_are_retained_for_stage_zero_planning():
-    rag = DeterministicRagSpy()
-
-    async def index_with_groups(**kwargs):
-        rag.index_requests.append(kwargs)
-        return {
-            "status": "indexed",
-            "chunks_indexed": 4,
-            "base_generation_manifest_sha256": "3" * 64,
-            "generation_fingerprint": "sha256:" + "4" * 64,
-            "overlay_generation_manifest_sha256": "5" * 64,
-            "plugin_fingerprint": "sha256:" + "6" * 64,
-            "plugin_descriptor_fingerprint": "sha256:" + "7" * 64,
-            "plugin_implementation_fingerprint": "sha256:" + "8" * 64,
-            "index_representation_fingerprint": "sha256:" + "9" * 64,
-            "review_groups": [
-                ["src/file_0.py", "src/file_1.py"],
-                ["src/file_1.py", "src/file_2.py"],
-            ],
-        }
-
-    rag.index_pr_files = index_with_groups
-    request = _request(file_count=3)
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert orchestrator._repository_review_groups == (
-        ("src/file_0.py", "src/file_1.py"),
-        ("src/file_1.py", "src/file_2.py"),
-    )
-
-
-@pytest.mark.asyncio
-async def test_pr_overlay_marks_unenriched_diff_as_partial_evidence():
-    rag = DeterministicRagSpy()
-    request = _request().model_copy(update={
-        "enrichmentData": PrEnrichmentDataDto(fileContents=[]),
-    })
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert len(rag.index_requests) == 1
-    indexed_file = rag.index_requests[0]["files"][0]
-    assert indexed_file["path"] == "src/file_0.py"
-    assert indexed_file["change_type"] == "MODIFIED"
-    assert indexed_file["content_state"] == "partial_diff"
-    assert indexed_file["content"].startswith(
-        "diff --git a/src/file_0.py b/src/file_0.py"
-    )
-
-
-@pytest.mark.asyncio
-async def test_pr_overlay_preserves_empty_post_change_source_as_complete():
-    rag = DeterministicRagSpy()
-    request = _request().model_copy(update={
-        "enrichmentData": PrEnrichmentDataDto(fileContents=[
-            FileContentDto(
-                path="src/file_0.py",
-                content="",
-                sizeBytes=0,
-            ),
-        ]),
-    })
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    indexed_file = rag.index_requests[0]["files"][0]
-    assert indexed_file["path"] == "src/file_0.py"
-    assert indexed_file["content"] == ""
-    assert indexed_file["content_state"] == "complete"
-
-
-@pytest.mark.asyncio
-async def test_pr_overlay_does_not_choose_ambiguous_monorepo_enrichment():
-    rag = DeterministicRagSpy()
-    request = _request().model_copy(update={
-        "enrichmentData": PrEnrichmentDataDto(fileContents=[
-            FileContentDto(
-                path="repo-a/src/file_0.py",
-                content="origin = 'a'\n",
-                sizeBytes=13,
-            ),
-            FileContentDto(
-                path="repo-b/src/file_0.py",
-                content="origin = 'b'\n",
-                sizeBytes=13,
-            ),
-        ]),
-    })
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    indexed_file = rag.index_requests[0]["files"][0]
-    assert indexed_file["content_state"] == "partial_diff"
-    assert "origin = " not in indexed_file["content"]
-
-
-@pytest.mark.asyncio
-async def test_pr_overlay_preserves_deleted_file_as_tombstone():
-    rag = DeterministicRagSpy()
-    path = "src/removed.py"
-    raw_diff = "\n".join([
-        f"diff --git a/{path} b/{path}",
-        "deleted file mode 100644",
-        "index 1111111..0000000",
-        f"--- a/{path}",
-        "+++ /dev/null",
-        "@@ -1 +0,0 @@",
-        "-obsolete = True",
-        "",
-    ])
-    request = _request().model_copy(update={
-        "changedFiles": [path],
-        "rawDiff": raw_diff,
-        "enrichmentData": PrEnrichmentDataDto(fileContents=[]),
-    })
-    orchestrator = MultiStageReviewOrchestrator(
-        llm=object(),
-        mcp_client=None,
-        rag_client=rag,
-    )
-
-    await orchestrator._index_pr_files(
-        request,
-        DiffProcessor().process(request.rawDiff),
-    )
-
-    assert rag.index_requests[0]["files"] == [{
-        "path": path,
-        "content": "",
-        "change_type": "DELETED",
-        "content_state": "complete",
-    }]
 
 
 @pytest.mark.asyncio
@@ -1356,8 +1074,7 @@ async def test_normal_review_entrypoint_routes_marked_job_to_prompt_capture(
     )
     monkeypatch.setattr(ReviewService, "_process_review", fail_normal_review)
 
-    service = ReviewService.__new__(ReviewService)
-    service._review_semaphore = asyncio.Semaphore(1)
+    service = ReviewService()
     service.rag_client = DeterministicRagSpy()
     request = _request().model_copy(update={
         "promptDryRun": True,

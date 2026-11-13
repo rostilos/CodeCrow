@@ -33,11 +33,11 @@ inference-orchestrator/integration/
 └── test_rag_client_http.py     # RagClient → RAG pipeline HTTP (respx)
 
 rag-pipeline/integration/
-├── conftest.py                 # App fixtures, mocked Qdrant/embedding
+├── conftest.py                 # App fixtures and mocked storage
 ├── test_health.py              # GET /, GET /health
 ├── test_auth_middleware.py      # X-Service-Secret middleware
 ├── test_parse_endpoints.py     # POST /parse, /parse/batch
-├── test_query_endpoints.py     # POST /query/search, /query/pr-context, /query/deterministic
+├── test_query_endpoints.py     # Revision-bound structural query endpoints
 └── test_index_endpoints.py     # POST /index/repository, branches, cleanup, stats
 ```
 
@@ -46,8 +46,7 @@ rag-pipeline/integration/
 Integration tests exercise the **full FastAPI stack** (HTTP → middleware → router → service)
 with external dependencies mocked at the boundary:
 
-- **Qdrant** → `unittest.mock.MagicMock`
-- **Embedding models** → mock returning fixed 384-dim vectors
+- **Repository storage** → `unittest.mock.MagicMock`
 - **Redis queue consumers** → mocked to avoid real connections
 - **LLM providers** → service-level mocks (no real API calls)
 - **RAG ↔ IO HTTP** → `respx` for intercepting httpx calls

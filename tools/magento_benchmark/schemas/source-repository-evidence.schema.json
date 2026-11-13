@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "source-repository-evidence.schema.json",
+  "title": "CodeCrow Magento 2 immutable source repository evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "corpusId",
+    "corpusDigest",
+    "repository",
+    "objectFormat",
+    "repositoryPath",
+    "cases",
+    "refs",
+    "objectCount",
+    "objectIdentityDigest",
+    "repositoryContentDigest",
+    "evidenceDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-source-repository-evidence"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "repository": {
+      "const": "magento/magento2"
+    },
+    "objectFormat": {
+      "const": "sha1"
+    },
+    "repositoryPath": {
+      "const": "repository.git"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "refs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ref"
+      }
+    },
+    "objectCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "objectIdentityDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "repositoryContentDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "evidenceDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commitSha", "treeSha"],
+      "properties": {
+        "commitSha": {"$ref": "#/$defs/sha1"},
+        "treeSha": {"$ref": "#/$defs/sha1"}
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "base",
+        "reviewedHead",
+        "finalHead",
+        "fixCommits",
+        "reviewedChangedPaths",
+        "reviewedDiffSha256",
+        "finalChangedPaths",
+        "finalDiffSha256"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "base": {"$ref": "#/$defs/commit"},
+        "reviewedHead": {"$ref": "#/$defs/commit"},
+        "finalHead": {"$ref": "#/$defs/commit"},
+        "fixCommits": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/commit"}
+        },
+        "reviewedChangedPaths": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 80,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/path"}
+        },
+        "reviewedDiffSha256": {"$ref": "#/$defs/sha256"},
+        "finalChangedPaths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/path"}
+        },
+        "finalDiffSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "commitSha"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^refs/codecrow/evidence/[0-9a-f]{40}$"
+        },
+        "commitSha": {"$ref": "#/$defs/sha1"}
+      }
+    }
+  }
+}

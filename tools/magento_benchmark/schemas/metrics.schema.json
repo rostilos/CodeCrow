@@ -1,0 +1,1247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "metrics.schema.json",
+  "title": "CodeCrow Magento 2 benchmark metrics",
+  "description": "Reference-set metrics, secondary unmatched-finding adjudication, PR-cluster intervals, and paired model comparisons.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "corpus",
+    "methodology",
+    "configurations",
+    "pairwiseComparisons",
+    "metricsDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-benchmark-metrics"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "corpus": {
+      "$ref": "#/$defs/corpus"
+    },
+    "methodology": {
+      "$ref": "#/$defs/methodology"
+    },
+    "configurations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/configuration"
+      }
+    },
+    "pairwiseComparisons": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/comparison"
+      }
+    },
+    "metricsDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "x-codecrow-semantic-gates": {
+    "artifactIntegrityReady": "The machine gate requires a strict corpus, exact judgment-to-analysis-run binding, complete resolved judgment coverage, replay/runtime/retrieval evidence, stable index receipts, fixed comparison controls, and at least 10000 bootstrap iterations.",
+    "publicationProtocolReady": "Metrics can bind and validate preregistration, sealed-label custody, the primary blinded judge audit, and raw verified-F machine-control evidence. It remains fail-closed until blinded human audit covers the derived post-fix per-gold outcomes and a final semantic reproducibility package is verified; machine-control success alone cannot make publicationProtocolReady or paperReady true."
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "analysisModelRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewPipeline",
+        "reviewPipelineRequested",
+        "reviewPipelineExpectedResponse",
+        "reviewPipelineProviderReported",
+        "providerReportedByStage"
+      ],
+      "properties": {
+        "reviewPipeline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewPipelineRequested": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewPipelineExpectedResponse": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewPipelineProviderReported": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "providerReportedByStage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "nullableRate": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusId",
+        "corpusDigest",
+        "cases",
+        "goldenComments",
+        "provisionalComments",
+        "paperReady",
+        "sizeBands",
+        "partitionCounts",
+        "partitionPolicyPreserved",
+        "repository",
+        "defaultBranch"
+      ],
+      "properties": {
+        "corpusId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "corpusDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cases": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "goldenComments": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "provisionalComments": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "paperReady": {
+          "type": "boolean"
+        },
+        "sizeBands": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "large",
+            "medium",
+            "small"
+          ],
+          "properties": {
+            "small": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "medium": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "large": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "partitionCounts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "sealed"
+          ],
+          "properties": {
+            "development": {
+              "const": 30
+            },
+            "sealed": {
+              "const": 20
+            }
+          }
+        },
+        "partitionPolicyPreserved": {
+          "type": "boolean"
+        },
+        "repository": {
+          "const": "magento/magento2"
+        },
+        "defaultBranch": {
+          "const": "2.4-develop"
+        }
+      }
+    },
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary",
+        "unit",
+        "confidenceIntervals",
+        "bootstrapIterations",
+        "minimumPublicationBootstrapIterations",
+        "bootstrapSeed",
+        "analysisArtifactsBound",
+        "analysisControlDigest",
+        "sourceRepositoryEvidence",
+        "artifactIntegrityReady",
+        "artifactIntegrityGateFailures",
+        "publicationProtocolReady",
+        "protocolControls",
+        "publicationProtocolGateFailures",
+        "paperReady",
+        "paperGateFailures",
+        "limitations"
+      ],
+      "properties": {
+        "primary": {
+          "const": "reference_set_one_to_one_substantive_matching"
+        },
+        "unit": {
+          "const": "pull_request_review_round"
+        },
+        "confidenceIntervals": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bootstrapIterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minimumPublicationBootstrapIterations": {
+          "const": 10000
+        },
+        "bootstrapSeed": {
+          "type": "integer"
+        },
+        "analysisArtifactsBound": {
+          "type": "boolean"
+        },
+        "analysisControlDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRepositoryEvidence": {
+          "$ref": "#/$defs/sourceRepositoryEvidence"
+        },
+        "artifactIntegrityReady": {
+          "type": "boolean"
+        },
+        "artifactIntegrityGateFailures": {
+          "$ref": "#/$defs/failureList"
+        },
+        "publicationProtocolReady": {
+          "const": false
+        },
+        "protocolControls": {
+          "$ref": "#/$defs/protocolControls"
+        },
+        "publicationProtocolGateFailures": {
+          "$ref": "#/$defs/failureList"
+        },
+        "paperReady": {
+          "const": false
+        },
+        "paperGateFailures": {
+          "$ref": "#/$defs/failureList"
+        },
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "failureList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sourceRepositoryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "evidenceDigest",
+        "objectIdentityDigest",
+        "repositoryContentDigest"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["not_bound", "validated"]
+        },
+        "evidenceDigest": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        },
+        "objectIdentityDigest": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        },
+        "repositoryContentDigest": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "protocolControls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registration",
+        "sealedLabelCustody",
+        "judgeCalibrationOrAudit",
+        "postFixControl",
+        "reproducibilityPackage"
+      ],
+      "properties": {
+        "registration": {
+          "$ref": "#/$defs/protocolControl"
+        },
+        "sealedLabelCustody": {
+          "$ref": "#/$defs/protocolControl"
+        },
+        "judgeCalibrationOrAudit": {
+          "$ref": "#/$defs/judgeProtocolControl"
+        },
+        "postFixControl": {
+          "$ref": "#/$defs/protocolControl"
+        },
+        "reproducibilityPackage": {
+          "$ref": "#/$defs/reproducibilityProtocolControl"
+        }
+      }
+    },
+    "protocolControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "digest"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_bound",
+            "validated"
+          ]
+        },
+        "digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "judgeProtocolControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "digest"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_bound",
+            "validated"
+          ]
+        },
+        "digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "enum": [
+            "development_calibration",
+            "blinded_human_audit"
+          ]
+        },
+        "humanHumanAgreement": {
+          "$ref": "#/$defs/rate"
+        },
+        "judgeHumanAgreement": {
+          "$ref": "#/$defs/rate"
+        },
+        "judgeHumanConfusion": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decisionKind",
+              "judgeVerdict",
+              "humanVerdict",
+              "count"
+            ],
+            "properties": {
+              "decisionKind": {
+                "enum": [
+                  "pair",
+                  "novel"
+                ]
+              },
+              "judgeVerdict": {
+                "type": "string",
+                "minLength": 1
+              },
+              "humanVerdict": {
+                "type": "string",
+                "minLength": 1
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "reproducibilityProtocolControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "digest",
+        "note"
+      ],
+      "properties": {
+        "status": {
+          "const": "not_bound"
+        },
+        "digest": {
+          "type": "null"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configId",
+        "analysisRunId",
+        "analysisRunDigest",
+        "analysisArtifactBound",
+        "judgmentId",
+        "analysisModel",
+        "analysisModelRoles",
+        "judgeModel",
+        "promptVersion",
+        "coverage",
+        "primaryScope",
+        "confirmatoryCoverage",
+        "primary",
+        "secondary",
+        "adjudicated",
+        "strata",
+        "cases"
+      ],
+      "properties": {
+        "configId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisRunId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisRunDigest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analysisArtifactBound": {
+          "type": "boolean"
+        },
+        "judgmentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysisModelRoles": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/analysisModelRoles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "judgeModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "promptVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "primaryScope": {
+          "$ref": "#/$defs/confirmatoryScope"
+        },
+        "confirmatoryCoverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "primary": {
+          "$ref": "#/$defs/aggregate"
+        },
+        "secondary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allCases",
+            "development"
+          ],
+          "properties": {
+            "allCases": {
+              "$ref": "#/$defs/aggregate"
+            },
+            "development": {
+              "$ref": "#/$defs/aggregate"
+            }
+          }
+        },
+        "adjudicated": {
+          "$ref": "#/$defs/adjudicatedAggregate"
+        },
+        "strata": {
+          "$ref": "#/$defs/strata"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/case"
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scoredCases",
+        "totalCases",
+        "rate",
+        "uncertainCases",
+        "notScored",
+        "uncertainty"
+      ],
+      "properties": {
+        "scoredCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalCases": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rate": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "uncertainCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notScored": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caseId",
+              "reason"
+            ],
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "uncertainty": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uncertainCase"
+          }
+        }
+      }
+    },
+    "confirmatoryScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition",
+        "confirmatory"
+      ],
+      "properties": {
+        "partition": {
+          "const": "sealed"
+        },
+        "confirmatory": {
+          "const": true
+        }
+      }
+    },
+    "uncertainCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "partition",
+        "reason",
+        "unverifiablePairs"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "reason": {
+          "const": "judge_unverifiable_pair"
+        },
+        "unverifiablePairs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition",
+        "micro",
+        "macro"
+      ],
+      "properties": {
+        "definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "micro": {
+          "$ref": "#/$defs/micro"
+        },
+        "macro": {
+          "$ref": "#/$defs/macro"
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "truePositive",
+        "falseNegative",
+        "referenceSetFalsePositive",
+        "goldIssues",
+        "candidateFindings"
+      ],
+      "properties": {
+        "truePositive": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "falseNegative": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "referenceSetFalsePositive": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "goldIssues": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidateFindings": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "micro": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counts",
+        "precision",
+        "recall",
+        "f1",
+        "confidenceInterval95"
+      ],
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/counts"
+        },
+        "precision": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "recall": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "f1": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "confidenceInterval95": {
+          "$ref": "#/$defs/metricIntervalsOrEmpty"
+        }
+      }
+    },
+    "macro": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "precision",
+        "recall",
+        "f1",
+        "precisionDefinedCases",
+        "caseCount",
+        "confidenceInterval95"
+      ],
+      "properties": {
+        "precision": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "recall": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "f1": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "precisionDefinedCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "caseCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confidenceInterval95": {
+          "$ref": "#/$defs/metricIntervalsOrEmpty"
+        }
+      }
+    },
+    "metricIntervals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "precision",
+        "recall",
+        "f1"
+      ],
+      "properties": {
+        "precision": {
+          "$ref": "#/$defs/interval"
+        },
+        "recall": {
+          "$ref": "#/$defs/interval"
+        },
+        "f1": {
+          "$ref": "#/$defs/interval"
+        }
+      }
+    },
+    "metricIntervalsOrEmpty": {
+      "description": "A scored configuration has per-metric intervals. A configuration with zero scored cases uses the empty interval shape.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/metricIntervals"
+        },
+        {
+          "$ref": "#/$defs/interval"
+        }
+      ]
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "low",
+        "high",
+        "iterations"
+      ],
+      "properties": {
+        "low": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "high": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "adjudicatedAggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matchedReviewerIssues",
+        "validInScopeNovel",
+        "invalid",
+        "outOfScope",
+        "unverifiable",
+        "unadjudicated",
+        "confirmedCorrectFindings",
+        "confirmedFindingPrecision",
+        "precisionDenominator",
+        "note"
+      ],
+      "properties": {
+        "matchedReviewerIssues": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "validInScopeNovel": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "invalid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outOfScope": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unverifiable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unadjudicated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confirmedCorrectFindings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confirmedFindingPrecision": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "precisionDenominator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "strata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sizeBand",
+        "partition",
+        "category",
+        "severity"
+      ],
+      "properties": {
+        "sizeBand": {
+          "$ref": "#/$defs/aggregateMap"
+        },
+        "partition": {
+          "$ref": "#/$defs/aggregateMap"
+        },
+        "category": {
+          "$ref": "#/$defs/recallMap"
+        },
+        "severity": {
+          "$ref": "#/$defs/recallMap"
+        }
+      }
+    },
+    "aggregateMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/aggregate"
+      }
+    },
+    "recallMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "matchedReviewerIssues",
+          "reviewerIssues",
+          "reviewerIssueRecall",
+          "note"
+        ],
+        "properties": {
+          "matchedReviewerIssues": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reviewerIssues": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reviewerIssueRecall": {
+            "$ref": "#/$defs/nullableRate"
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "sourcePr",
+        "sizeBand",
+        "partition",
+        "status",
+        "primary",
+        "adjudicated",
+        "goldIssues",
+        "candidateFindings",
+        "assignments",
+        "unmatchedGold",
+        "unmatchedCandidates",
+        "novelFindingJudgments"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourcePr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "number",
+            "url",
+            "title"
+          ],
+          "properties": {
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://github\\.com/"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "sizeBand": {
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "partition": {
+          "enum": [
+            "development",
+            "sealed"
+          ]
+        },
+        "status": {
+          "const": "scored"
+        },
+        "primary": {
+          "$ref": "#/$defs/casePrimary"
+        },
+        "adjudicated": {
+          "type": "object"
+        },
+        "goldIssues": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "candidateFindings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "assignments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unmatchedGold": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unmatchedCandidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "novelFindingJudgments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "casePrimary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counts",
+        "precision",
+        "recall",
+        "f1"
+      ],
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/counts"
+        },
+        "precision": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "recall": {
+          "$ref": "#/$defs/nullableRate"
+        },
+        "f1": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "leftConfigId",
+        "rightConfigId",
+        "comparisonScope",
+        "commonScoredCases",
+        "differenceDirection",
+        "macroPerCaseF1Delta",
+        "macroPerCaseF1DeltaConfidenceInterval95",
+        "microDeltaOnCommonCases",
+        "microDeltaConfidenceInterval95",
+        "note"
+      ],
+      "properties": {
+        "leftConfigId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rightConfigId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "comparisonScope": {
+          "$ref": "#/$defs/confirmatoryScope"
+        },
+        "commonScoredCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "differenceDirection": {
+          "const": "right_minus_left"
+        },
+        "macroPerCaseF1Delta": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": -1,
+          "maximum": 1
+        },
+        "macroPerCaseF1DeltaConfidenceInterval95": {
+          "$ref": "#/$defs/deltaInterval"
+        },
+        "microDeltaOnCommonCases": {
+          "$ref": "#/$defs/deltaMetricSet"
+        },
+        "microDeltaConfidenceInterval95": {
+          "$ref": "#/$defs/deltaIntervalSet"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "deltaMetricSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "precision",
+        "recall",
+        "f1"
+      ],
+      "properties": {
+        "precision": {
+          "$ref": "#/$defs/nullableDelta"
+        },
+        "recall": {
+          "$ref": "#/$defs/nullableDelta"
+        },
+        "f1": {
+          "$ref": "#/$defs/nullableDelta"
+        }
+      }
+    },
+    "deltaIntervalSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "precision",
+        "recall",
+        "f1"
+      ],
+      "properties": {
+        "precision": {
+          "$ref": "#/$defs/deltaInterval"
+        },
+        "recall": {
+          "$ref": "#/$defs/deltaInterval"
+        },
+        "f1": {
+          "$ref": "#/$defs/deltaInterval"
+        }
+      }
+    },
+    "nullableDelta": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": -1,
+      "maximum": 1
+    },
+    "deltaInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "low",
+        "high",
+        "iterations"
+      ],
+      "properties": {
+        "low": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": -1,
+          "maximum": 1
+        },
+        "high": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": -1,
+          "maximum": 1
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

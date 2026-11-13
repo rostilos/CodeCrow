@@ -72,8 +72,8 @@ public class CodeCrowApiClient {
     /**
      * Search issues with filters.
      */
-    public JsonNode searchIssues(Long projectId, String severity, String category, 
-                                  String branch, String pullRequestId, Integer limit) throws IOException {
+    public JsonNode searchIssues(Long projectId, String severity, String category,
+                                  String branch, String pullRequestId) throws IOException {
         StringBuilder urlBuilder = new StringBuilder(baseUrl)
                 .append("/api/internal/issues?projectId=")
                 .append(projectId);
@@ -90,10 +90,6 @@ public class CodeCrowApiClient {
         if (pullRequestId != null && !pullRequestId.isEmpty()) {
             urlBuilder.append("&pullRequestId=").append(URLEncoder.encode(pullRequestId, StandardCharsets.UTF_8));
         }
-        if (limit != null && limit > 0) {
-            urlBuilder.append("&limit=").append(limit);
-        }
-        
         String url = urlBuilder.toString();
         log.debug("Searching issues from: {}", url);
         

@@ -12,33 +12,50 @@ import java.util.List;
 @Repository
 public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisIssue, Long> {
 
+    private void initializeHistoryAnalyses(Long projectId, List<CodeAnalysisIssue> issues) {
+        if (!issues.isEmpty()) {
+            // Hydrate each parent once; joining it to every issue multiplies saved source in JDBC buffers.
+            findHistoryAnalyses(projectId, issues.stream().map(issue -> issue.getAnalysis().getId()).distinct().toList());
+        }
+    }
+
+    @Query("SELECT a FROM CodeAnalysis a " +
+            "LEFT JOIN FETCH a.project p LEFT JOIN FETCH p.workspace " +
+            "LEFT JOIN FETCH p.vcsBinding vcs LEFT JOIN FETCH vcs.vcsConnection " +
+            "LEFT JOIN FETCH p.aiBinding ai LEFT JOIN FETCH ai.aiConnection " +
+            "WHERE p.id = :projectId AND a.id IN :analysisIds")
+    List<org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis> findHistoryAnalyses(
+            @Param("projectId") Long projectId, @Param("analysisIds") List<Long> analysisIds);
+    java.util.Optional<CodeAnalysisIssue> findByIdAndAnalysis_Project_Id(Long issueId, Long projectId);
+
+
     List<CodeAnalysisIssue> findByAnalysisIdOrderBySeverityDescLineNumberAsc(Long analysisId);
 
     List<CodeAnalysisIssue> findByAnalysisIdAndSeverityOrderByLineNumberAsc(Long analysisId, IssueSeverity severity);
 
     List<CodeAnalysisIssue> findByAnalysisIdAndResolvedOrderByLineNumberAsc(Long analysisId, boolean resolved);
 
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "analysis",
-            "analysis.project",
-            "analysis.project.workspace",
-            "analysis.project.vcsBinding",
-            "analysis.project.vcsBinding.vcsConnection",
-            "analysis.project.aiBinding",
-            "analysis.project.aiBinding.aiConnection"
-    })
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default List<CodeAnalysisIssue> findByProjectIdAndFilePath(Long projectId, String filePath) {
+        var issues = findFileIssuesWithoutAnalysis(projectId, filePath);
+        initializeHistoryAnalyses(projectId, issues);
+        return issues;
+    }
+
     @Query("SELECT cai FROM CodeAnalysisIssue cai WHERE cai.analysis.project.id = :projectId " +
             "AND cai.filePath = :filePath ORDER BY cai.analysis.createdAt DESC")
-    List<CodeAnalysisIssue> findByProjectIdAndFilePath(@Param("projectId") Long projectId,
+    List<CodeAnalysisIssue> findFileIssuesWithoutAnalysis(@Param("projectId") Long projectId,
                                                        @Param("filePath") String filePath);
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai WHERE cai.analysis.project.id = :projectId " +
-            "AND cai.severity = :severity AND cai.resolved = false")
+            "AND cai.severity = :severity AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
     long countByProjectIdAndSeverity(@Param("projectId") Long projectId,
                                      @Param("severity") IssueSeverity severity);
 
     @Query("SELECT cai.filePath, COUNT(cai) FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "GROUP BY cai.filePath ORDER BY COUNT(cai) DESC")
     List<Object[]> findMostProblematicFilesByProjectId(@Param("projectId") Long projectId);
 
@@ -62,15 +79,19 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      * from one particular analysis.
      * Also used by BranchIssueMappingService to scope issue mapping to the correct branch.
      */
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "analysis"
-    })
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default List<CodeAnalysisIssue> findByProjectIdAndBranchNameAndFilePath(Long projectId, String branchName, String filePath) {
+        var issues = findBranchFileIssuesWithoutAnalysis(projectId, branchName, filePath);
+        initializeHistoryAnalyses(projectId, issues);
+        return issues;
+    }
+
     @Query("SELECT cai FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
             "AND cai.analysis.branchName = :branchName " +
             "AND cai.filePath = :filePath " +
             "ORDER BY cai.lineNumber ASC, cai.analysis.createdAt DESC")
-    List<CodeAnalysisIssue> findByProjectIdAndBranchNameAndFilePath(
+    List<CodeAnalysisIssue> findBranchFileIssuesWithoutAnalysis(
             @Param("projectId") Long projectId,
             @Param("branchName") String branchName,
             @Param("filePath") String filePath);
@@ -128,29 +149,37 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      * The caller filters resolved issues after loading so historical resolved rows
      * remain queryable for audit, but never get mapped as active branch issues.
      */
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "analysis"
-    })
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default List<CodeAnalysisIssue> findByProjectIdAndPrNumberAndFilePathNewestFirst(Long projectId, Long prNumber, String filePath) {
+        var issues = findPrFileIssuesWithoutAnalysis(projectId, prNumber, filePath);
+        initializeHistoryAnalyses(projectId, issues);
+        return issues;
+    }
+
     @Query("SELECT cai FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
             "AND cai.analysis.prNumber = :prNumber " +
             "AND cai.filePath = :filePath " +
             "ORDER BY cai.analysis.prVersion DESC, cai.lineNumber ASC, cai.analysis.createdAt DESC")
-    List<CodeAnalysisIssue> findByProjectIdAndPrNumberAndFilePathNewestFirst(
+    List<CodeAnalysisIssue> findPrFileIssuesWithoutAnalysis(
             @Param("projectId") Long projectId,
             @Param("prNumber") Long prNumber,
             @Param("filePath") String filePath);
 
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "analysis"
-    })
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    default List<CodeAnalysisIssue> findByProjectIdAndPrNumberInAndFilePathNewestFirst(Long projectId, java.util.Set<Long> prNumbers, String filePath) {
+        var issues = findMultiPrFileIssuesWithoutAnalysis(projectId, prNumbers, filePath);
+        initializeHistoryAnalyses(projectId, issues);
+        return issues;
+    }
+
     @Query("SELECT cai FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
             "AND cai.analysis.prNumber IN :prNumbers " +
             "AND cai.filePath = :filePath " +
             "ORDER BY cai.analysis.prNumber ASC, cai.analysis.prVersion DESC, " +
             "cai.lineNumber ASC, cai.analysis.createdAt DESC")
-    List<CodeAnalysisIssue> findByProjectIdAndPrNumberInAndFilePathNewestFirst(
+    List<CodeAnalysisIssue> findMultiPrFileIssuesWithoutAnalysis(
             @Param("projectId") Long projectId,
             @Param("prNumbers") java.util.Set<Long> prNumbers,
             @Param("filePath") String filePath);
@@ -194,11 +223,13 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     // ── Aggregate queries (for analytics — avoid loading full entity graphs) ──
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +
-            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = true")
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = true " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
     long countResolvedByProjectId(@Param("projectId") Long projectId);
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +
-            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false")
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL")
     long countOpenByProjectId(@Param("projectId") Long projectId);
 
     /**
@@ -207,6 +238,7 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      */
     @Query("SELECT cai.issueCategory, COUNT(cai) FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "GROUP BY cai.issueCategory")
     List<Object[]> countOpenByProjectIdGroupedByCategory(@Param("projectId") Long projectId);
 
@@ -217,6 +249,7 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      */
     @Query("SELECT DISTINCT cai.filePath, cai.severity FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.analysis.status <> org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL " +
             "AND cai.filePath IN :filePaths")
     List<Object[]> findSeveritiesByProjectIdAndFilePaths(
             @Param("projectId") Long projectId,

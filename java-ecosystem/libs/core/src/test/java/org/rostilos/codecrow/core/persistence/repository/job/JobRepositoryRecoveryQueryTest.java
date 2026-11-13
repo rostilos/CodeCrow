@@ -31,10 +31,11 @@ class JobRepositoryRecoveryQueryTest {
                 OffsetDateTime.class,
                 OffsetDateTime.class));
         assertGenericWebhookTypes(query(
-                "claimAbandonedRunningWebhookJob",
+                "failAbandonedRunningWebhookJob",
                 Long.class,
                 OffsetDateTime.class,
-                OffsetDateTime.class));
+                OffsetDateTime.class,
+                String.class));
     }
 
     private static String query(String methodName, Class<?>... parameters)
@@ -51,8 +52,7 @@ class JobRepositoryRecoveryQueryTest {
                 .contains("JobType.PR_ANALYSIS")
                 .contains("JobType.BRANCH_ANALYSIS")
                 .doesNotContain("JobType.BRANCH_RECONCILIATION")
-                .doesNotContain("JobType.RAG_INITIAL_INDEX")
-                .doesNotContain("JobType.RAG_INCREMENTAL_INDEX")
+                .doesNotContain("JobType.REPOSITORY_INDEX_BUILD")
                 .doesNotContain("JobType.MANUAL_ANALYSIS")
                 .doesNotContain("JobType.REPO_SYNC")
                 .doesNotContain("JobType.SUMMARIZE_COMMAND")

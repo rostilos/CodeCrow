@@ -1,0 +1,34 @@
+{
+  "id": "dockerfile",
+  "kind": "domain",
+  "requires": [],
+  "capabilities": [
+    "graph",
+    "index"
+  ],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [
+          "**/*.Dockerfile",
+          "**/Dockerfile",
+          "**/Dockerfile.*",
+          "*.Dockerfile",
+          "Dockerfile",
+          "Dockerfile.*"
+        ],
+        "contentMarkers": []
+      }
+    ]
+  },
+  "entrypoints": {
+    "python": "codecrow_plugin_dockerfile:create_plugin"
+  }
+}

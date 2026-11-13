@@ -1,6 +1,6 @@
 """
 Unit tests for utils.diff_processor — DiffProcessor, DiffChangeType,
-DiffFile, ProcessedDiff, summarize_oversized_diff, process_raw_diff, format_diff_for_prompt.
+DiffFile, ProcessedDiff, process_raw_diff, format_diff_for_prompt.
 """
 import pytest
 from utils.diff_processor import (
@@ -9,7 +9,6 @@ from utils.diff_processor import (
     HunkDisposition,
     DiffFile,
     ProcessedDiff,
-    summarize_oversized_diff,
     process_raw_diff,
     format_diff_for_prompt,
 )
@@ -181,7 +180,7 @@ index 0f3b28a..c1f5880
         included = {f.path for f in result.get_included_files()}
         assert "src/app.py" in included
 
-    def test_oversized_text_diff_is_summarized_not_skipped(self):
+    def test_oversized_text_diff_is_preserved(self):
         raw_diff = """\
 diff --git a/src/big.py b/src/big.py
 --- a/src/big.py
@@ -192,18 +191,18 @@ diff --git a/src/big.py b/src/big.py
 +cccccccccccccccccccccccccccccccccccccccccccccc
 +dddddddddddddddddddddddddddddddddddddddddddddd
 """
-        result = DiffProcessor(max_file_size=80).process(raw_diff)
+        result = DiffProcessor().process(raw_diff)
         included = result.get_included_files()
 
         assert [f.path for f in included] == ["src/big.py"]
         assert result.get_skipped_files() == []
         assert result.total_files == 1
         assert result.skipped_files == 0
-        assert included[0].skip_reason.startswith("File too large")
-        assert "CodeCrow Summary" in included[0].content
-        assert "Representative changed lines" in included[0].content
+        assert included[0].skip_reason is None
+        assert included[0].content == raw_diff.rstrip("\n")
+        assert "+dddddddddddddddddddddddddddddddddddddddddddddd" in included[0].content
 
-    def test_too_many_lines_text_diff_is_summarized_not_skipped(self):
+    def test_many_lines_text_diff_is_preserved(self):
         raw_diff = """\
 diff --git a/src/noisy.py b/src/noisy.py
 --- a/src/noisy.py
@@ -213,13 +212,14 @@ diff --git a/src/noisy.py b/src/noisy.py
 +line_two()
 +line_three()
 """
-        result = DiffProcessor(max_lines_per_file=3).process(raw_diff)
+        result = DiffProcessor().process(raw_diff)
         included = result.get_included_files()
 
         assert [f.path for f in included] == ["src/noisy.py"]
         assert result.get_skipped_files() == []
-        assert included[0].skip_reason.startswith("Too many lines")
-        assert "CodeCrow Summary" in included[0].content
+        assert included[0].skip_reason is None
+        assert "+line_one()" in included[0].content
+        assert "+line_three()" in included[0].content
 
 
 class TestDiffProcessorOrdering:
@@ -252,45 +252,6 @@ diff --git a/src/app.py b/src/app.py
         ]
 
 
-class TestDiffProcessorApplyLimits:
-
-    def test_max_files_limit_compacts_reviewable_files_instead_of_skipping(self):
-        proc = DiffProcessor(max_files=1)
-        result = proc.process(MULTI_FILE_DIFF)
-        included = result.get_included_files()
-
-        assert [f.path for f in included] == [
-            "src/app.py",
-            "package-lock.json",
-            "tests/test_app.py",
-        ]
-        assert result.get_skipped_files() == []
-        assert result.total_files == 3
-        assert result.skipped_files == 0
-        assert result.truncated is True
-        assert "compacted" in result.truncation_reason
-        assert included[1].skip_reason.startswith("Exceeds max files limit")
-        assert "CodeCrow Summary" in included[1].content
-
-    def test_total_size_limit_compacts_reviewable_files_instead_of_skipping(self):
-        proc = DiffProcessor(max_total_size=1)
-        result = proc.process(MULTI_FILE_DIFF)
-        included = result.get_included_files()
-
-        assert [f.path for f in included] == [
-            "src/app.py",
-            "package-lock.json",
-            "tests/test_app.py",
-        ]
-        assert result.get_skipped_files() == []
-        assert result.total_files == 3
-        assert result.skipped_files == 0
-        assert result.truncated is True
-        assert "compacted" in result.truncation_reason
-        assert all(f.skip_reason.startswith("Would exceed total size limit") for f in included)
-        assert all("CodeCrow Summary" in f.content for f in included)
-
-
 class TestDiffProcessorRefactoringSignals:
 
     def test_detects_rename(self):
@@ -308,33 +269,6 @@ rename to new.py
         result = proc.process(rename_diff)
         signals = result.refactoring_signals
         assert any("rename" in s.lower() or "move" in s.lower() for s in signals)
-
-
-# ── summarize_oversized_diff ─────────────────────────────────────
-
-class TestSummarizeOversizedDiff:
-
-    def test_includes_stats(self):
-        diff_content = """\
-@@ -1,10 +1,15 @@ class Foo {
-+    public void newMethod() {
-+        // line 1
-+        // line 2
--    public void oldMethod() {
--        // old
-"""
-        summary = summarize_oversized_diff(diff_content, "Foo.java")
-        assert "lines added" in summary
-        assert "lines removed" in summary
-
-    def test_includes_header(self):
-        summary = summarize_oversized_diff("+x = 1\n-y = 2", "test.py")
-        assert "test.py" in summary
-        assert "CodeCrow Summary" in summary
-
-    def test_empty_diff(self):
-        summary = summarize_oversized_diff("", "empty.py")
-        assert "empty.py" in summary
 
 
 # ── process_raw_diff (convenience) ───────────────────────────────
@@ -365,14 +299,14 @@ class TestProcessRawDiff:
         assert first[0].disposition is HunkDisposition.REVIEWABLE
         assert "+    public Order createOrder" in first[0].content
 
-    def test_keeps_all_hunks_before_large_file_compaction(self):
+    def test_keeps_all_hunks_for_large_file(self):
         raw = (
             "diff --git a/src/Large.php b/src/Large.php\n"
             "--- a/src/Large.php\n+++ b/src/Large.php\n"
             "@@ -1 +1 @@\n-old\n+new\n"
             "@@ -100 +100 @@\n-old2\n+" + "x" * 200 + "\n"
         )
-        result = DiffProcessor(max_file_size=100).process(raw)
+        result = DiffProcessor().process(raw)
 
         assert len(result.hunk_manifest()) == 2
         assert all(hunk.disposition is HunkDisposition.REVIEWABLE for hunk in result.hunk_manifest())
@@ -407,11 +341,10 @@ class TestFormatDiffForPrompt:
         output = format_diff_for_prompt(result, include_stats=False)
         assert "DIFF STATISTICS" not in output
 
-    def test_max_chars(self):
+    def test_complete_diff_is_preserved(self):
         result = process_raw_diff(SIMPLE_RAW_DIFF)
-        output = format_diff_for_prompt(result, include_stats=False, max_chars=50)
-        # Should still contain some content
-        assert len(output) > 0
+        output = format_diff_for_prompt(result, include_stats=False)
+        assert SIMPLE_RAW_DIFF.rstrip("\n") in output
 
     def test_empty_diff(self):
         result = process_raw_diff("")

@@ -23,6 +23,7 @@ import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.HttpAuthorizedClientFactory;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.webserver.project.service.RepositoryIndexBootstrapService;
 import org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 
@@ -55,6 +56,7 @@ class VcsIntegrationServiceGitHubSecurityTest {
     @Mock private OAuthStateService oAuthStateService;
     @Mock private SiteSettingsProvider siteSettingsProvider;
     @Mock private VcsProviderCleanupService providerCleanupService;
+    @Mock private RepositoryIndexBootstrapService repositoryIndexBootstrapService;
 
     private VcsIntegrationService service;
 
@@ -72,7 +74,8 @@ class VcsIntegrationServiceGitHubSecurityTest {
                 vcsClientProvider,
                 oAuthStateService,
                 siteSettingsProvider,
-                providerCleanupService
+                providerCleanupService,
+                repositoryIndexBootstrapService
         );
     }
 

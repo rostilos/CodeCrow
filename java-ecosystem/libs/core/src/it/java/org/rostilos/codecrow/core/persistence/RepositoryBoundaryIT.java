@@ -1,0 +1,622 @@
+package org.rostilos.codecrow.core.persistence;
+
+import jakarta.persistence.EntityManager;
+import org.rostilos.codecrow.core.model.reviewcheck.*;
+import org.rostilos.codecrow.core.persistence.repository.reviewcheck.*;
+import org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.transaction.annotation.Transactional;
+import org.rostilos.codecrow.core.model.job.*;
+import org.rostilos.codecrow.core.model.codeanalysis.*;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.core.model.vcs.*;
+import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
+import org.rostilos.codecrow.core.persistence.repository.reconcile.ReconcileTaskRepository;
+import org.rostilos.codecrow.core.model.reconcile.ReconcileTask;
+import org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus;
+import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
+import org.rostilos.codecrow.testsupport.annotation.IntegrationTest;
+import java.time.OffsetDateTime;
+import java.util.UUID;
+import javax.sql.DataSource;
+import static org.assertj.core.api.Assertions.*;
+
+@IntegrationTest
+@SpringBootTest(classes=RepositoryBoundaryIT.Config.class,
+        properties={"spring.flyway.enabled=false", "spring.jpa.hibernate.ddl-auto=create-drop"})
+class RepositoryBoundaryIT {
+    @SpringBootConfiguration @EnableAutoConfiguration
+    @EntityScan("org.rostilos.codecrow.core.model")
+    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class, ReviewCheckResultRepository.class})
+    static class Config {
+        @org.springframework.context.annotation.Bean
+        org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer inspectSql() {
+            return properties -> properties.put("hibernate.session_factory.statement_inspector",
+                    (org.hibernate.resource.jdbc.spi.StatementInspector) sql -> {
+                        if (SQL.get() != null) SQL.get().add(sql);
+                        return sql;
+                    });
+        }
+    }
+    private static final ThreadLocal<java.util.List<String>> SQL = new ThreadLocal<>();
+    @Autowired EntityManager em;
+    @Autowired JobRepository jobs;
+    @Autowired VcsRepoBindingRepository bindings;
+    @Autowired DataSource dataSource;
+    @Autowired ReconcileTaskRepository reconcileTasks;
+    @Autowired ReviewCheckResultRepository checkResults;
+    @Autowired ReviewCheckFindingRepository checkFindings;
+
+    @Test @Transactional
+    void reviewChecksHaveIndependentPersistenceAndScopedHistory() {
+        var owner = binding("checks", "repo", "owner", workspace()).getProject();
+        var other = binding("checks", "repo", "other", workspace()).getProject();
+        var first = reviewAnalysis(owner, 42L, 1);
+        var ordinary = new CodeAnalysisIssue(); ordinary.setAnalysis(first);
+        ordinary.setSeverity(IssueSeverity.HIGH); ordinary.setFilePath("composer.json");
+        ordinary.setTitle("Ordinary security finding"); em.persist(ordinary);
+        var result = new ReviewCheckResult(); result.setCheckId("composer-audit"); result.setComplete(true);
+        var advisory = new ReviewCheckFinding(); advisory.setFindingKey(ReviewCheckFinding.key("composer.lock\0CVE-2026-test"));
+        advisory.setTitle("CVE-2026-test"); advisory.setFilePath("composer.lock"); advisory.setSeverity(IssueSeverity.HIGH);
+        advisory.setResolved(true); advisory.setManualStatusResolved(true);
+        result.addFinding(advisory);
+        var service = new ReviewCheckResultService(checkResults);
+        service.save(first, java.util.List.of(result));
+        em.flush(); em.clear();
+
+        assertThat(issues.findByAnalysisIdOrderBySeverityDescLineNumberAsc(first.getId()))
+                .extracting(CodeAnalysisIssue::getTitle).containsExactly("Ordinary security finding");
+        assertThat(checkResults.findByAnalysis_Project_IdAndAnalysis_IdOrderByCheckId(other.getId(), first.getId())).isEmpty();
+        assertThat(checkFindings.findByIdAndResult_Analysis_Project_Id(advisory.getId(), other.getId())).isEmpty();
+        assertThat(checkFindings.findByIdAndResult_Analysis_Project_Id(advisory.getId(), owner.getId())).isPresent();
+
+        var second = reviewAnalysis(owner, 42L, 2);
+        service.copyForAnalysis(first, second);
+        assertThat(service.findForAnalysis(second).get(0).getFindings()).singleElement()
+                .satisfies(copy -> { assertThat(copy.getId()).isNotEqualTo(advisory.getId()); assertThat(copy.isResolved()).isTrue(); });
+        var anotherPr = reviewAnalysis(owner, 43L, 1);
+        service.copyForAnalysis(first, anotherPr);
+        assertThat(service.findForAnalysis(anotherPr).get(0).getFindings()).singleElement()
+                .satisfies(copy -> { assertThat(copy.isResolved()).isFalse(); assertThat(copy.getManualStatusResolved()).isNull(); });
+        var foreign = reviewAnalysis(other, 42L, 1);
+        assertThatThrownBy(() -> service.copyForAnalysis(first, foreign)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(service.findForAnalysis(foreign)).isEmpty();
+        assertThat(checkFindings.findByResult_Analysis_Project_IdAndResult_Analysis_PrNumberAndResult_CheckIdAndFindingKey(
+                owner.getId(), 42L, "composer-audit", advisory.getFindingKey())).hasSize(2);
+
+        var clean = reviewAnalysis(owner, 42L, 3);
+        var cleanCheck = new ReviewCheckResult(); cleanCheck.setCheckId("composer-audit"); cleanCheck.setComplete(true);
+        service.save(clean, java.util.List.of(cleanCheck));
+        var next = reviewAnalysis(owner, 42L, 4);
+        assertThat(service.findPrevious(next)).singleElement().satisfies(previous -> {
+            assertThat(previous.getAnalysis().getId()).isEqualTo(clean.getId());
+            assertThat(previous.getFindings()).isEmpty();
+        });
+        em.remove(em.find(CodeAnalysis.class, first.getId())); em.flush(); em.clear();
+        assertThat(checkResults.findByAnalysis_Project_IdAndAnalysis_IdOrderByCheckId(owner.getId(), first.getId())).isEmpty();
+        assertThat(checkFindings.findByIdAndResult_Analysis_Project_Id(advisory.getId(), owner.getId())).isEmpty();
+        assertThat(service.findForAnalysis(second)).hasSize(1);
+    }
+
+    private CodeAnalysis reviewAnalysis(Project project, Long pr, int version) {
+        var analysis = new CodeAnalysis(); analysis.setProject(project); analysis.setPrNumber(pr); analysis.setPrVersion(version);
+        analysis.setAnalysisType(AnalysisType.PR_REVIEW); em.persist(analysis); return analysis;
+    }
+
+    @Test
+    void partialStatusMigrationUpgradesExistingConstraintWithoutLosingAnalyses() throws Exception {
+        String schema = "partial_status_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement();
+             var source = getClass().getResourceAsStream("/db/migration/managed/V2.45.0__allow_partial_analysis_status.sql")) {
+            assertThat(source).isNotNull();
+            String migration = new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis (status text CONSTRAINT code_analysis_status_check "
+                        + "CHECK (status IN ('ACCEPTED','REJECTED','PENDING','ERROR')), comment text)");
+                sql.execute("INSERT INTO code_analysis VALUES ('ACCEPTED','existing result')");
+                sql.execute(migration);
+                for (AnalysisStatus status : AnalysisStatus.values()) {
+                    sql.execute("INSERT INTO code_analysis VALUES ('" + status.name() + "','new result')");
+                }
+                sql.execute(migration);
+                try (var rows = sql.executeQuery("SELECT comment FROM code_analysis WHERE comment='existing result'")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getString(1)).isEqualTo("existing result");
+                }
+                assertThatThrownBy(() -> sql.execute("INSERT INTO code_analysis VALUES ('UNKNOWN','invalid')"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("code_analysis_status_check");
+            } finally {
+                conn.setSchema("public");
+                sql.execute("DROP SCHEMA " + schema + " CASCADE");
+            }
+        }
+    }
+
+    @Test
+    void qaReferenceRepairPreservesContentAndScopesReferencesDuringDeletion() throws Exception {
+        String schema = "qa_reference_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement();
+             var concurrent = dataSource.getConnection(); var other = concurrent.createStatement();
+             var source = getClass().getResourceAsStream("/db/migration/managed/V2.46.0__retain_qa_content_without_deleted_analysis.sql")) {
+            assertThat(source).isNotNull();
+            String migration = new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema); concurrent.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis(id bigint PRIMARY KEY, project_id bigint, pr_number bigint)");
+                sql.execute("INSERT INTO code_analysis VALUES (1,7,88),(2,8,88),(3,7,89),(4,7,88)");
+                for (String table : java.util.List.of("qa_doc_document", "qa_doc_state")) {
+                    sql.execute("CREATE TABLE " + table + " (id bigint PRIMARY KEY, project_id bigint, pr_number bigint, "
+                            + "last_analysis_id bigint REFERENCES code_analysis(id) ON DELETE SET NULL, markdown_content text)");
+                    sql.execute("INSERT INTO " + table + " VALUES (1,7,88,1,'existing content')");
+                }
+                sql.execute(migration);
+                sql.execute(migration);
+                for (String table : java.util.List.of("qa_doc_document", "qa_doc_state")) {
+                    sql.execute("UPDATE " + table + " SET last_analysis_id=999, markdown_content='paid result' WHERE id=1");
+                    try (var row = sql.executeQuery("SELECT last_analysis_id,markdown_content FROM " + table + " WHERE id=1")) {
+                        assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                        assertThat(row.getString(2)).isEqualTo("paid result");
+                    }
+                    sql.execute("INSERT INTO " + table + " VALUES (2,7,88,2,'other project'),(3,7,88,1,'valid source')");
+                    try (var row = sql.executeQuery("SELECT last_analysis_id FROM " + table + " WHERE id=2")) {
+                        assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                    }
+                }
+                sql.execute("INSERT INTO qa_doc_document VALUES (4,7,88,3,'other PR')");
+                try (var row = sql.executeQuery("SELECT last_analysis_id FROM qa_doc_document WHERE id=4")) {
+                    assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                }
+                concurrent.setAutoCommit(false);
+                other.execute("SELECT id FROM code_analysis WHERE id=4 FOR UPDATE");
+                sql.execute("SET lock_timeout='1s'");
+                sql.execute("UPDATE qa_doc_document SET last_analysis_id=4, markdown_content='concurrent result' WHERE id=1");
+                concurrent.rollback(); concurrent.setAutoCommit(true);
+                try (var row = sql.executeQuery("SELECT last_analysis_id,markdown_content FROM qa_doc_document WHERE id=1")) {
+                    assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                    assertThat(row.getString(2)).isEqualTo("concurrent result");
+                }
+                conn.setAutoCommit(false);
+                sql.execute("UPDATE qa_doc_document SET last_analysis_id=1 WHERE id=3");
+                other.execute("SET lock_timeout='100ms'");
+                assertThatThrownBy(() -> other.execute("DELETE FROM code_analysis WHERE id=1"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("lock timeout");
+                conn.commit(); conn.setAutoCommit(true);
+                other.execute("DELETE FROM code_analysis WHERE id=1");
+                for (String table : java.util.List.of("qa_doc_document", "qa_doc_state")) {
+                    try (var row = sql.executeQuery("SELECT last_analysis_id,markdown_content FROM " + table + " WHERE id=3")) {
+                        assertThat(row.next()).isTrue(); assertThat(row.getObject(1)).isNull();
+                        assertThat(row.getString(2)).isEqualTo("valid source");
+                    }
+                }
+            } finally {
+                if (!concurrent.getAutoCommit()) concurrent.rollback();
+                if (!conn.getAutoCommit()) conn.rollback();
+                conn.setAutoCommit(true); conn.setSchema("public"); concurrent.setSchema("public");
+                sql.execute("DROP SCHEMA " + schema + " CASCADE");
+            }
+        }
+    }
+
+    @Test @Transactional
+    void onlyOneWorkerCanClaimPendingReconciliation() {
+        var task = new ReconcileTask();
+        task.setProjectId(7L);
+        task.setBranchName("main");
+        task = reconcileTasks.saveAndFlush(task);
+        var started = OffsetDateTime.now();
+        assertThat(reconcileTasks.claimPendingTask(task.getId(), started)).isEqualTo(1);
+        assertThat(reconcileTasks.claimPendingTask(task.getId(), started)).isZero();
+        task = reconcileTasks.findById(task.getId()).orElseThrow();
+        task.markFailed("Outcome unknown");
+        reconcileTasks.saveAndFlush(task);
+        assertThat(reconcileTasks.claimPendingTask(task.getId(), started)).isZero();
+        assertThat(reconcileTasks.findById(task.getId()).orElseThrow().getStatus()).isEqualTo(ReconcileTaskStatus.FAILED);
+    }
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rowVersionRepairPreservesPopulatedTablesAndExistingCounters(boolean existingNullableColumn) throws Exception {
+        String schema = "version_repair_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement();
+             var source = getClass().getResourceAsStream("/db/migration/managed/V2.44.0__restore_issue_and_qa_row_versions.sql")) {
+            assertThat(source).isNotNull();
+            String migration = new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                for (String table : java.util.List.of("code_analysis_issue", "qa_doc_document")) {
+                    sql.execute("CREATE TABLE " + table + " (id bigint PRIMARY KEY, payload text"
+                            + (existingNullableColumn ? ", row_version bigint" : "") + ")");
+                    sql.execute("INSERT INTO " + table + " (id,payload) VALUES (1,'saved content'),(2,'another record')");
+                    if (existingNullableColumn) sql.execute("UPDATE " + table + " SET row_version=7 WHERE id=2");
+                }
+                sql.execute(migration);
+                for (String table : java.util.List.of("code_analysis_issue", "qa_doc_document")) {
+                    try (var rows = sql.executeQuery("SELECT payload,row_version FROM " + table + " ORDER BY id")) {
+                        assertThat(rows.next()).isTrue();
+                        assertThat(rows.getString(1)).isEqualTo("saved content");
+                        assertThat(rows.getLong(2)).isZero();
+                        assertThat(rows.next()).isTrue();
+                        assertThat(rows.getString(1)).isEqualTo("another record");
+                        assertThat(rows.getLong(2)).isEqualTo(existingNullableColumn ? 7 : 0);
+                        assertThat(rows.next()).isFalse();
+                    }
+                    sql.execute("UPDATE " + table + " SET row_version=11 WHERE id=2");
+                }
+                // A normal upgrade after an immediate repair must retain concurrent-write protection.
+                sql.execute(migration);
+                for (String table : java.util.List.of("code_analysis_issue", "qa_doc_document")) {
+                    sql.execute("INSERT INTO " + table + " (id,payload) VALUES (3,'new record')");
+                    try (var rows = sql.executeQuery("SELECT row_version FROM " + table + " ORDER BY id")) {
+                        assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isZero();
+                        assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isEqualTo(11);
+                        assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isZero();
+                        assertThat(rows.next()).isFalse();
+                    }
+                    assertThatThrownBy(() -> sql.execute("UPDATE " + table + " SET row_version=NULL WHERE id=1"))
+                            .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("not-null constraint");
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
+    @Test void durableQaAndBranchMigrationsPreserveExistingRowsAndRecoveryDefaults() throws Exception {
+        String schema = "recovery_test_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement()) {
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis (id bigint PRIMARY KEY); INSERT INTO code_analysis VALUES (1)");
+                sql.execute("CREATE TABLE job (id bigint PRIMARY KEY, job_type text, trigger_source text); INSERT INTO job VALUES (1,'QA_DOC_COMMAND','CHAINED')");
+                sql.execute("CREATE TABLE branch (id bigint PRIMARY KEY); INSERT INTO branch VALUES (1)");
+                sql.execute("CREATE TABLE branch_issue (id bigint PRIMARY KEY); INSERT INTO branch_issue VALUES (1)");
+                for (String migration : java.util.List.of("V2.40.0__durable_qa_jobs.sql", "V2.41.0__branch_reconciliation_state.sql")) {
+                    try (var source = getClass().getResourceAsStream("/db/migration/managed/" + migration)) {
+                        assertThat(source).isNotNull();
+                        sql.execute(new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                }
+                try (var rows = sql.executeQuery("SELECT qa_documentation_pending FROM code_analysis WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getBoolean(1)).isFalse();
+                }
+                try (var rows = sql.executeQuery("SELECT reconciliation_pending, reconciliation_attempts, row_version FROM branch WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getBoolean(1)).isFalse();
+                    assertThat(rows.getInt(2)).isZero(); assertThat(rows.getLong(3)).isZero();
+                }
+                try (var rows = sql.executeQuery("SELECT row_version FROM branch_issue WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isZero();
+                }
+                sql.execute("UPDATE job SET input_analysis_id=1 WHERE id=1");
+                assertThatThrownBy(() -> sql.execute("INSERT INTO job VALUES (2,'QA_DOC_COMMAND','CHAINED',1)"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("idx_job_qa_input");
+                sql.execute("DELETE FROM code_analysis WHERE id=1");
+                try (var rows = sql.executeQuery("SELECT input_analysis_id FROM job WHERE id=1")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getObject(1)).isNull();
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
+    @Autowired CodeAnalysisIssueRepository issues;
+
+    VcsRepoBinding binding(String repoId, String slug, String namespace, Workspace workspace) {
+        var connection = new VcsConnection(); connection.setWorkspace(workspace);
+        connection.setConnectionName("server-" + UUID.randomUUID()); connection.setProviderType(EVcsProvider.GITLAB);
+        em.persist(connection);
+        var project = new Project(); project.setWorkspace(workspace); project.setNamespace(UUID.randomUUID().toString());
+        em.persist(project);
+        var binding = new VcsRepoBinding(); binding.setWorkspace(workspace); binding.setProject(project);
+        binding.setVcsConnection(connection); binding.setProvider(EVcsProvider.GITLAB);
+        binding.setExternalRepoId(repoId); binding.setExternalRepoSlug(slug); binding.setExternalNamespace(namespace);
+        em.persist(binding); em.flush(); return binding;
+    }
+    Workspace workspace() {
+        String id = UUID.randomUUID().toString(); var w = new Workspace(id, id, "test"); em.persist(w); return w;
+    }
+    @Test @Transactional void bindingsScopeIdentityAndLegacyFallbackToNamespace() {
+        var first = binding("42", "repo", "one", workspace());
+        var second = binding("42", "repo", "two", workspace());
+        var third = binding("42", "repo", "three", first.getWorkspace());
+        var legacy = binding("repo", "repo", "legacy-owner", workspace());
+        assertThat(bindings.findWebhookCandidates(EVcsProvider.GITLAB,"42","repo","one"))
+                .extracting(VcsRepoBinding::getId).containsExactlyInAnyOrder(first.getId(),second.getId(),third.getId());
+        assertThat(bindings.findWebhookCandidates(EVcsProvider.GITLAB,"unmatched","repo","wrong-owner")).isEmpty();
+        assertThat(bindings.findWebhookCandidates(EVcsProvider.GITLAB,"unmatched","repo","legacy-owner"))
+                .extracting(VcsRepoBinding::getId).containsExactly(legacy.getId());
+        assertThat(bindings.existsByWorkspace_IdAndVcsConnection_IdAndExternalRepoId(
+                first.getWorkspace().getId(),first.getVcsConnection().getId(),"42")).isTrue();
+        assertThat(bindings.existsByWorkspace_IdAndVcsConnection_IdAndExternalRepoId(
+                second.getWorkspace().getId(),first.getVcsConnection().getId(),"42")).isFalse();
+    }
+    @Test @Transactional void queuedPipelineWorkHasOneAtomicExecutionClaimAndCanRecoverAfterInactivity() {
+        var binding = binding("42","repo","one",workspace());
+        var job = new Job(); job.setProject(binding.getProject()); job.setJobType(JobType.PR_ANALYSIS);
+        job.setTriggerSource(JobTriggerSource.PIPELINE); job.setStatus(JobStatus.QUEUED);
+        em.persist(job); em.flush(); Long id=job.getId();
+        em.createNativeQuery("UPDATE job SET updated_at = :old WHERE id = :id")
+                .setParameter("old",OffsetDateTime.now().minusHours(1)).setParameter("id",id).executeUpdate();
+        assertThat(jobs.findRecoverableWebhookJobs(OffsetDateTime.now().minusSeconds(30),PageRequest.of(0,50)))
+                .extracting(Job::getId).contains(id);
+        assertThat(jobs.claimPipelineJobForExecution(id,OffsetDateTime.now())).isEqualTo(1);
+        assertThat(jobs.claimPipelineJobForExecution(id,OffsetDateTime.now())).isZero();
+        assertThat(jobs.findRecoverableWebhookJobs(OffsetDateTime.now(),PageRequest.of(0,50))).isEmpty();
+        em.createNativeQuery("UPDATE job SET updated_at = :old WHERE id = :id")
+                .setParameter("old",OffsetDateTime.now().minusHours(1)).setParameter("id",id).executeUpdate();
+        assertThat(jobs.findAbandonedRunningWebhookJobs(OffsetDateTime.now().minusMinutes(30),PageRequest.of(0,20)))
+                .extracting(Job::getId).contains(id);
+        assertThat(jobs.failAbandonedRunningWebhookJob(id,OffsetDateTime.now().minusMinutes(30),OffsetDateTime.now(),"Outcome unknown")).isEqualTo(1);
+        assertThat(jobs.claimPipelineJobForExecution(id,OffsetDateTime.now())).isZero();
+        assertThat(jobs.findById(id).orElseThrow().getStatus()).isEqualTo(JobStatus.FAILED);
+        assertThat(jobs.findRecoverableWebhookJobs(OffsetDateTime.now(),PageRequest.of(0,50))).isEmpty();
+    }
+    @Test void migrationPreservesExistingBindingAndAllowsIndependentScopes() throws Exception {
+        String schema="binding_test_"+UUID.randomUUID().toString().replace("-","");
+        try (var conn=dataSource.getConnection(); var sql=conn.createStatement()) {
+            sql.execute("CREATE SCHEMA "+schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE vcs_repo_binding (workspace_id bigint, vcs_connection_id bigint, provider text, external_repo_id text, CONSTRAINT uq_vcs_repo_binding_external UNIQUE(provider, external_repo_id))");
+                sql.execute("INSERT INTO vcs_repo_binding VALUES (1, 10, 'GITLAB', '42')");
+                try(var source=getClass().getResourceAsStream("/db/migration/managed/V2.32.0__scope_repository_bindings.sql")) {
+                    assertThat(source).isNotNull();
+                    sql.execute(new String(source.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
+                }
+                sql.execute("INSERT INTO vcs_repo_binding VALUES (2, 20, 'GITLAB', '42'), (1, 30, 'GITLAB', '42')");
+                try(var rows=sql.executeQuery("SELECT count(*) FROM vcs_repo_binding")) { rows.next(); assertThat(rows.getInt(1)).isEqualTo(3); }
+                assertThatThrownBy(()->sql.execute("INSERT INTO vcs_repo_binding VALUES (1,10,'GITLAB','42')"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("uq_vcs_repo_binding_scoped_external");
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA "+schema+" CASCADE"); }
+        }
+    }
+    @Test @Transactional void historicalIssueLookupRequiresCurrentProjectAndRetainsBaseAnchor() {
+        var owner = binding("old", "repo", "one", workspace()).getProject();
+        var other = binding("other", "repo", "two", workspace()).getProject();
+        var analysis = new CodeAnalysis(); analysis.setProject(owner);
+        analysis.setAnalysisType(AnalysisType.PR_REVIEW); em.persist(analysis);
+        var issue = new CodeAnalysisIssue(); issue.setAnalysis(analysis);
+        issue.setSeverity(IssueSeverity.HIGH); issue.setFilePath("removed.java");
+        issue.setLineNumber(7); issue.setAnchorSide(IssueAnchorSide.BASE);
+        issue.setSuggestedFixDescription("project-private fix"); em.persist(issue);
+        em.flush(); Long id = issue.getId(); em.clear();
+        assertThat(issues.findByIdAndAnalysis_Project_Id(id, other.getId())).isEmpty();
+        var sameProject = issues.findByIdAndAnalysis_Project_Id(id, owner.getId()).orElseThrow();
+        assertThat(sameProject.getAnchorSide()).isEqualTo(IssueAnchorSide.BASE);
+        assertThat(sameProject.getLineNumber()).isEqualTo(7);
+        assertThat(sameProject.getSuggestedFixDescription()).isEqualTo("project-private fix");
+    }
+    @Test void anchorMigrationPreservesExistingRowsWithHeadDefault() throws Exception {
+        String schema = "anchor_test_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement()) {
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE code_analysis_issue (id bigint PRIMARY KEY)");
+                sql.execute("CREATE TABLE branch_issue (id bigint PRIMARY KEY)");
+                sql.execute("INSERT INTO code_analysis_issue VALUES (1)");
+                sql.execute("INSERT INTO branch_issue VALUES (1)");
+                try (var source = getClass().getResourceAsStream("/db/migration/managed/V2.33.0__review_anchor_side.sql")) {
+                    assertThat(source).isNotNull();
+                    sql.execute(new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                }
+                for (String table : java.util.List.of("code_analysis_issue", "branch_issue")) {
+                    try (var rows = sql.executeQuery("SELECT anchor_side FROM " + table + " WHERE id=1")) {
+                        rows.next(); assertThat(rows.getString(1)).isEqualTo("HEAD");
+                    }
+                    sql.execute("INSERT INTO " + table + " (id,anchor_side) VALUES (2,'BASE')");
+                    try (var rows = sql.executeQuery("SELECT anchor_side FROM " + table + " WHERE id=2")) {
+                        rows.next(); assertThat(rows.getString(1)).isEqualTo("BASE");
+                    }
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
+
+
+    @Autowired org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository changeSummaries;
+
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+
+    @ParameterizedTest @ValueSource(strings = {"id", "commitPr", "latest", "version", "fingerprint",
+            "commit", "history", "task", "idWithIssues",
+            "fileIssues", "branchIssues", "prIssues", "multiPrIssues"})
+    void reviewLookupLoadsIssuesWithoutRepeatingTheSavedPayload(String lookup) {
+        var source = new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> {
+            var project = binding("qa-payload-" + UUID.randomUUID(), "repo", "one", workspace()).getProject();
+            var analysis = new CodeAnalysis(); analysis.setProject(project);
+            analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
+            analysis.setCommitHash("qa-head"); analysis.setPrVersion(1);
+            analysis.setSourceBranchName("feature/QA-1");
+            analysis.setTaskId("QA-1"); analysis.setDiffFingerprint("qa-fingerprint");
+            analysis.setBranchName("main");
+            analysis.setPrChangeSummaryPayload("x".repeat(1_000_000));
+            for (int i = 0; i < 30; i++) {
+                var issue = new CodeAnalysisIssue(); issue.setFilePath("file.java");
+                issue.setSeverity(IssueSeverity.LOW); issue.setReason("test issue");
+                analysis.addIssue(issue);
+            }
+            em.persist(analysis); em.flush();
+            return new Long[] {analysis.getId(), project.getId()};
+        });
+        SQL.set(new java.util.ArrayList<>());
+        try {
+            if (lookup.endsWith("Issues") && !lookup.equals("idWithIssues")) {
+                var history = switch (lookup) {
+                    case "fileIssues" -> issues.findByProjectIdAndFilePath(source[1], "file.java");
+                    case "branchIssues" -> issues.findByProjectIdAndBranchNameAndFilePath(source[1], "main", "file.java");
+                    case "prIssues" -> issues.findByProjectIdAndPrNumberAndFilePathNewestFirst(source[1], 9L, "file.java");
+                    case "multiPrIssues" -> issues.findByProjectIdAndPrNumberInAndFilePathNewestFirst(source[1], java.util.Set.of(9L), "file.java");
+                    default -> throw new AssertionError(lookup);
+                };
+                assertThat(history).hasSize(30).allSatisfy(issue -> {
+                    assertThat(issue.getAnalysis().getPrChangeSummaryPayload()).hasSize(1_000_000);
+                    if (lookup.equals("fileIssues")) {
+                        assertThat(issue.getAnalysis().getProject().getWorkspace().getName()).isNotBlank();
+                    }
+                });
+                assertThat(SQL.get()).noneMatch(sql -> sql.contains("pr_change_summary_payload")
+                        && sql.contains("code_analysis_issue"));
+                return;
+            }
+            var loaded = switch (lookup) {
+                case "id" -> changeSummaries.findByIdAndProjectId(source[0], source[1]).orElseThrow();
+                case "commitPr" -> changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "qa-head", 9L).orElseThrow();
+                case "latest" -> changeSummaries.findLatestByProjectId(source[1]).orElseThrow();
+                case "version" -> changeSummaries.findByProjectIdAndPrNumberWithMaxPrVersion(source[1], 9L).orElseThrow();
+                case "fingerprint" -> changeSummaries.findTopByProjectIdAndDiffFingerprint(source[1], "qa-fingerprint").orElseThrow();
+                case "commit" -> changeSummaries.findTopByProjectIdAndCommitHash(source[1], "qa-head").orElseThrow();
+                case "history" -> changeSummaries.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(source[1], 9L).get(0);
+                case "task" -> changeSummaries.findLatestPrAnalysesByProjectIdAndTaskId(source[1], "QA-1", null, PageRequest.of(0, 1)).get(0);
+                case "idWithIssues" -> changeSummaries.findByIdWithIssues(source[0]).orElseThrow();
+                default -> throw new AssertionError(lookup);
+            };
+            assertThat(loaded.getPrChangeSummaryPayload()).hasSize(1_000_000);
+            assertThat(loaded.getIssues()).as("issues remain available after the repository transaction").hasSize(30);
+            assertThat(SQL.get()).as("the saved payload must not be repeated for each issue row")
+                    .noneMatch(sql -> sql.contains("pr_change_summary_payload") && sql.contains("join code_analysis_issue"));
+            SQL.get().clear();
+            assertThat(changeSummaries.findSourceBranchForQa(source[0], source[1])).contains("feature/QA-1");
+            assertThat(SQL.get()).singleElement().satisfies(sql -> assertThat(sql)
+                    .doesNotContain("pr_change_summary_payload", "code_analysis_issue"));
+            assertThat(changeSummaries.findSourceBranchForQa(source[0], source[1] + 100000)).isEmpty();
+            assertThat(changeSummaries.findByIdAndProjectId(source[0], source[1] + 100000)).isEmpty();
+            assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(source[1], "other-head", 9L)).isEmpty();
+        } finally { SQL.remove(); }
+    }
+
+    @Test void reviewHistoryPreservesVersionsTenantScopeAndDatabasePagination() {
+        var projects = new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> {
+            var owner = binding("history-owner-" + UUID.randomUUID(), "repo", "one", workspace()).getProject();
+            var other = binding("history-other-" + UUID.randomUUID(), "repo", "two", workspace()).getProject();
+            for (var project : java.util.List.of(owner, other)) {
+                for (long pr : new long[] {41, 42}) {
+                    for (int version = 1; version <= 3; version++) {
+                        var analysis = reviewAnalysis(project, pr, version);
+                        analysis.setTaskId("TASK-1");
+                        org.springframework.test.util.ReflectionTestUtils.setField(analysis, "createdAt",
+                                OffsetDateTime.now().minusDays(100 - pr - version));
+                        analysis.setPrChangeSummaryPayload("saved-" + pr + "-" + version);
+                        var issue = new CodeAnalysisIssue(); issue.setFilePath("file.java");
+                        issue.setSeverity(IssueSeverity.LOW); issue.setReason("version-" + version);
+                        issue.setResolved(version == 1); analysis.addIssue(issue);
+                        em.persist(issue);
+                    }
+                }
+            }
+            em.flush();
+            return new Long[] {owner.getId(), other.getId()};
+        });
+        SQL.set(new java.util.ArrayList<>());
+        try {
+            var history = changeSummaries.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projects[0], 41L);
+            assertThat(history).extracting(CodeAnalysis::getPrVersion).containsExactly(3, 2, 1);
+            assertThat(history).allSatisfy(analysis -> {
+                assertThat(analysis.getProject().getId()).isEqualTo(projects[0]);
+                assertThat(analysis.getIssues()).singleElement().satisfies(issue -> {
+                    assertThat(issue.getReason()).isEqualTo("version-" + analysis.getPrVersion());
+                    assertThat(issue.isResolved()).isEqualTo(analysis.getPrVersion() == 1);
+                });
+            });
+            SQL.get().clear();
+            var page = changeSummaries.findLatestPrAnalysesByProjectIdAndTaskId(
+                    projects[0], "TASK-1", null, PageRequest.of(0, 1));
+            assertThat(page).singleElement().satisfies(analysis -> {
+                assertThat(analysis.getPrNumber()).isEqualTo(42L);
+                assertThat(analysis.getPrVersion()).isEqualTo(3);
+                assertThat(analysis.getProject().getId()).isEqualTo(projects[0]);
+                assertThat(analysis.getIssues()).hasSize(1);
+            });
+            assertThat(SQL.get()).anyMatch(sql -> sql.contains("pr_change_summary_payload")
+                    && sql.contains("fetch first"));
+            assertThat(SQL.get()).noneMatch(sql -> sql.contains("pr_change_summary_payload")
+                    && sql.contains("join code_analysis_issue"));
+            assertThat(changeSummaries.findLatestPrAnalysesByProjectIdAndTaskId(
+                    projects[0], "TASK-1", 42L, PageRequest.of(0, 1)))
+                    .extracting(CodeAnalysis::getPrNumber).containsExactly(41L);
+            assertThat(changeSummaries.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projects[1] + 100000, 41L)).isEmpty();
+        } finally { SQL.remove(); }
+    }
+
+    @Test @Transactional void pendingQaDiscoveryDoesNotLoadReviewPayloads() {
+        var owner = binding("qa-owner", "repo", "one", workspace()).getProject();
+        var other = binding("qa-other", "repo", "two", workspace()).getProject();
+        var expected = new java.util.ArrayList<Long>();
+        for (var project : java.util.List.of(owner, other, owner)) {
+            var analysis = new CodeAnalysis(); analysis.setProject(project);
+            analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
+            analysis.setQaDocumentationPending(true);
+            analysis.setPrChangeSummaryPayload("x".repeat(1_000_000));
+            em.persist(analysis); expected.add(analysis.getId());
+        }
+        em.flush(); em.clear();
+
+        var candidates = changeSummaries.findPendingQaDocumentation(PageRequest.of(0, 2));
+        assertThat(candidates).extracting(candidate -> candidate.getId())
+                .containsExactlyElementsOf(expected.subList(0, 2));
+        assertThat(candidates).extracting(candidate -> candidate.getProjectId())
+                .containsExactly(owner.getId(), other.getId());
+        assertThat(em.unwrap(org.hibernate.Session.class).getStatistics().getEntityCount())
+                .as("polling must not hydrate analyses, saved review payloads or project graphs")
+                .isZero();
+        assertThat(changeSummaries.findPendingQaDocumentation(PageRequest.of(1, 2)))
+                .extracting(candidate -> candidate.getId()).containsExactly(expected.get(2));
+        changeSummaries.consumeQaIntent(owner.getId(), expected.get(0));
+        assertThat(changeSummaries.findPendingQaDocumentation(PageRequest.of(0, 2)))
+                .extracting(candidate -> candidate.getId())
+                .containsExactlyElementsOf(expected.subList(1, 3));
+    }
+
+    @Test @Transactional void changeSummarySurvivesReloadAndRequiresProjectPrAndRevision() {
+        var owner = binding("summary-owner", "repo", "one", workspace()).getProject();
+        var other = binding("summary-other", "repo", "two", workspace()).getProject();
+        var analysis = new CodeAnalysis(); analysis.setProject(owner);
+        analysis.setAnalysisType(AnalysisType.PR_REVIEW); analysis.setPrNumber(9L);
+        analysis.setCommitHash("abc123"); em.persist(analysis); em.flush();
+        String payload = "{\"summary\":\"Added input guard\",\"files\":[{\"path\":\"a.py\"}]}";
+        analysis.setPrChangeSummaryPayload(payload); changeSummaries.saveAndFlush(analysis);
+        em.clear();
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                owner.getId(), "abc123", 9L)).get().extracting(CodeAnalysis::getPrChangeSummaryPayload).isEqualTo(payload);
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                other.getId(), "abc123", 9L)).isEmpty();
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                owner.getId(), "abc123", 10L)).isEmpty();
+        assertThat(changeSummaries.findByProjectIdAndCommitHashAndPrNumber(
+                owner.getId(), "new123", 9L)).isEmpty();
+    }
+
+    @Test void changeSummaryMigrationStoresGraphAndCascadesDeletion() throws Exception {
+        String schema = "summary_test_" + UUID.randomUUID().toString().replace("-", "");
+        try (var conn = dataSource.getConnection(); var sql = conn.createStatement()) {
+            sql.execute("CREATE SCHEMA " + schema);
+            try {
+                conn.setSchema(schema);
+                sql.execute("CREATE TABLE project (id bigint PRIMARY KEY)");
+                sql.execute("CREATE TABLE code_analysis (id bigint PRIMARY KEY)");
+                try (var source = getClass().getResourceAsStream("/db/migration/managed/V2.35.0__pr_change_summary.sql")) {
+                    assertThat(source).isNotNull();
+                    sql.execute(new String(source.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                }
+                sql.execute("INSERT INTO project VALUES (7); INSERT INTO code_analysis VALUES (101)");
+                sql.execute("INSERT INTO pr_change_summary (analysis_id,project_id,pr_number,source_revision,payload) VALUES (101,7,9,'abc','{\"files\":[]}')");
+                try (var rows = sql.executeQuery("SELECT payload FROM pr_change_summary WHERE project_id=7 AND pr_number=9 AND source_revision='abc'")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getString(1)).isEqualTo("{\"files\":[]}");
+                }
+                sql.execute("DELETE FROM code_analysis WHERE id=101");
+                try (var rows = sql.executeQuery("SELECT count(*) FROM pr_change_summary")) {
+                    rows.next(); assertThat(rows.getInt(1)).isZero();
+                }
+            } finally { conn.setSchema("public"); sql.execute("DROP SCHEMA " + schema + " CASCADE"); }
+        }
+    }
+}

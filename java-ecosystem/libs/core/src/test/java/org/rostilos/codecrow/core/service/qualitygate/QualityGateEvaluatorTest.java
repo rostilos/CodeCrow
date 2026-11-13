@@ -21,12 +21,55 @@ import static org.assertj.core.api.Assertions.assertThat;
 class QualityGateEvaluatorTest {
 
     private QualityGateEvaluator evaluator;
+    private org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService checks;
+
+    @Test
+    void partialAnalysisHasNoCompletedQualityGateVerdict() {
+        CodeAnalysis analysis = createAnalysis(0, 0, 0, 0);
+        analysis.setStatus(org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL);
+        assertThat(evaluator.evaluate(analysis, createQualityGate("Zero issues", true)).isSkipped()).isTrue();
+    }
 
     @BeforeEach
     void setUp() {
         // Pass null repository — only needed for evaluateStatus() which uses workspace default lookup.
         // The evaluate(analysis, qualityGate) method used in these tests does not require the repository.
-        evaluator = new QualityGateEvaluator(null);
+        checks = org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService.class);
+        evaluator = new QualityGateEvaluator(null, checks);
+    }
+
+    @Test
+    void checkFindingsAffectGateWithoutBecomingOrdinaryIssues() {
+        var analysis = createAnalysis(0, 0, 0, 0);
+        var result = new org.rostilos.codecrow.core.model.reviewcheck.ReviewCheckResult();
+        var advisory = new org.rostilos.codecrow.core.model.reviewcheck.ReviewCheckFinding();
+        advisory.setSeverity(IssueSeverity.HIGH); result.addFinding(advisory);
+        org.mockito.Mockito.when(checks.findForAnalysis(analysis)).thenReturn(java.util.List.of(result));
+        var gate = createQualityGate("No high issues", true);
+        gate.addCondition(createCondition(QualityGateMetric.ISSUES_BY_SEVERITY, IssueSeverity.HIGH, QualityGateComparator.GREATER_THAN, 0));
+        assertThat(evaluator.evaluate(analysis, gate).isFailed()).isTrue();
+        assertThat(analysis.getIssues()).isEmpty();
+        assertThat(analysis.getTotalIssues()).isZero();
+        advisory.setResolved(true);
+        assertThat(evaluator.evaluate(analysis, gate).isPassed()).isTrue();
+    }
+
+    @Nested
+    @DisplayName("resolved issue accounting")
+    class ResolvedIssueAccounting {
+        @Test
+        void newIssueMetricDoesNotSubtractResolvedCountFromAlreadyActiveCount() {
+            CodeAnalysis analysis = new CodeAnalysis();
+            var active = new org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue();
+            active.setSeverity(IssueSeverity.HIGH); analysis.addIssue(active);
+            var resolved = new org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue();
+            resolved.setSeverity(IssueSeverity.HIGH); resolved.setResolved(true); analysis.addIssue(resolved);
+            QualityGate gate = createQualityGate("No open issues", true);
+            gate.addCondition(createCondition(QualityGateMetric.NEW_ISSUES, null, QualityGateComparator.GREATER_THAN, 0));
+            QualityGateResult result = evaluator.evaluate(analysis, gate);
+            assertThat(result.conditionResults().get(0).actualValue()).isEqualTo(1);
+            assertThat(result.isFailed()).isTrue();
+        }
     }
 
     @Nested

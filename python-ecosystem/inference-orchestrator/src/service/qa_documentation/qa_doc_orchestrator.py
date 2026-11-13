@@ -12,11 +12,14 @@ import asyncio
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional, Callable, Set
+from typing import Dict, Any, List, Optional, Callable, Set, Sequence
+from llm.provider_errors import raise_if_outcome_unknown
 
 from model.enrichment import PrEnrichmentDataDto
 from service.qa_documentation.base_orchestrator import (
     BaseOrchestrator,
+    QaPromptPackingError,
+    QaSemanticRecord,
     emit_status,
     emit_progress,
     emit_error,
@@ -37,13 +40,18 @@ from utils.prompts.constants_qa_doc import (
     QA_STAGE_3_AGGREGATION_PROMPT,
     QA_STAGE_3_DELTA_PROMPT,
     QA_STAGE_3_PREVIOUS_DOC_SECTION,
-    QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
 
 # Threshold: if total diff is under this many chars, skip multi-stage and do single-pass
 SINGLE_PASS_THRESHOLD = 8_000  # ~2k tokens — small PRs don't need multi-stage
+
+_VCS_REPOSITORY_ARGUMENTS = {
+    "getReviewFileContent": "repoSlug",
+    "getBranchFileContent": "repoSlug",
+    "getDirectoryByPath": "projectKey",
+}
 
 TEST_CASE_SENTINELS = (
     "<!-- codecrow-test-cases:start -->",
@@ -55,6 +63,19 @@ ENVIRONMENT_SENTINELS = (
     "<!-- codecrow-environment:content -->",
     "<!-- codecrow-environment:end -->",
 )
+
+QA_SEMANTIC_SHARD_NOTICE = (
+    "BOUNDED QA SEMANTIC SHARD: this request owns an admitted subset of input "
+    "records. Other packets own the remaining evidence. Do not "
+    "interpret local absence as evidence that a change or requirement does "
+    "not exist."
+)
+
+QA_HIERARCHICAL_SYNTHESIS_NOTICE = (
+    "QA HIERARCHICAL SYNTHESIS: consolidate every assigned child memo and retain "
+    "its coverage diagnostics. Do not infer that omitted sibling evidence is absent."
+)
+
 
 
 class QaDocOrchestrator(BaseOrchestrator):
@@ -70,8 +91,213 @@ class QaDocOrchestrator(BaseOrchestrator):
         self,
         llm,
         event_callback: Optional[Callable[[Dict], None]] = None,
+        agent_service=None,
     ):
         super().__init__(llm, event_callback)
+        self.agent_service = agent_service
+        self._repository_tool_bindings = {}
+
+    @staticmethod
+    def _messages(system_prompt: str, user_prompt: str) -> List[Dict[str, str]]:
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    @staticmethod
+    def _record_text(
+        records: Sequence[QaSemanticRecord],
+        *sections: str,
+        empty: str,
+    ) -> str:
+        selected = [
+            record.envelope()
+            for record in records
+            if record.section in sections
+        ]
+        if not selected:
+            return empty
+        return QA_SEMANTIC_SHARD_NOTICE + "\n\n" + "\n\n".join(selected)
+
+    @staticmethod
+    def _record_paths(records: Sequence[QaSemanticRecord]) -> List[str]:
+        return sorted({path for record in records for path in record.paths if path})
+
+    @staticmethod
+    def _text_record(
+        key: str,
+        section: str,
+        text: Any,
+        *,
+        paths: Sequence[str] = (),
+    ) -> QaSemanticRecord:
+        normalized = text if isinstance(text, str) else str(text)
+        return QaSemanticRecord(
+            key=key,
+            section=section,
+            text=normalized,
+            paths=tuple(paths),
+            character_end=len(normalized),
+            source_character_count=len(normalized),
+        )
+
+    @classmethod
+    def _json_leaf_records(
+        cls,
+        value: Any,
+        *,
+        key_prefix: str,
+        section: str,
+        path: tuple[Any, ...] = (),
+    ) -> List[QaSemanticRecord]:
+        """Represent every JSON leaf/empty container as a complete path record."""
+        if isinstance(value, dict) and value:
+            return [
+                record
+                for key in sorted(value, key=str)
+                for record in cls._json_leaf_records(
+                    value[key],
+                    key_prefix=key_prefix,
+                    section=section,
+                    path=(*path, key),
+                )
+            ]
+        if isinstance(value, (list, tuple)) and value:
+            return [
+                record
+                for index, item in enumerate(value)
+                for record in cls._json_leaf_records(
+                    item,
+                    key_prefix=key_prefix,
+                    section=section,
+                    path=(*path, index),
+                )
+            ]
+
+        pointer = "/" + "/".join(
+            str(item).replace("~", "~0").replace("/", "~1")
+            for item in path
+        )
+        # String leaves are free text: keep their exact bytes directly under
+        # the JSON-pointer-bearing record key so line/whitespace packing can
+        # split them semantically. Other scalar/empty values remain explicit
+        # typed JSON records.
+        payload = (
+            value
+            if isinstance(value, str)
+            else json.dumps(
+                {"jsonPointer": pointer or "/", "value": value},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+        )
+        suffix = pointer or "/"
+        return [cls._text_record(
+            f"{key_prefix}:{suffix}",
+            section,
+            payload,
+        )]
+
+    @classmethod
+    def _diff_records(
+        cls,
+        diff: str,
+        *,
+        key_prefix: str,
+        section: str = "diff",
+    ) -> List[QaSemanticRecord]:
+        if not diff:
+            return []
+        sections = re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE)
+        records: List[QaSemanticRecord] = []
+        for index, chunk in enumerate(sections, start=1):
+            if not chunk:
+                continue
+            match = re.match(r"diff --git a/(.+?) b/(.+?)(?:\n|$)", chunk)
+            paths = tuple(sorted(set(match.groups()))) if match else ()
+            records.append(cls._text_record(
+                f"{key_prefix}:{index:06d}",
+                section,
+                chunk,
+                paths=paths,
+            ))
+        return records
+
+    @classmethod
+    def _shared_records(
+        cls,
+        placeholders: Dict[str, str],
+        fields: Sequence[str],
+    ) -> tuple[Dict[str, str], List[QaSemanticRecord]]:
+        detached = dict(placeholders)
+        records: List[QaSemanticRecord] = []
+        for field in fields:
+            value = detached.get(field)
+            if not isinstance(value, str) or not value:
+                continue
+            records.append(cls._text_record(
+                f"shared:{field}",
+                f"shared:{field}",
+                value,
+            ))
+            detached[field] = (
+                f"[Complete {field} is assigned once in QA semantic records.]"
+            )
+        return detached, records
+
+    @staticmethod
+    def _stable_union(values: Sequence[Any]) -> List[Any]:
+        result: List[Any] = []
+        seen: set[str] = set()
+        for value in values:
+            identity = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            result.append(value)
+        return result
+
+    @classmethod
+    def _merge_stage_2_results(
+        cls,
+        results: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        list_fields = (
+            "cross_file_scenarios",
+            "cascading_risks",
+            "uncovered_acceptance_criteria",
+        )
+        merged: Dict[str, Any] = {
+            field: cls._stable_union([
+                item
+                for result in results
+                for item in (result.get(field) or [])
+            ])
+            for field in list_fields
+        }
+        diagnostics = [
+            str(result.get("error"))
+            for result in results
+            if result.get("error")
+        ]
+        if diagnostics:
+            merged["partial_errors"] = cls._stable_union(diagnostics)
+        raw = [
+            str(result.get("raw_analysis"))
+            for result in results
+            if result.get("raw_analysis")
+        ]
+        if raw:
+            merged["raw_analysis"] = "\n\n".join(raw)
+        return merged
 
     async def run(
         self,
@@ -96,6 +322,9 @@ class QaDocOrchestrator(BaseOrchestrator):
         target_branch: Optional[str] = None,
         vcs_provider: Optional[str] = None,
         output_language: Optional[str] = "English",
+        max_allowed_tokens: Optional[int] = None,
+        maxAllowedTokens: Optional[int] = None,
+        pr_change_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point — runs the multi-stage QA doc pipeline.
@@ -103,6 +332,44 @@ class QaDocOrchestrator(BaseOrchestrator):
         Returns:
             {"documentation_needed": bool, "documentation": str | None}
         """
+        self._repository_tool_bindings = {
+            name: {"workspace": workspace_slug, argument: repo_slug}
+            for name, argument in _VCS_REPOSITORY_ARGUMENTS.items()
+        } if workspace_slug and repo_slug else {}
+        request_token_hint = (
+            max_allowed_tokens
+            if max_allowed_tokens is not None
+            else maxAllowedTokens
+        )
+        if request_token_hint is None:
+            request_token_hint = pr_metadata.get(
+                "maxAllowedTokens",
+                pr_metadata.get("max_allowed_tokens"),
+            )
+        token_target = self.set_request_input_token_target(
+            request_token_hint, persisted_context=bool(pr_change_summary),
+        )
+        self.effective_template_mode = template_mode.upper()
+        if pr_change_summary:
+            supplied_paths = {file["path"] for file in pr_change_summary.get("files", [])}
+            supplied_files = len(supplied_paths)
+        else:
+            source_records = [record for record in self._diff_records(diff or "", key_prefix="coverage")
+                              if record.paths]
+            supplied_paths = {path for record in source_records for path in record.paths}
+            supplied_files = len(source_records)
+        input_coverage = {
+            "status": ("unknown" if not supplied_paths else "partial"
+                       if set(changed_file_paths or []) - supplied_paths or supplied_files < files_analyzed
+                       else "complete"),
+            "source": "saved_changes" if pr_change_summary else "diff" if diff else "analysis_only",
+            "provided_file_count": supplied_files,
+        }
+        logger.info(
+            "QA documentation request-aware input target: %d tokens",
+            token_target,
+        )
+
         # Build base placeholders (shared across all prompts)
         task_ctx = task_context or {}
         task_context_block = build_task_context_for_prompt(task_context)
@@ -120,6 +387,12 @@ class QaDocOrchestrator(BaseOrchestrator):
             output_language=output_language,
         )
 
+        from service.review.change_summary import change_summary_context
+        context = change_summary_context(pr_change_summary)
+        if context:
+            placeholders["analysis_summary"] += context
+            placeholders["diff"] = "Changes are described by the persisted scheduler graph and summary above."
+
         # ── Relevance gate ───────────────────────────────────────────
         emit_status(self.event_callback, "relevance_check", "Checking if QA documentation is needed...")
         if not await self._is_documentation_needed(placeholders):
@@ -128,7 +401,7 @@ class QaDocOrchestrator(BaseOrchestrator):
 
         # ── Decide: multi-stage vs. single-pass ──────────────────────
         effective_diff = diff or ""
-        use_multi_stage = len(effective_diff) > SINGLE_PASS_THRESHOLD and changed_file_paths
+        use_multi_stage = not context and len(effective_diff) > SINGLE_PASS_THRESHOLD and changed_file_paths
 
         if use_multi_stage:
             logger.info(
@@ -143,6 +416,8 @@ class QaDocOrchestrator(BaseOrchestrator):
                 changed_file_paths=changed_file_paths or [],
                 previous_documentation=previous_documentation,
                 is_same_pr_rerun=is_same_pr_rerun,
+                template_mode=template_mode.upper(),
+                custom_template=custom_template,
             )
         else:
             logger.info(
@@ -179,7 +454,8 @@ class QaDocOrchestrator(BaseOrchestrator):
             pr_number, project_name, len(documentation),
             "multi-stage" if use_multi_stage else "single-pass",
         )
-        return {"documentation_needed": True, "documentation": documentation}
+        return {"documentation_needed": True, "documentation": documentation,
+                "template_mode_used": self.effective_template_mode, "input_coverage": input_coverage}
 
     # ==================================================================
     # Multi-stage pipeline
@@ -195,6 +471,8 @@ class QaDocOrchestrator(BaseOrchestrator):
         changed_file_paths: List[str],
         previous_documentation: Optional[str],
         is_same_pr_rerun: bool,
+        template_mode: str = "BASE",
+        custom_template: Optional[str] = None,
     ) -> str:
         """Execute the 3-stage ULTRATHINKING pipeline."""
         try:
@@ -226,7 +504,10 @@ class QaDocOrchestrator(BaseOrchestrator):
                 len(changed_file_paths),
             )
             batches = self.build_dependency_batches(
-                changed_file_paths, enrichment_data, analysis_diff,
+                changed_file_paths,
+                enrichment_data,
+                analysis_diff,
+                max_batch_tokens=self.input_token_target(),
             )
             stage_1_results = await self._execute_stage_1(
                 batches=batches,
@@ -256,7 +537,16 @@ class QaDocOrchestrator(BaseOrchestrator):
 
             # ── STAGE 3: Aggregation / Delta ─────────────────────────
             emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final document...")
-            if is_same_pr_rerun and delta_diff and previous_documentation:
+            if template_mode != "BASE":
+                documentation = await self._run_single_pass(
+                    template_mode=template_mode,
+                    custom_template=custom_template,
+                    placeholders={**placeholders, "diff": "Source evidence was processed in the preceding batches.",
+                        "analysis_summary": placeholders["analysis_summary"] + "\n"
+                        + self._slim_stage_results(stage_1_results) + "\n" + self._slim_stage_results(stage_2_results)},
+                    previous_documentation=previous_documentation,
+                )
+            elif is_same_pr_rerun and delta_diff and previous_documentation:
                 documentation = await self._execute_stage_3_delta(
                     stage_1_results=stage_1_results,
                     stage_2_results=stage_2_results,
@@ -279,13 +569,14 @@ class QaDocOrchestrator(BaseOrchestrator):
             return documentation
 
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.error("Multi-stage QA doc pipeline failed: %s", e, exc_info=True)
             emit_error(self.event_callback, str(e))
             # Fallback to single-pass
             logger.info("Falling back to single-pass after multi-stage failure")
             return await self._run_single_pass(
-                template_mode="BASE",
-                custom_template=None,
+                template_mode=template_mode,
+                custom_template=custom_template,
                 placeholders=placeholders,
                 previous_documentation=previous_documentation,
             )
@@ -300,20 +591,20 @@ class QaDocOrchestrator(BaseOrchestrator):
         enrichment_data: Optional[PrEnrichmentDataDto],
         placeholders: Dict[str, str],
     ) -> List[Dict[str, Any]]:
-        """Run Stage 1: per-batch file analysis (parallel, max 5 concurrent)."""
+        """Analyze every dependency batch with bounded model-call concurrency."""
         total_batches = len(batches)
         enrichment_lookup = self.build_enrichment_lookup(enrichment_data)
         analysis_system_prompt = QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**placeholders)
+        token_target = self.input_token_target()
 
         MAX_CONCURRENCY = 5
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         completed_count = 0
 
-        # Model input budget: keep conservative to avoid 400 errors
-        # from models behind proxies with tighter limits
-        MAX_INPUT_CHARS = 200_000
-
-        async def _process_batch(idx: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        async def _process_batch(
+            idx: int,
+            batch: List[Dict[str, Any]],
+        ) -> List[Dict[str, Any]]:
             nonlocal completed_count
             async with semaphore:
                 # Extract file paths for this batch
@@ -326,8 +617,9 @@ class QaDocOrchestrator(BaseOrchestrator):
                 # Filter diff to only this batch's files
                 batch_diff = self.filter_diff_for_files(diff, batch_files) or "(no diff for this batch)"
 
-                # Build file contents section
+                # Build file contents section for the unchanged one-call path.
                 file_contents_parts: List[str] = []
+                source_by_path: Dict[str, str] = {}
                 for fp in sorted(batch_files):
                     fc = enrichment_lookup.get(fp, "")
                     if not fc:
@@ -336,6 +628,7 @@ class QaDocOrchestrator(BaseOrchestrator):
                                 fc = ec
                                 break
                     if fc:
+                        source_by_path[fp] = fc
                         file_contents_parts.append(f"#### {fp}\n```\n{fc}\n```")
                     else:
                         file_contents_parts.append(f"#### {fp}\n(file content not available)")
@@ -343,39 +636,7 @@ class QaDocOrchestrator(BaseOrchestrator):
                 file_list = "\n".join(f"- {fp}" for fp in sorted(batch_files))
                 file_contents_str = "\n\n".join(file_contents_parts) or "(no enrichment data available)"
 
-                # Guard: if raw sections are too large, cap them BEFORE
-                # building the prompt so we never exceed the model window.
-                # Split the budget: ~60% diff, ~40% file content (diff is more
-                # important for QA analysis).
-                max_section = MAX_INPUT_CHARS - 20_000  # leave room for template + system
-                max_diff_chars = int(max_section * 0.6)
-                max_content_chars = int(max_section * 0.4)
-
-                if len(batch_diff) > max_diff_chars:
-                    logger.warning(
-                        "Stage 1 batch %d/%d: batch_diff too large (%dK chars), "
-                        "capping to %dK chars",
-                        idx, total_batches, len(batch_diff) // 1000,
-                        max_diff_chars // 1000,
-                    )
-                    batch_diff = (
-                        batch_diff[:max_diff_chars]
-                        + f"\n\n... (diff capped — original {len(batch_diff)} chars)"
-                    )
-
-                if len(file_contents_str) > max_content_chars:
-                    logger.warning(
-                        "Stage 1 batch %d/%d: file_contents too large (%dK chars), "
-                        "capping to %dK chars",
-                        idx, total_batches, len(file_contents_str) // 1000,
-                        max_content_chars // 1000,
-                    )
-                    file_contents_str = (
-                        file_contents_str[:max_content_chars]
-                        + f"\n\n... (content capped — original {len(file_contents_str)} chars)"
-                    )
-
-                prompt = QA_STAGE_1_BATCH_PROMPT.format(
+                complete_prompt = QA_STAGE_1_BATCH_PROMPT.format(
                     **placeholders,
                     batch_number=idx,
                     total_batches=total_batches,
@@ -383,41 +644,148 @@ class QaDocOrchestrator(BaseOrchestrator):
                     batch_diff=batch_diff,
                     file_contents=file_contents_str,
                 )
+                complete_messages = self._messages(
+                    analysis_system_prompt,
+                    complete_prompt,
+                )
+                complete_tokens = self.estimate_rendered_input_tokens(
+                    complete_messages
+                )
 
-                est_tokens = (len(prompt) + len(analysis_system_prompt)) // 4
+                packet_messages: List[
+                    tuple[List[Dict[str, str]], tuple[str, ...]]
+                ]
+                if complete_tokens <= token_target:
+                    packet_messages = [(complete_messages, ())]
+                else:
+                    shard_placeholders, shared_records = self._shared_records(
+                        placeholders,
+                        ("task_context",),
+                    )
+                    records = [
+                        *shared_records,
+                        *self._diff_records(
+                            batch_diff,
+                            key_prefix=f"stage1:{idx}:diff",
+                        ),
+                        *(
+                            self._text_record(
+                                f"stage1:{idx}:source:{source_index:06d}",
+                                "source",
+                                source_by_path.get(
+                                    path,
+                                    "(file content not available)",
+                                ),
+                                paths=(path,),
+                            )
+                            for source_index, path in enumerate(
+                                sorted(batch_files),
+                                start=1,
+                            )
+                        ),
+                    ]
+
+                    def render_packet(
+                        packet: Sequence[QaSemanticRecord],
+                    ) -> List[Dict[str, str]]:
+                        packet_paths = self._record_paths(packet)
+                        prompt = QA_STAGE_1_BATCH_PROMPT.format(
+                            **shard_placeholders,
+                            batch_number=idx,
+                            total_batches=total_batches,
+                            file_list=(
+                                "\n".join(f"- {path}" for path in packet_paths)
+                                or "(shared context record; no file-local record)"
+                            ),
+                            batch_diff=self._record_text(
+                                packet,
+                                "diff",
+                                empty=(
+                                    "No diff record is assigned to this shard; "
+                                    "other shards own the omitted diff evidence."
+                                ),
+                            ),
+                            file_contents=self._record_text(
+                                packet,
+                                "source",
+                                "shared:task_context",
+                                empty=(
+                                    "No source/shared record is assigned to this "
+                                    "shard; other shards own that evidence."
+                                ),
+                            ),
+                        )
+                        return self._messages(analysis_system_prompt, prompt)
+
+                    packets = self.pack_semantic_records(
+                        records,
+                        render_packet,
+                        token_target,
+                    )
+                    packet_messages = [
+                        (
+                            render_packet(packet),
+                            tuple(record.display_key for record in packet),
+                        )
+                        for packet in packets
+                    ]
+
                 logger.info(
-                    "Stage 1 batch %d/%d: prompt_size=%d chars (~%dK tokens), "
-                    "files_with_content=%d/%d",
-                    idx, total_batches, len(prompt), est_tokens // 1000,
+                    "Stage 1 batch %d/%d: complete_estimated_tokens=%d "
+                    "target_tokens=%d semantic_shards=%d files_with_content=%d/%d",
+                    idx,
+                    total_batches,
+                    complete_tokens,
+                    token_target,
+                    len(packet_messages),
                     sum(1 for p in file_contents_parts if "(file content not available)" not in p),
                     len(batch_files),
                 )
 
+                results: List[Dict[str, Any]] = []
                 try:
-                    response = await self.llm.ainvoke([
-                        {"role": "system", "content": analysis_system_prompt},
-                        {"role": "user", "content": prompt},
-                    ])
-                    text = self._extract_text(response)
-                    parsed = self._parse_json_from_response(text)
-                    if parsed:
-                        fa_count = len(parsed.get("file_analyses", []))
-                        logger.info(
-                            "Stage 1 batch %d/%d: parsed OK, file_analyses=%d, keys=%s",
-                            idx, total_batches, fa_count, list(parsed.keys()),
-                        )
-                        return parsed
-                    else:
+                    for shard_index, (messages, record_keys) in enumerate(
+                        packet_messages,
+                        start=1,
+                    ):
+                        response = await self.llm.ainvoke(messages)
+                        text = self._extract_text(response)
+                        parsed = self._parse_json_from_response(text)
+                        if parsed:
+                            if record_keys:
+                                parsed["qa_semantic_record_keys"] = list(
+                                    record_keys
+                                )
+                            results.append(parsed)
+                            continue
                         logger.warning(
-                            "Stage 1 batch %d/%d: JSON parse failed, response_length=%d, "
-                            "first_200_chars=%s",
-                            idx, total_batches, len(text) if text else 0,
+                            "Stage 1 batch %d/%d shard %d/%d JSON parse "
+                            "failed; preserving uncapped raw analysis; preview=%s",
+                            idx,
+                            total_batches,
+                            shard_index,
+                            len(packet_messages),
                             repr((text or "")[:200]),
                         )
-                        return {"batch_id": idx, "raw_analysis": text, "file_analyses": []}
+                        results.append({
+                            "batch_id": idx,
+                            "raw_analysis": text,
+                            "file_analyses": [],
+                            "qa_semantic_record_keys": list(record_keys),
+                        })
+                    return results
                 except Exception as e:
-                    logger.error("Stage 1 batch %d/%d failed: %s", idx, total_batches, e)
-                    return {"batch_id": idx, "error": str(e), "file_analyses": []}
+                    logger.error(
+                        "Stage 1 batch %d/%d required semantic evidence failed: %s",
+                        idx,
+                        total_batches,
+                        e,
+                    )
+                    # Stop queued batches before releasing this batch's semaphore slot.
+                    for task in tasks:
+                        if task is not asyncio.current_task():
+                            task.cancel()
+                    raise
                 finally:
                     completed_count += 1
                     emit_progress(
@@ -431,19 +799,16 @@ class QaDocOrchestrator(BaseOrchestrator):
             "Stage 1: launching %d batches with max_concurrency=%d",
             total_batches, MAX_CONCURRENCY,
         )
-        tasks = [_process_batch(idx, batch) for idx, batch in enumerate(batches, start=1)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Handle any unexpected exceptions from gather
-        processed: List[Dict[str, Any]] = []
-        for idx, result in enumerate(results, start=1):
-            if isinstance(result, BaseException):
-                logger.error("Stage 1 batch %d/%d unexpected failure: %s", idx, total_batches, result)
-                processed.append({"batch_id": idx, "error": str(result), "file_analyses": []})
-            else:
-                processed.append(result)
-
-        return processed
+        tasks = [asyncio.create_task(_process_batch(idx, batch))
+                 for idx, batch in enumerate(batches, start=1)]
+        try:
+            results = await asyncio.gather(*tasks)
+            return [result for batch_results in results for result in batch_results]
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── Stage 2: Cross-Impact Analysis ───────────────────────────────
 
@@ -455,8 +820,9 @@ class QaDocOrchestrator(BaseOrchestrator):
         changed_file_paths: List[str],
         placeholders: Dict[str, str],
     ) -> Dict[str, Any]:
-        """Run Stage 2: cross-file impact analysis."""
+        """Run Stage 2 with at most three child calls and one synthesis call."""
         analysis_system_prompt = QA_DOC_ANALYSIS_SYSTEM_PROMPT.format(**placeholders)
+        token_target = self.input_token_target()
 
         # Build dependency info from enrichment
         dependency_info = "No dependency data available."
@@ -470,45 +836,333 @@ class QaDocOrchestrator(BaseOrchestrator):
             if dep_lines:
                 dependency_info = "\n".join(dep_lines)
 
-        # Serialize Stage 1 results (compact) and cap to fit model context
-        MAX_STAGE2_CHARS = 200_000
-        probe = QA_STAGE_2_CROSS_IMPACT_PROMPT.format(
-            **placeholders,
-            total_files_changed=len(changed_file_paths),
-            stage_1_results="",
-            dependency_info=dependency_info,
-            changed_files_list=", ".join(changed_file_paths[:50]),
-        )
-        overhead = len(probe) + len(analysis_system_prompt) + 2000
-        s1_budget = max(MAX_STAGE2_CHARS - overhead, 20_000)
-        stage_1_str = self._slim_stage_results(stage_1_results, max_chars=s1_budget)
+        stage_1_str = self._slim_stage_results(stage_1_results)
 
         prompt = QA_STAGE_2_CROSS_IMPACT_PROMPT.format(
             **placeholders,
             total_files_changed=len(changed_file_paths),
             stage_1_results=stage_1_str,
             dependency_info=dependency_info,
-            changed_files_list=", ".join(changed_file_paths[:50]),
+            changed_files_list=", ".join(changed_file_paths),
         )
-        total_chars = len(prompt) + len(analysis_system_prompt)
+        complete_messages = self._messages(analysis_system_prompt, prompt)
+        complete_tokens = self.estimate_rendered_input_tokens(complete_messages)
         logger.info(
-            "Stage 2: prompt=%dK chars (~%dK tokens), s1_budget=%dK",
-            total_chars // 1000, total_chars // 4000, s1_budget // 1000,
+            "Stage 2: complete_estimated_tokens=%d target_tokens=%d",
+            complete_tokens,
+            token_target,
         )
 
-        try:
-            response = await self.llm.ainvoke([
-                {"role": "system", "content": analysis_system_prompt},
-                {"role": "user", "content": prompt},
-            ])
-            content = self._extract_text(response)
-            parsed = self._parse_json_from_response(content)
-            return parsed or {"cross_file_scenarios": [], "cascading_risks": [], "raw_analysis": content}
-        except Exception as e:
-            logger.error("Stage 2 cross-impact failed: %s", e)
-            return {"cross_file_scenarios": [], "cascading_risks": [], "error": str(e)}
+        if complete_tokens <= token_target:
+            try:
+                response = await self.llm.ainvoke(complete_messages)
+                content = self._extract_text(response)
+                parsed = self._parse_json_from_response(content)
+                return parsed or {
+                    "cross_file_scenarios": [],
+                    "cascading_risks": [],
+                    "raw_analysis": content,
+                }
+            except Exception as e:
+                raise_if_outcome_unknown(e)
+                logger.error("Stage 2 cross-impact failed: %s", e)
+                return {
+                    "cross_file_scenarios": [],
+                    "cascading_risks": [],
+                    "error": str(e),
+                }
+
+        shard_placeholders, shared_records = self._shared_records(
+            placeholders,
+            ("task_context",),
+        )
+        dependency_records: List[QaSemanticRecord] = []
+        if enrichment_data and enrichment_data.relationships:
+            for index, relationship in enumerate(
+                enrichment_data.relationships,
+                start=1,
+            ):
+                if hasattr(relationship, "model_dump"):
+                    relationship_payload = relationship.model_dump(mode="json")
+                else:
+                    relationship_payload = vars(relationship)
+                dependency_records.append(self._text_record(
+                    f"stage2:dependency:{index:06d}",
+                    "dependency",
+                    json.dumps(
+                        relationship_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ),
+                    paths=tuple(
+                        str(value)
+                        for value in (
+                            getattr(relationship, "sourceFile", ""),
+                            getattr(relationship, "targetFile", ""),
+                        )
+                        if value
+                    ),
+                ))
+        records = [
+            *shared_records,
+            *self._json_leaf_records(
+                stage_1_results,
+                key_prefix="stage2:stage1",
+                section="stage1",
+            ),
+            *dependency_records,
+            *(
+                self._text_record(
+                    f"stage2:changed-path:{index:06d}",
+                    "changed_path",
+                    path,
+                    paths=(path,),
+                )
+                for index, path in enumerate(changed_file_paths, start=1)
+            ),
+        ]
+
+        def render_packet(
+            packet: Sequence[QaSemanticRecord],
+        ) -> List[Dict[str, str]]:
+            user_prompt = QA_STAGE_2_CROSS_IMPACT_PROMPT.format(
+                **shard_placeholders,
+                total_files_changed=len(changed_file_paths),
+                stage_1_results=self._record_text(
+                    packet,
+                    "stage1",
+                    "stage2_memo",
+                    "shared:task_context",
+                    empty="No prior-analysis record is assigned to this shard.",
+                ),
+                dependency_info=self._record_text(
+                    packet,
+                    "dependency",
+                    empty="No dependency record is assigned to this shard.",
+                ),
+                changed_files_list=self._record_text(
+                    packet,
+                    "changed_path",
+                    empty="No changed-path record is assigned to this shard.",
+                ),
+            )
+            return self._messages(analysis_system_prompt, user_prompt)
+
+        async def invoke_packets(
+            semantic_records: Sequence[QaSemanticRecord],
+            *,
+            synthesis: bool,
+        ) -> tuple[List[Dict[str, Any]], int]:
+            empty_tokens = self.estimate_rendered_input_tokens(render_packet([]))
+            fragment_target = None
+            if synthesis and empty_tokens < token_target:
+                fragment_target = empty_tokens + max(
+                    1,
+                    (token_target - empty_tokens) // 3,
+                )
+            packets = self.pack_semantic_records(
+                semantic_records,
+                render_packet,
+                token_target,
+                fragment_token_target=fragment_target,
+            )
+            successful: List[Dict[str, Any]] = []
+            failures = 0
+            for packet_index, packet in enumerate(packets, start=1):
+                try:
+                    response = await self._invoke_document(render_packet(packet))
+                    content = self._extract_text(response)
+                    parsed = self._parse_json_from_response(content)
+                    successful.append(parsed or {
+                        "cross_file_scenarios": [],
+                        "cascading_risks": [],
+                        "raw_analysis": content,
+                    })
+                except Exception as exception:
+                    raise_if_outcome_unknown(exception)
+                    failures += 1
+                    logger.warning(
+                        "Optional QA Stage 2 semantic shard %d/%d failed open: %s",
+                        packet_index,
+                        len(packets),
+                        exception,
+                    )
+            return successful, failures
+
+        current, failures = await invoke_packets(records, synthesis=False)
+        if not current:
+            return {
+                "cross_file_scenarios": [],
+                "cascading_risks": [],
+                "error": "all optional Stage 2 semantic shards failed",
+            }
+        if failures:
+            current.append({
+                "cross_file_scenarios": [],
+                "cascading_risks": [],
+                "error": f"{failures} optional Stage 2 shard(s) failed open",
+            })
+
+        level = 1
+        while len(current) > 1:
+            memo_records = [
+                self._text_record(
+                    f"stage2:synthesis:{level}:{index:06d}",
+                    "stage2_memo",
+                    QA_HIERARCHICAL_SYNTHESIS_NOTICE
+                    + "\n"
+                    + json.dumps(
+                        result,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ),
+                )
+                for index, result in enumerate(current, start=1)
+            ]
+            next_results, synthesis_failures = await invoke_packets(
+                memo_records,
+                synthesis=True,
+            )
+            if synthesis_failures or not next_results:
+                logger.warning(
+                    "QA Stage 2 hierarchy stopped at level %d after optional "
+                    "synthesis failure; retaining deterministic complete union",
+                    level,
+                )
+                return self._merge_stage_2_results(current)
+            if len(next_results) >= len(current):
+                logger.warning(
+                    "QA Stage 2 hierarchy could not reduce %d complete memos at "
+                    "level %d; retaining deterministic complete union",
+                    len(current),
+                    level,
+                )
+                return self._merge_stage_2_results(current)
+            current = next_results
+            level += 1
+
+        return current[0]
 
     # ── Stage 3: Aggregation ─────────────────────────────────────────
+
+    async def _invoke_required_document_records(
+        self,
+        records: Sequence[QaSemanticRecord],
+        render_packet: Callable[
+            [Sequence[QaSemanticRecord]],
+            List[Dict[str, str]],
+        ],
+        *,
+        label: str,
+        synthesis: bool = False,
+    ) -> List[str]:
+        """Invoke every required document shard or fail the stage atomically."""
+        token_target = self.input_token_target()
+        empty_tokens = self.estimate_rendered_input_tokens(render_packet([]))
+        fragment_target = None
+        if synthesis and empty_tokens < token_target:
+            fragment_target = empty_tokens + max(
+                1,
+                (token_target - empty_tokens) // 3,
+            )
+        packets = self.pack_semantic_records(
+            records,
+            render_packet,
+            token_target,
+            fragment_token_target=fragment_target,
+        )
+        outputs: List[str] = []
+        for index, packet in enumerate(packets, start=1):
+            try:
+                response = await self._invoke_document(render_packet(packet))
+            except Exception as exception:
+                raise RuntimeError(
+                    f"{label} failed atomically at required semantic shard "
+                    f"{index} of {len(packets)}"
+                ) from exception
+            content = self._extract_text(response)
+            if not content.strip():
+                raise ValueError(
+                    f"{label} returned empty content for required semantic "
+                    f"shard {index} of {len(packets)}"
+                )
+            outputs.append(content)
+        return outputs
+
+    async def _synthesize_qa_documents(
+        self,
+        documents: Sequence[str],
+        placeholders: Dict[str, str],
+        *,
+        label: str,
+        template_mode: str = "BASE",
+        custom_template: Optional[str] = None,
+    ) -> str:
+        """Hierarchically consolidate complete child documents under target."""
+        current = list(documents)
+        if not current:
+            raise ValueError(f"{label} produced no document shard")
+        if len(current) == 1:
+            return current[0]
+
+        shard_placeholders, _ = self._shared_records(
+            placeholders,
+            ("task_context", "analysis_summary"),
+        )
+        system_prompt = QA_DOC_SYSTEM_PROMPT.format(**shard_placeholders)
+
+        def render_packet(
+            packet: Sequence[QaSemanticRecord],
+        ) -> List[Dict[str, str]]:
+            prompt = QA_STAGE_3_AGGREGATION_PROMPT.format(
+                **shard_placeholders,
+                stage_1_results=self._record_text(
+                    packet,
+                    "document_memo",
+                    empty="No child document memo is assigned to this packet.",
+                ),
+                stage_2_results=(
+                    QA_HIERARCHICAL_SYNTHESIS_NOTICE
+                    + " No separate Stage 2 record is assigned at this level."
+                ),
+                previous_doc_section="",
+            )
+            if template_mode != "BASE":
+                prompt += "\nPreserve the requested " + template_mode + " format from the child documents."
+                if custom_template and self.prompt_fits(self._messages(system_prompt, prompt + "\n" + custom_template)):
+                    prompt += "\nRequested template:\n" + custom_template
+            return self._messages(system_prompt, prompt)
+
+        level = 1
+        while len(current) > 1:
+            records = [
+                *(
+                    self._text_record(
+                        f"document-synthesis:{level}:{index:06d}",
+                        "document_memo",
+                        QA_HIERARCHICAL_SYNTHESIS_NOTICE + "\n" + document,
+                    )
+                    for index, document in enumerate(current, start=1)
+                ),
+            ]
+            next_documents = await self._invoke_required_document_records(
+                records,
+                render_packet,
+                label=f"{label} synthesis level {level}",
+                synthesis=True,
+            )
+            if len(next_documents) >= len(current):
+                raise QaPromptPackingError(
+                    f"{label} hierarchy could not reduce {len(current)} complete "
+                    f"document memos at synthesis level {level}"
+                )
+            current = next_documents
+            level += 1
+        return current[0]
 
     async def _execute_stage_3_aggregation(
         self,
@@ -518,67 +1172,104 @@ class QaDocOrchestrator(BaseOrchestrator):
         previous_documentation: Optional[str],
         placeholders: Dict[str, str],
     ) -> str:
-        """Run Stage 3: final aggregation into polished QA document.
-
-        Uses compact JSON and progressively tighter budgets.  If the first
-        attempt fails (model 400 / context overflow), retries once with
-        a halved budget before giving up.
-        """
+        """Run Stage 3 with every prior-stage result intact and packed."""
         prev_doc_section = ""
         if previous_documentation and previous_documentation.strip():
             prev_doc_section = QA_STAGE_3_PREVIOUS_DOC_SECTION.format(
                 previous_documentation=previous_documentation
             )
 
-        # --- attempt helper ---------------------------------------------------
-        async def _attempt(budget: int) -> str:
-            # Compute overhead (prompt template + system prompt minus the two
-            # variable slots) so we know how much room is left for results.
-            probe = QA_STAGE_3_AGGREGATION_PROMPT.format(
-                **placeholders,
-                stage_1_results="",
-                stage_2_results="",
-                previous_doc_section=prev_doc_section,
-            )
-            overhead = len(probe) + len(QA_DOC_SYSTEM_PROMPT) + 2000  # safety margin
-            remaining = max(budget - overhead, 20_000)
-            s1_budget = int(remaining * 0.7)
-            s2_budget = int(remaining * 0.3)
-
-            stage_1_str = self._slim_stage_results(stage_1_results, max_chars=s1_budget)
-            stage_2_str = self._slim_stage_results(stage_2_results, max_chars=s2_budget)
-
-            prompt = QA_STAGE_3_AGGREGATION_PROMPT.format(
-                **placeholders,
-                stage_1_results=stage_1_str,
-                stage_2_results=stage_2_str,
-                previous_doc_section=prev_doc_section,
-            )
-            total = len(prompt) + len(QA_DOC_SYSTEM_PROMPT)
-            logger.info(
-                "Stage 3 aggregation: budget=%dK, prompt=%dK chars (~%dK tokens), "
-                "s1=%dK, s2=%dK",
-                budget // 1000, total // 1000, total // 4000,
-                len(stage_1_str) // 1000, len(stage_2_str) // 1000,
-            )
-
-            response = await self.llm.ainvoke([
-                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
-                {"role": "user", "content": prompt},
-            ])
+        stage_1_str = self._slim_stage_results(stage_1_results)
+        stage_2_str = self._slim_stage_results(stage_2_results)
+        prompt = QA_STAGE_3_AGGREGATION_PROMPT.format(
+            **placeholders,
+            stage_1_results=stage_1_str,
+            stage_2_results=stage_2_str,
+            previous_doc_section=prev_doc_section,
+        )
+        total = len(prompt) + len(QA_DOC_SYSTEM_PROMPT)
+        logger.info(
+            "Stage 3 aggregation: prompt=%dK chars (~%dK tokens), s1=%dK, s2=%dK",
+            total // 1000,
+            total // 4000,
+            len(stage_1_str) // 1000,
+            len(stage_2_str) // 1000,
+        )
+        system_prompt = QA_DOC_SYSTEM_PROMPT.format(**placeholders)
+        complete_messages = self._messages(system_prompt, prompt)
+        complete_tokens = self.estimate_rendered_input_tokens(complete_messages)
+        if complete_tokens <= self.input_token_target():
+            response = await self.llm.ainvoke(complete_messages)
             return self._extract_text(response)
 
-        # --- try with normal budget, then retry at half -----------------------
-        BUDGET_NORMAL = 200_000
-        BUDGET_TIGHT  = 100_000
-        try:
-            return await _attempt(BUDGET_NORMAL)
-        except Exception as first_err:
-            logger.warning(
-                "Stage 3 aggregation failed at %dK budget: %s — retrying at %dK",
-                BUDGET_NORMAL // 1000, first_err, BUDGET_TIGHT // 1000,
+        shard_placeholders, shared_records = self._shared_records(
+            placeholders,
+            ("task_context", "analysis_summary"),
+        )
+        shard_system_prompt = QA_DOC_SYSTEM_PROMPT.format(**shard_placeholders)
+        records = [
+            *shared_records,
+            *self._json_leaf_records(
+                stage_1_results,
+                key_prefix="stage3:stage1",
+                section="stage1",
+            ),
+            *self._json_leaf_records(
+                stage_2_results,
+                key_prefix="stage3:stage2",
+                section="stage2",
+            ),
+        ]
+        if previous_documentation and previous_documentation.strip():
+            records.append(self._text_record(
+                "stage3:previous-documentation",
+                "previous_documentation",
+                previous_documentation,
+            ))
+
+        def render_packet(
+            packet: Sequence[QaSemanticRecord],
+        ) -> List[Dict[str, str]]:
+            previous = self._record_text(
+                packet,
+                "previous_documentation",
+                empty="",
             )
-            return await _attempt(BUDGET_TIGHT)
+            previous_section = (
+                QA_STAGE_3_PREVIOUS_DOC_SECTION.format(
+                    previous_documentation=previous
+                )
+                if previous
+                else ""
+            )
+            shard_prompt = QA_STAGE_3_AGGREGATION_PROMPT.format(
+                **shard_placeholders,
+                stage_1_results=self._record_text(
+                    packet,
+                    "stage1",
+                    "shared:task_context",
+                    empty="No Stage 1 record is assigned to this shard.",
+                ),
+                stage_2_results=self._record_text(
+                    packet,
+                    "stage2",
+                    "shared:analysis_summary",
+                    empty="No Stage 2 record is assigned to this shard.",
+                ),
+                previous_doc_section=previous_section,
+            )
+            return self._messages(shard_system_prompt, shard_prompt)
+
+        documents = await self._invoke_required_document_records(
+            records,
+            render_packet,
+            label="QA Stage 3 aggregation",
+        )
+        return await self._synthesize_qa_documents(
+            documents,
+            placeholders,
+            label="QA Stage 3 aggregation",
+        )
 
     # ── Stage 3 Delta: Same-PR re-run ────────────────────────────────
 
@@ -593,62 +1284,146 @@ class QaDocOrchestrator(BaseOrchestrator):
     ) -> str:
         """Run Stage 3 delta: targeted update for same-PR re-runs."""
 
-        async def _attempt(budget: int) -> str:
-            # Measure template overhead (everything except stage results)
-            probe = QA_STAGE_3_DELTA_PROMPT.format(
-                **placeholders,
-                delta_diff=delta_diff,
-                stage_1_results="",
-                stage_2_results="",
-                previous_documentation=previous_documentation,
-            )
-            overhead = len(probe) + len(QA_DOC_SYSTEM_PROMPT) + 2000
-            remaining = max(budget - overhead, 20_000)
-            s1_budget = int(remaining * 0.7)
-            s2_budget = int(remaining * 0.3)
-
-            stage_1_str = self._slim_stage_results(stage_1_results, max_chars=s1_budget)
-            stage_2_str = self._slim_stage_results(stage_2_results, max_chars=s2_budget)
-
-            prompt = QA_STAGE_3_DELTA_PROMPT.format(
-                **placeholders,
-                delta_diff=delta_diff,
-                stage_1_results=stage_1_str,
-                stage_2_results=stage_2_str,
-                previous_documentation=previous_documentation,
-            )
-            total = len(prompt) + len(QA_DOC_SYSTEM_PROMPT)
-            logger.info(
-                "Stage 3 delta: budget=%dK, prompt=%dK chars (~%dK tokens)",
-                budget // 1000, total // 1000, total // 4000,
-            )
-
-            response = await self.llm.ainvoke([
-                {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
-                {"role": "user", "content": prompt},
-            ])
+        stage_1_str = self._slim_stage_results(stage_1_results)
+        stage_2_str = self._slim_stage_results(stage_2_results)
+        prompt = QA_STAGE_3_DELTA_PROMPT.format(
+            **placeholders,
+            delta_diff=delta_diff,
+            stage_1_results=stage_1_str,
+            stage_2_results=stage_2_str,
+            previous_documentation=previous_documentation,
+        )
+        system_prompt = QA_DOC_SYSTEM_PROMPT.format(**placeholders)
+        complete_messages = self._messages(system_prompt, prompt)
+        if self.prompt_fits(complete_messages):
+            response = await self.llm.ainvoke(complete_messages)
             return self._extract_text(response)
 
-        BUDGET_NORMAL = 200_000
-        BUDGET_TIGHT  = 100_000
-        try:
-            return await _attempt(BUDGET_NORMAL)
-        except Exception as first_err:
-            logger.warning(
-                "Stage 3 delta failed at %dK budget: %s — retrying at %dK",
-                BUDGET_NORMAL // 1000, first_err, BUDGET_TIGHT // 1000,
-            )
-            return await _attempt(BUDGET_TIGHT)
+        shard_placeholders, shared_records = self._shared_records(
+            placeholders,
+            ("task_context",),
+        )
+        shard_system_prompt = QA_DOC_SYSTEM_PROMPT.format(**shard_placeholders)
+        records = [
+            *shared_records,
+            *self._diff_records(
+                delta_diff,
+                key_prefix="stage3-delta:diff",
+                section="delta_diff",
+            ),
+            *self._json_leaf_records(
+                stage_1_results,
+                key_prefix="stage3-delta:stage1",
+                section="stage1",
+            ),
+            *self._json_leaf_records(
+                stage_2_results,
+                key_prefix="stage3-delta:stage2",
+                section="stage2",
+            ),
+            self._text_record(
+                "stage3-delta:previous-documentation",
+                "previous_documentation",
+                previous_documentation,
+            ),
+        ]
 
-        response = await self.llm.ainvoke([
-            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**placeholders)},
-            {"role": "user", "content": prompt},
-        ])
-        return self._extract_text(response)
+        def render_packet(
+            packet: Sequence[QaSemanticRecord],
+        ) -> List[Dict[str, str]]:
+            shard_prompt = QA_STAGE_3_DELTA_PROMPT.format(
+                **shard_placeholders,
+                delta_diff=self._record_text(
+                    packet,
+                    "delta_diff",
+                    empty="No delta-diff record is assigned to this shard.",
+                ),
+                stage_1_results=self._record_text(
+                    packet,
+                    "stage1",
+                    "shared:task_context",
+                    empty="No Stage 1 record is assigned to this shard.",
+                ),
+                stage_2_results=self._record_text(
+                    packet,
+                    "stage2",
+                    empty="No Stage 2 record is assigned to this shard.",
+                ),
+                previous_documentation=self._record_text(
+                    packet,
+                    "previous_documentation",
+                    empty=(
+                        "No previous-document record is assigned to this shard; "
+                        "another shard owns it."
+                    ),
+                ),
+            )
+            return self._messages(shard_system_prompt, shard_prompt)
+
+        documents = await self._invoke_required_document_records(
+            records,
+            render_packet,
+            label="QA Stage 3 delta",
+        )
+        return await self._synthesize_qa_documents(
+            documents,
+            placeholders,
+            label="QA Stage 3 delta",
+        )
 
     # ==================================================================
     # Single-pass fallback (small PRs)
     # ==================================================================
+
+    async def _invoke_document(self, messages):
+        if self.agent_service is not None:
+            from langchain_core.messages import AIMessage
+            from service.agent.evidence_acquisition import observation_status
+            from service.agent.models import AgentExecutionRequest
+            from service.review.orchestrator.stage_1_tool_inventory import (
+                STAGE1_AGENT_TOOL_NAMES,
+            )
+            tools = self.agent_service.available_tool_names & STAGE1_AGENT_TOOL_NAMES
+            unbound = (tools & _VCS_REPOSITORY_ARGUMENTS.keys()) - self._repository_tool_bindings.keys()
+            if unbound:
+                logger.warning("QA VCS tools lack request repository identity; skipping: %s", sorted(unbound))
+                tools = tools - unbound
+            try:
+                result = await self.agent_service.execute(AgentExecutionRequest(
+                    prompt="\n\n".join(message["content"] for message in messages),
+                    allowed_tool_names=tools, max_steps=8, timeout_seconds=240,
+                    tool_argument_bindings={
+                        name: binding for name, binding in self._repository_tool_bindings.items()
+                        if name in tools
+                    },
+                    additional_instructions=(
+                        "Generate QA documentation from the saved PR changes, task and issue list. "
+                        "Use the available review repository/graph tools for concrete testing gaps. "
+                        "For graph tools, choose the relevant changed files as focusPaths "
+                        "(at most 100 per call); narrow the focus when checking a particular change. "
+                        "Do not re-read the full commit history. Missing optional context is unknown; "
+                        "document any limitations and still produce useful QA steps."
+                    ),
+                    metadata={"stage": "qa_documentation"},
+                ))
+                unavailable = sum(
+                    observation_status(event.observation) == "unavailable"
+                    for event in result.tool_events
+                )
+                logger.log(
+                    logging.WARNING if unavailable else logging.INFO,
+                    "QA repository tool results: calls=%d unavailable=%d; using available context",
+                    len(result.tool_events), unavailable,
+                )
+                return AIMessage(content=str(result.output))
+            except Exception as error:
+                raise_if_outcome_unknown(error)
+                logger.warning("QA repository tools unavailable (%s); generating from saved context", type(error).__name__)
+                self.agent_service = None
+        from service.review.inference_usage import record_model_response
+        response = await self.llm.ainvoke(messages)
+        record_model_response(response)
+        return response
 
     async def _run_single_pass(
         self,
@@ -658,25 +1433,8 @@ class QaDocOrchestrator(BaseOrchestrator):
         placeholders: Dict[str, str],
         previous_documentation: Optional[str],
     ) -> str:
-        """Single-pass generation for small PRs (same as legacy flow).
-
-        For large diffs that land here via the multi-stage fallback, the diff
-        is truncated to ~120K chars (~30K tokens) so it stays within model
-        context limits while preserving as much context as possible.
-        """
-        # Guard: truncate diff to avoid blowing context window on fallback
-        max_single_pass_diff = 120_000
+        """Generate directly when it fits, otherwise synthesize semantic shards."""
         sp_placeholders = dict(placeholders)
-        raw_diff = sp_placeholders.get("diff", "")
-        if len(raw_diff) > max_single_pass_diff:
-            sp_placeholders["diff"] = (
-                raw_diff[:max_single_pass_diff]
-                + f"\n\n... (diff truncated — {len(raw_diff)} chars total, showing first {max_single_pass_diff})"
-            )
-            logger.info(
-                "Single-pass: truncated diff from %d to %d chars to fit context window",
-                len(raw_diff), max_single_pass_diff,
-            )
 
         if template_mode == "RAW":
             prompt_template = QA_DOC_RAW_PROMPT
@@ -685,6 +1443,8 @@ class QaDocOrchestrator(BaseOrchestrator):
             sp_placeholders = {**sp_placeholders, "custom_template": custom_template}
         else:
             prompt_template = QA_DOC_BASE_PROMPT
+            template_mode = "BASE"
+        self.effective_template_mode = template_mode
 
         user_prompt = prompt_template.format(**sp_placeholders)
 
@@ -695,12 +1455,81 @@ class QaDocOrchestrator(BaseOrchestrator):
             )
             user_prompt = update_preamble + "\n\n" + user_prompt
 
-        messages = [
-            {"role": "system", "content": QA_DOC_SYSTEM_PROMPT.format(**sp_placeholders)},
-            {"role": "user", "content": user_prompt},
-        ]
-        response = await self.llm.ainvoke(messages)
-        content = self._extract_text(response)
+        system_prompt = QA_DOC_SYSTEM_PROMPT.format(**sp_placeholders)
+        messages = self._messages(system_prompt, user_prompt)
+        if self.prompt_fits(messages):
+            response = await self._invoke_document(messages)
+            content = self._extract_text(response)
+        else:
+            heavy_fields = [
+                "task_context",
+                "analysis_summary",
+                "pr_description",
+            ]
+            if "custom_template" in sp_placeholders:
+                heavy_fields.append("custom_template")
+            shard_placeholders, records = self._shared_records(
+                sp_placeholders,
+                heavy_fields,
+            )
+            shard_placeholders["diff"] = (
+                "[Complete diff is assigned once in QA semantic records.]"
+            )
+            records.extend(self._diff_records(
+                str(sp_placeholders.get("diff") or ""),
+                key_prefix="single-pass:diff",
+                section="shared:diff",
+            ))
+            if previous_documentation and previous_documentation.strip():
+                records.append(self._text_record(
+                    "single-pass:previous-documentation",
+                    "previous_documentation",
+                    previous_documentation,
+                ))
+            shard_system = QA_DOC_SYSTEM_PROMPT.format(**shard_placeholders)
+
+            def render_packet(
+                packet: Sequence[QaSemanticRecord],
+            ) -> List[Dict[str, str]]:
+                packet_placeholders = dict(shard_placeholders)
+                for field in (*heavy_fields, "diff"):
+                    packet_placeholders[field] = self._record_text(
+                        packet,
+                        f"shared:{field}",
+                        empty=(
+                            f"No {field} record is assigned to this shard; "
+                            "another shard owns it."
+                        ),
+                    )
+                packet_prompt = prompt_template.format(**packet_placeholders)
+                previous = self._record_text(
+                    packet,
+                    "previous_documentation",
+                    empty="",
+                )
+                if previous:
+                    packet_prompt = (
+                        QA_DOC_UPDATE_PREAMBLE.format(
+                            previous_documentation=previous,
+                            pr_number=placeholders.get("pr_number", "N/A"),
+                        )
+                        + "\n\n"
+                        + packet_prompt
+                    )
+                return self._messages(shard_system, packet_prompt)
+
+            documents = await self._invoke_required_document_records(
+                records,
+                render_packet,
+                label="QA single-pass generation",
+            )
+            content = await self._synthesize_qa_documents(
+                documents,
+                placeholders,
+                label="QA single-pass generation",
+                template_mode=template_mode,
+                custom_template=custom_template,
+            )
 
         if not content or len(content.strip()) < 50:
             if template_mode != "BASE":
@@ -719,52 +1548,112 @@ class QaDocOrchestrator(BaseOrchestrator):
         documentation: str,
         placeholders: Dict[str, str],
     ) -> str:
-        """Require exact, language-independent boundaries for both shareable sections."""
-        if self._has_complete_shareable_sections(documentation):
+        """Render explicit sections and normalize formatting without another model call."""
+        original = documentation
+        candidate = documentation.strip()
+        fence = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", candidate, re.DOTALL | re.IGNORECASE)
+        if fence:
+            candidate = fence[1]
+        try:
+            structured = json.loads(candidate, strict=False)
+        except (ValueError, TypeError):
+            structured = None
+        if isinstance(structured, dict) and isinstance(structured.get("sections"), list):
+            documentation = self._render_document_sections(structured["sections"]) or documentation
+        documentation = self._normalize_section_markers(documentation)
+        documentation = self._normalize_scenario_priorities(documentation)
+        if not self._has_complete_shareable_sections(documentation):
+            message = (
+                "QA public preview unavailable: incomplete section markers; "
+                "preserving the guide for authenticated access without a model repair"
+            )
+            logger.warning(message)
+            emit_status(self.event_callback, "qa_preview_unavailable", message)
+        elif documentation != original:
+            emit_status(self.event_callback, "qa_format_normalized", "QA sections formatted locally for preview.")
+        return documentation
+
+    @staticmethod
+    def _render_document_sections(sections: list) -> Optional[str]:
+        """Only explicit section kinds authorize boundaries; never infer them from headings."""
+        markers = {"test_cases": TEST_CASE_SENTINELS, "environment": ENVIRONMENT_SENTINELS}
+        parts = []
+        shareable = {}
+        for section in sections:
+            if (not isinstance(section, dict)
+                    or not isinstance(section.get("kind"), str)
+                    or section.get("kind") not in {"overview", *markers}
+                    or not isinstance(section.get("content"), str)
+                    or not isinstance(section.get("heading", ""), str)):
+                return None  # Keep the original response rather than silently losing unknown content.
+            content = section["content"].strip()
+            heading = section.get("heading", "").strip()
+            if "\n" in heading or "\r" in heading:
+                return None
+            if not content and not heading:
+                continue
+            kind = section["kind"]
+            if not heading and kind in markers:
+                heading = "Test scenarios" if kind == "test_cases" else "Environment and setup"
+            if heading and not heading.startswith("#"):
+                heading = "## " + heading
+            if kind in markers:
+                if kind in shareable:
+                    shareable[kind]["content"] += f"\n\n{heading}\n\n{content}"
+                else:
+                    shareable[kind] = {"kind": kind, "heading": heading, "content": content}
+                    parts.append(shareable[kind])
+            else:
+                parts.append("\n\n".join(part for part in (heading, content) if part))
+        rendered = []
+        for part in parts:
+            if isinstance(part, str):
+                rendered.append(part)
+            else:
+                start, body, end = markers[part["kind"]]
+                rendered.append(f"{start}\n{part['heading']}\n{body}\n{part['content']}\n{end}")
+        return "\n\n".join(rendered) or None
+
+    @staticmethod
+    def _normalize_section_markers(documentation: str) -> str:
+        documentation = documentation.replace("\r\n", "\n").replace("\r", "\n")
+        return re.sub(
+            r"(?mi)^[ \t]*<!--[ \t]*codecrow-(test-cases|environment)[ \t]*:[ \t]*"
+            r"(start|content|end)[ \t]*-->[ \t]*$",
+            lambda match: f"<!-- codecrow-{match[1].lower()}:{match[2].lower()} -->",
+            documentation,
+        )
+
+    @classmethod
+    def _normalize_scenario_priorities(cls, documentation: str) -> str:
+        section = cls._extract_sentinel_section(documentation, TEST_CASE_SENTINELS)
+        if section is None:
             return documentation
-
-        repair_placeholders = dict(placeholders)
-        raw_diff = repair_placeholders.get("diff", "")
-        max_repair_diff = 120_000
-        if len(raw_diff) > max_repair_diff:
-            repair_placeholders["diff"] = (
-                raw_diff[:max_repair_diff]
-                + f"\n\n... (diff truncated — {len(raw_diff)} chars total, "
-                  f"showing first {max_repair_diff})"
-            )
-        repair_placeholders["documentation"] = documentation
-
-        logger.warning(
-            "QA doc violated the shareable-section sentinel contract; "
-            "running structural repair generation"
+        start, end, _, _ = section
+        # Normalize presentation only inside explicit test boundaries.
+        section_text = re.sub(
+            r"(?mi)^([ \t]*)(?:[-*+]|\d+[.)]|#{1,6})[ \t]+"
+            r"(?=\*\*[^\n]+\((?:HIGH|MEDIUM|LOW)\)(?:\*\*)?[ \t]*$)", r"\1",
+            documentation[start:end],
         )
-        prompt = QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT.format(**repair_placeholders)
-        system_prompt = QA_DOC_SYSTEM_PROMPT.format(
-            output_language=repair_placeholders.get("output_language", "English")
+        normalized = re.sub(
+            r"(?mi)^([ \t]*)\*\*([^\n]+?) +\((HIGH|MEDIUM|LOW)\)\*\*([ \t]*)$",
+            r"\1**\2** (\3)\4",
+            section_text,
         )
-        response = await self.llm.ainvoke([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ])
-        repaired = self._extract_text(response).strip()
-        if not repaired:
-            raise ValueError("QA documentation sentinel repair returned no content")
-        if not self._has_complete_shareable_sections(repaired):
-            raise ValueError(
-                "QA documentation is missing complete test-case or environment sentinel sections"
-            )
-        return repaired
+        normalized = re.sub(
+            r"(?mi)^[ \t]*#{1,6}[ \t]+(.+?)[ \t]+\((HIGH|MEDIUM|LOW)\)[ \t]*$",
+            r"**\1** (\2)", normalized,
+        )
+        return documentation[:start] + normalized + documentation[end:]
 
     @classmethod
     def _has_complete_shareable_sections(cls, documentation: Optional[str]) -> bool:
         test_cases = cls._extract_sentinel_section(documentation, TEST_CASE_SENTINELS)
         environment = cls._extract_sentinel_section(documentation, ENVIRONMENT_SENTINELS)
-        if test_cases is None or environment is None or test_cases[1] > environment[0]:
+        if test_cases is None or environment is None:
             return False
-        return re.search(
-            r"(?mi)^\s*\*\*.+?\*\*\s*\((?:HIGH|MEDIUM|LOW)\)",
-            test_cases[3],
-        ) is not None
+        return test_cases[1] <= environment[0] or environment[1] <= test_cases[0]
 
     @classmethod
     def _contains_extractable_test_cases(cls, documentation: Optional[str]) -> bool:
@@ -781,21 +1670,26 @@ class QaDocOrchestrator(BaseOrchestrator):
         documentation: Optional[str],
         sentinels: tuple[str, str, str],
     ) -> Optional[tuple[int, int, str, str]]:
-        """Extract one exact sentinel block without interpreting its localized heading."""
+        """Recover a missing content divider only within explicit start/end boundaries."""
         if not documentation:
             return None
         start_marker, content_marker, end_marker = sentinels
-        if any(documentation.count(marker) != 1 for marker in sentinels):
+        if (documentation.count(start_marker) != 1 or documentation.count(end_marker) != 1
+                or documentation.count(content_marker) > 1):
             return None
 
         start = documentation.find(start_marker)
-        content_start = documentation.find(content_marker, start + len(start_marker))
-        end = documentation.find(end_marker, content_start + len(content_marker))
-        if start < 0 or content_start < 0 or end < 0:
+        end = documentation.find(end_marker)
+        if end <= start:
             return None
-
-        heading = documentation[start + len(start_marker):content_start].strip()
-        content = documentation[content_start + len(content_marker):end].strip()
+        body = documentation[start + len(start_marker):end].strip()
+        if documentation.count(content_marker) == 1:
+            if content_marker not in body:
+                return None
+            heading, content = body.split(content_marker, 1)
+        else:
+            heading, _, content = body.partition("\n")
+        heading, content = heading.strip(), content.strip()
         if not heading.startswith("#") or "\n" in heading or not content:
             return None
         return start, end + len(end_marker), heading, content
@@ -824,31 +1718,9 @@ class QaDocOrchestrator(BaseOrchestrator):
     # ==================================================================
 
     @staticmethod
-    def _slim_stage_results(results, max_chars: int = 0) -> str:
-        """Compact-serialize stage results, stripping verbose/redundant fields.
-
-        Removes raw_analysis, error, batch_id and empty lists to
-        significantly shrink the payload before passing to later stages.
-        If *max_chars* > 0, truncates the serialized string to that budget.
-        """
-        def _strip(obj):
-            if isinstance(obj, dict):
-                return {
-                    k: _strip(v)
-                    for k, v in obj.items()
-                    if k not in ("raw_analysis", "error", "batch_id")
-                    and v not in (None, "", [])
-                }
-            if isinstance(obj, list):
-                return [_strip(i) for i in obj]
-            return obj
-
-        slimmed = _strip(results)
-        # compact separators save ~35% vs indent=2
-        text = json.dumps(slimmed, separators=(",", ":"), default=str)
-        if max_chars > 0 and len(text) > max_chars:
-            text = text[:max_chars] + "\n... (capped for model context)"
-        return text
+    def _slim_stage_results(results) -> str:
+        """Compact-serialize complete stage results without dropping fields."""
+        return json.dumps(results, separators=(",", ":"), default=str)
 
     def _build_placeholders(
         self,
@@ -886,7 +1758,7 @@ class QaDocOrchestrator(BaseOrchestrator):
             "source_branch": source_branch,
             "target_branch": target_branch,
             "pr_title": pr_title,
-            "pr_description": self._truncate(pr_metadata.get("prDescription", ""), 500),
+            "pr_description": pr_metadata.get("prDescription", "") or "",
             "issues_found": str(issues_found),
             "files_analyzed": str(files_analyzed),
             "analysis_summary": pr_metadata.get("analysisSummary", "No analysis summary available."),
@@ -896,28 +1768,26 @@ class QaDocOrchestrator(BaseOrchestrator):
         }
 
     async def _is_documentation_needed(self, placeholders: Dict[str, str]) -> bool:
-        """Relevance check — LLM decides if QA docs are warranted.
-
-        Uses a truncated diff (max ~10K chars) because the relevance gate
-        only needs a representative sample, not every line of a 1 MB diff.
-        """
+        """Relevance check — LLM decides using the complete supplied diff."""
         try:
-            # Build a lightweight copy with truncated diff for the relevance check
-            max_relevance_diff = 10_000
-            relevance_placeholders = dict(placeholders)
-            raw_diff = relevance_placeholders.get("diff", "")
-            if len(raw_diff) > max_relevance_diff:
-                relevance_placeholders["diff"] = (
-                    raw_diff[:max_relevance_diff]
-                    + f"\n\n... (diff truncated — {len(raw_diff)} chars total, showing first {max_relevance_diff})"
+            prompt = QA_DOC_RELEVANCE_CHECK_PROMPT.format(**placeholders)
+            estimated_tokens = self.estimate_rendered_input_tokens(prompt)
+            if estimated_tokens > self.input_token_target():
+                logger.warning(
+                    "QA relevance check skipped without clipping: complete "
+                    "prompt estimates %d tokens above target %d; conservatively "
+                    "requiring documentation",
+                    estimated_tokens,
+                    self.input_token_target(),
                 )
-            prompt = QA_DOC_RELEVANCE_CHECK_PROMPT.format(**relevance_placeholders)
+                return True
             response = await self.llm.ainvoke(prompt)
             content = self._extract_text(response)
             answer = content.strip().upper()
             logger.debug("Relevance check answer: %s", answer)
             return answer.startswith("YES")
         except Exception as e:
+            raise_if_outcome_unknown(e)
             logger.warning("Relevance check failed, defaulting to YES: %s", e)
             return True
 
@@ -1006,9 +1876,3 @@ class QaDocOrchestrator(BaseOrchestrator):
                         break
 
         return None
-
-    @staticmethod
-    def _truncate(text: str, max_length: int) -> str:
-        if not text or len(text) <= max_length:
-            return text or ""
-        return text[:max_length] + "…"

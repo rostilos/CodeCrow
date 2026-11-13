@@ -1,0 +1,250 @@
+{
+  "source_capture": "reports/martian-benchmark/codex-proxy-gpt-5.6-sol-20261008/captures/project-106935-review-11059-4c52595f893245b092540683e3198c89.json",
+  "source_sequence": 170,
+  "recorded_status": "failed",
+  "recorded_duration_ms": 40117.357,
+  "issues": [
+    {
+      "verification_id": "issue_0",
+      "severity": "HIGH",
+      "category": "SECURITY",
+      "file": "apps/web/pages/api/webhook/app-credential.ts",
+      "anchorSide": "HEAD",
+      "line": 26,
+      "title": "Missing secret bypasses authentication",
+      "reason": "When `CALCOM_WEBHOOK_SECRET` is unset and the request omits the selected header, both expressions evaluate to `undefined`. The comparison therefore succeeds and an unauthenticated request reaches the credential decryption and database-write path. Enabling credential sharing without configuring the secret leaves this sensitive endpoint unprotected.",
+      "suggestedFixDescription": "Fail closed unless `CALCOM_WEBHOOK_SECRET` is a non-empty string, then compare the request header against that configured value. Configuration validation at application startup would also prevent this deployment state.",
+      "codeSnippet": "req.headers[process.env.CALCOM_WEBHOOK_HEADER_NAME || \"calcom-webhook-secret\"] !==",
+      "relatedLocations": []
+    },
+    {
+      "verification_id": "issue_1",
+      "severity": "MEDIUM",
+      "category": "BUG_RISK",
+      "file": "apps/web/pages/api/webhook/app-credential.ts",
+      "anchorSide": "HEAD",
+      "line": 63,
+      "title": "Concurrent requests create duplicate credentials",
+      "reason": "The read followed by a separate create is not atomic. Two first-time requests for the same user and app can both observe no credential and both execute `credential.create`. This leaves duplicate records, after which future calls update only whichever record `findFirst` happens to return. If uniqueness is enforced elsewhere, one otherwise valid concurrent request instead fails with an unhandled database error.",
+      "suggestedFixDescription": "Enforce a unique `(userId, appId)` database constraint and use an atomic upsert against that key. If the data model intentionally permits multiple credentials, serialize this lookup/create operation and select the target deterministically.",
+      "codeSnippet": "const appCredential = await prisma.credential.findFirst({",
+      "relatedLocations": []
+    },
+    {
+      "verification_id": "issue_2",
+      "severity": "MEDIUM",
+      "category": "BUG_RISK",
+      "file": "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts",
+      "anchorSide": "HEAD",
+      "line": 8,
+      "title": "Fallback schema defines literal keys",
+      "reason": "Computed object keys are evaluated immediately, so these expressions create fixed string-named properties; they are not Zod index signatures. Consequently, ordinary OAuth responses can fail validation if the generated numeric property is required. If the two generated keys collide, the optional declaration replaces the numeric declaration, while Zod's default object behavior strips provider fields such as expiry metadata. This can break refreshes or discard token data whenever credential sharing is enabled.",
+      "suggestedFixDescription": "Validate the required access token and preserve provider-specific properties with Zod's passthrough behavior. If numeric expiry validation is required, declare the known expiry fields explicitly in provider schemas rather than attempting a wildcard object property.",
+      "codeSnippet": "[z.string().toString()]: z.number(),",
+      "relatedLocations": [
+        "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:10"
+      ]
+    },
+    {
+      "verification_id": "issue_3",
+      "severity": "HIGH",
+      "category": "BUG_RISK",
+      "file": "packages/app-store/_utils/oauth/refreshOAuthTokens.ts",
+      "anchorSide": "HEAD",
+      "line": 15,
+      "title": "Sync branch breaks caller response contracts",
+      "reason": "When credential sharing is enabled, `refreshOAuthTokens` returns a native Fetch `Response` or abbreviated synchronization payload rather than the result shape expected from each provider callback. Google, Zoho CRM, and Zoho Bigin access Axios/Gaxios-style `.data`; HubSpot reads token fields directly; Lark expects its provider envelope; Webex validates provider metadata; and Office 365 Video derives expiry and replaces stored credentials using fields absent from the shared response. The mismatch causes exceptions, schema rejection, undefined access tokens, invalid expiry values, and loss of refresh tokens or provider metadata. Define and validate one token-result contract for both helper branches, reject unsuccessful synchronization responses, update callers to consume that contract, and preserve existing provider-specific credential fields when the shared result does not supply them.\n\nAlso affects: packages/app-store/_utils/oauth/refreshOAuthTokens.ts:6, packages/app-store/_utils/oauth/refreshOAuthTokens.ts:7, packages/app-store/_utils/oauth/refreshOAuthTokens.ts:8, packages/app-store/googlecalendar/lib/CalendarService.ts:94, packages/app-store/hubspot/lib/CalendarService.ts:177, packages/app-store/larkcalendar/lib/CalendarService.ts:67, packages/app-store/office365video/lib/VideoApiAdapter.ts:61, packages/app-store/webex/lib/VideoApiAdapter.ts:62, packages/app-store/zoho-bigin/lib/CalendarService.ts:84, packages/app-store/zohocrm/lib/CalendarService.ts:204, packages/app-store/zohocrm/lib/CalendarService.ts:207",
+      "suggestedFixDescription": "Define one normalized token-result contract for this helper and adapt both branches to it, then update callers to consume that contract. Alternatively, accept a caller-provided adapter that converts the sync endpoint's `Response` into the same shape as that caller's `refreshFunction` result before returning it.",
+      "codeSnippet": "return response;",
+      "relatedLocations": [
+        "packages/app-store/_utils/oauth/refreshOAuthTokens.ts:6",
+        "packages/app-store/_utils/oauth/refreshOAuthTokens.ts:7",
+        "packages/app-store/_utils/oauth/refreshOAuthTokens.ts:8",
+        "packages/app-store/googlecalendar/lib/CalendarService.ts:94",
+        "packages/app-store/hubspot/lib/CalendarService.ts:177",
+        "packages/app-store/larkcalendar/lib/CalendarService.ts:67",
+        "packages/app-store/office365video/lib/VideoApiAdapter.ts:61",
+        "packages/app-store/webex/lib/VideoApiAdapter.ts:62",
+        "packages/app-store/zoho-bigin/lib/CalendarService.ts:84",
+        "packages/app-store/zohocrm/lib/CalendarService.ts:204",
+        "packages/app-store/zohocrm/lib/CalendarService.ts:207"
+      ]
+    },
+    {
+      "verification_id": "issue_4",
+      "severity": "MEDIUM",
+      "category": "BUG_RISK",
+      "file": "packages/app-store/googlecalendar/lib/CalendarService.ts",
+      "anchorSide": "HEAD",
+      "line": 97,
+      "title": "Persists validation wrapper as credentials",
+      "reason": "`parseRefreshTokenResponse` returns the complete Zod `safeParse` result, shaped like `{ success: true, data: credentials }`, rather than its `data`. This line therefore stores that wrapper in `credential.key`. The next service construction calls `googleCredentialSchema.parse(credential.key)`, which expects token fields at the top level and will reject the persisted value, breaking subsequent calendar operations after a successful refresh.",
+      "suggestedFixDescription": "Persist the validated credential data rather than the safeParse wrapper. Change the helper to return `refreshTokenResponse.data` (and update its refresh-token fallback on that object), or unwrap `.data` at this call site.",
+      "codeSnippet": "const key = parseRefreshTokenResponse(googleCredentials, googleCredentialSchema);",
+      "relatedLocations": [
+        "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:30"
+      ]
+    },
+    {
+      "verification_id": "issue_5",
+      "severity": "MEDIUM",
+      "category": "BUG_RISK",
+      "file": "packages/app-store/office365calendar/lib/CalendarService.ts",
+      "anchorSide": "HEAD",
+      "line": 263,
+      "title": "Refresh replaces valid token with placeholder",
+      "reason": "`refresh_token` is optional in `refreshTokenResponseSchema`, and Microsoft may omit it while returning a valid refreshed access token. The new parser inserts the literal `\"refresh_token\"` whenever it is absent. Line 264 then spreads that value over the existing credential, so the next access-token expiry attempts renewal using the placeholder and fails, requiring the user to reconnect.",
+      "suggestedFixDescription": "Do not synthesize a refresh token. Leave the field absent so merging the parsed response preserves the credential's existing refresh token.",
+      "codeSnippet": "const tokenResponse = parseRefreshTokenResponse(responseJson, refreshTokenResponseSchema);",
+      "relatedLocations": [
+        "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:25"
+      ]
+    },
+    {
+      "verification_id": "issue_6",
+      "severity": "HIGH",
+      "category": "BUG_RISK",
+      "file": "packages/app-store/salesforce/lib/CalendarService.ts",
+      "anchorSide": "HEAD",
+      "line": 96,
+      "title": "Prisma is not imported",
+      "reason": "The complete post-change file contains no import or local declaration for `prisma`, yet the added refresh path calls it. Unlike the sibling Google calendar implementation, which explicitly imports `prisma` from `@calcom/prisma` (packages/app-store/googlecalendar/lib/CalendarService.ts:11), this file will fail TypeScript compilation with an unresolved identifier, preventing the Salesforce integration from building.",
+      "suggestedFixDescription": "Import the existing Prisma client from `@calcom/prisma`.",
+      "codeSnippet": "await prisma.credential.update({",
+      "relatedLocations": []
+    },
+    {
+      "verification_id": "issue_7",
+      "severity": "MEDIUM",
+      "category": "BUG_RISK",
+      "file": "packages/app-store/zoomvideo/lib/VideoApiAdapter.ts",
+      "anchorSide": "HEAD",
+      "line": 104,
+      "title": "Shared refresh response lacks expires_in",
+      "reason": "When credential sharing is enabled, `parseRefreshTokenResponse` bypasses `zoomRefreshedTokenSchema` and accepts the shared endpoint's minimum response, which only guarantees an access token and a numeric expiry property. The adapter subsequently computes `key.expiry_date` exclusively from `newTokens.expires_in`. A shared response containing `expiry_date`, as permitted by that contract, therefore produces `NaN` and prevents a valid expiry from being persisted (or causes the database update to fail), breaking Zoom token refresh for shared credentials.",
+      "suggestedFixDescription": "Define a stable shared response field such as `expiry_date`, then preserve that value when present and only derive an absolute expiry from `expires_in` for native Zoom responses. The shared-response schema should explicitly require the same standardized field.",
+      "codeSnippet": "const parsedToken = parseRefreshTokenResponse(responseBody, zoomRefreshedTokenSchema);",
+      "relatedLocations": [
+        "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:15",
+        "packages/app-store/zoomvideo/lib/VideoApiAdapter.ts:122"
+      ]
+    },
+    {
+      "verification_id": "issue_8",
+      "severity": "HIGH",
+      "category": "SECURITY",
+      "file": "packages/app-store/zoho-bigin/lib/CalendarService.ts",
+      "anchorSide": "HEAD",
+      "line": 91,
+      "title": "Zoho Bigin sends a credential ID as the synchronization user ID",
+      "reason": "The Zoho Bigin refresh path passes `credentialId` to a helper whose third argument is explicitly a Cal.com `userId`. The helper serializes that value as `calcomUserId`, so the synchronization service receives an identifier from the wrong domain.\nEvidence: PRF040 passes `credentialId` to `refreshOAuthTokens`, while PRF002 names that parameter `userId` and sends it as `calcomUserId: userId.toString()`. Other integrations pass `credential.userId`.\nBusiness impact: Expired Zoho Bigin credentials can fail to refresh; depending on synchronization-service lookup semantics, the request may also select credentials belonging to a different user.\nAlso affects: packages/app-store/_utils/oauth/refreshOAuthTokens.ts",
+      "suggestedFixDescription": "Pass `credential.userId` to `refreshOAuthTokens`, matching the helper contract and the other provider integrations.",
+      "codeSnippet": "credentialId",
+      "relatedLocations": [
+        "packages/app-store/_utils/oauth/refreshOAuthTokens.ts"
+      ]
+    }
+  ],
+  "observed_sources": [
+    {
+      "binding": "Observed source for issue_0, issue_1, apps/web/pages/api/webhook/app-credential.ts:26:",
+      "source": {
+        "fileContent": "import type { NextApiRequest, NextApiResponse } from \"next\";\nimport z from \"zod\";\n\nimport { appStoreMetadata } from \"@calcom/app-store/appStoreMetaData\";\nimport { APP_CREDENTIAL_SHARING_ENABLED } from \"@calcom/lib/constants\";\nimport { symmetricDecrypt } from \"@calcom/lib/crypto\";\nimport prisma from \"@calcom/prisma\";\n\nconst appCredentialWebhookRequestBodySchema = z.object({\n  // UserId of the cal.com user\n  userId: z.number().int(),\n  appSlug: z.string(),\n  // Keys should be AES256 encrypted with the CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY\n  keys: z.string(),\n});\n/** */\nexport default async function handler(req: NextApiRequest, res: NextApiResponse) {\n  // Check that credential sharing is enabled\n  if (!APP_CREDENTIAL_SHARING_ENABLED) {\n    return res.status(403).json({ message: \"Credential sharing is not enabled\" });\n  }\n\n  // Check that the webhook secret matches\n  if (\n    req.headers[process.env.CALCOM_WEBHOOK_HEADER_NAME || \"calcom-webhook-secret\"] !==\n    process.env.CALCOM_WEBHOOK_SECRET\n  ) {\n    return res.status(403).json({ message: \"Invalid webhook secret\" });\n  }\n\n  const reqBody = appCredentialWebhookRequestBodySchema.parse(req.body);\n\n  // Check that the user exists\n  const user = await prisma.user.findUnique({ where: { id: reqBody.userId } });\n\n  if (!user) {\n    return res.status(404).json({ message: \"User not found\" });\n  }\n\n  const app = await prisma.app.findUnique({\n    where: { slug: reqBody.appSlug },\n    select: { slug: true },\n  });\n\n  if (!app) {\n    return res.status(404).json({ message: \"App not found\" });\n  }\n\n  //   Search for the app's slug and type\n  const appMetadata = appStoreMetadata[app.slug as keyof typeof appStoreMetadata];\n\n  if (!appMetadata) {\n    return res.status(404).json({ message: \"App not found. Ensure that you have the correct app slug\" });\n  }\n\n  // Decrypt the keys\n  const keys = JSON.parse(\n    symmetricDecrypt(reqBody.keys, process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || \"\")\n  );\n\n  // Can't use prisma upsert as we don't know the id of the credential\n  const appCredential = await prisma.credential.findFirst({\n    where: {\n      userId: reqBody.userId,\n      appId: appMetadata.slug,\n    },\n    select: {\n      id: true,\n    },\n  });\n\n  if (appCredential) {\n    await prisma.credential.update({\n      where: {\n        id: appCredential.id,\n      },\n      data: {\n        key: keys,\n      },\n    });\n    return res.status(200).json({ message: `Credentials updated for userId: ${reqBody.userId}` });\n  } else {\n    await prisma.credential.create({\n      data: {\n        key: keys,\n        userId: reqBody.userId,\n        appId: appMetadata.slug,\n        type: appMetadata.type,\n      },\n    });\n    return res.status(200).json({ message: `Credentials created for userId: ${reqBody.userId}` });\n  }\n}\n",
+        "startLine": 1,
+        "endLine": 94,
+        "totalLines": 94,
+        "completeFile": true,
+        "filePath": "apps/web/pages/api/webhook/app-credential.ts",
+        "exists": true,
+        "changed": true,
+        "deleted": false,
+        "unavailable": false,
+        "source": "review-overlay"
+      }
+    },
+    {
+      "binding": "Observed source for issue_2, issue_4, issue_5, issue_7, packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts:8:",
+      "source": {
+        "fileContent": "import { z } from \"zod\";\n\nimport { APP_CREDENTIAL_SHARING_ENABLED } from \"@calcom/lib/constants\";\n\nconst minimumTokenResponseSchema = z.object({\n  access_token: z.string(),\n  //   Assume that any property with a number is the expiry\n  [z.string().toString()]: z.number(),\n  //   Allow other properties in the token response\n  [z.string().optional().toString()]: z.unknown().optional(),\n});\n\nconst parseRefreshTokenResponse = (response: any, schema: z.ZodTypeAny) => {\n  let refreshTokenResponse;\n  if (APP_CREDENTIAL_SHARING_ENABLED && process.env.CALCOM_CREDENTIAL_SYNC_ENDPOINT) {\n    refreshTokenResponse = minimumTokenResponseSchema.safeParse(response);\n  } else {\n    refreshTokenResponse = schema.safeParse(response);\n  }\n\n  if (!refreshTokenResponse.success) {\n    throw new Error(\"Invalid refreshed tokens were returned\");\n  }\n\n  if (!refreshTokenResponse.data.refresh_token) {\n    refreshTokenResponse.data.refresh_token = \"refresh_token\";\n  }\n\n  return refreshTokenResponse;\n};\n\nexport default parseRefreshTokenResponse;\n",
+        "startLine": 1,
+        "endLine": 33,
+        "totalLines": 33,
+        "completeFile": true,
+        "filePath": "packages/app-store/_utils/oauth/parseRefreshTokenResponse.ts",
+        "exists": true,
+        "changed": true,
+        "deleted": false,
+        "unavailable": false,
+        "source": "review-overlay"
+      }
+    },
+    {
+      "binding": "Observed source for issue_3, packages/app-store/_utils/oauth/refreshOAuthTokens.ts:15:",
+      "source": {
+        "fileContent": "import { APP_CREDENTIAL_SHARING_ENABLED } from \"@calcom/lib/constants\";\n\nconst refreshOAuthTokens = async (refreshFunction: () => any, appSlug: string, userId: number | null) => {\n  // Check that app syncing is enabled and that the credential belongs to a user\n  if (APP_CREDENTIAL_SHARING_ENABLED && process.env.CALCOM_CREDENTIAL_SYNC_ENDPOINT && userId) {\n    // Customize the payload based on what your endpoint requires\n    // The response should only contain the access token and expiry date\n    const response = await fetch(process.env.CALCOM_CREDENTIAL_SYNC_ENDPOINT, {\n      method: \"POST\",\n      body: new URLSearchParams({\n        calcomUserId: userId.toString(),\n        appSlug,\n      }),\n    });\n    return response;\n  } else {\n    const response = await refreshFunction();\n    return response;\n  }\n};\n\nexport default refreshOAuthTokens;\n",
+        "startLine": 1,
+        "endLine": 23,
+        "totalLines": 23,
+        "completeFile": true,
+        "filePath": "packages/app-store/_utils/oauth/refreshOAuthTokens.ts",
+        "exists": true,
+        "changed": true,
+        "deleted": false,
+        "unavailable": false,
+        "source": "review-overlay"
+      }
+    },
+    {
+      "binding": "Observed source for issue_3, issue_4, packages/app-store/googlecalendar/lib/CalendarService.ts:97:",
+      "source": {
+        "fileContent": "  NewCalendarEventType,\n} from \"@calcom/types/Calendar\";\nimport type { CredentialPayload } from \"@calcom/types/Credential\";\n\nimport parseRefreshTokenResponse from \"../../_utils/oauth/parseRefreshTokenResponse\";\nimport refreshOAuthTokens from \"../../_utils/oauth/refreshOAuthTokens\";\nimport { getGoogleAppKeys } from \"./getGoogleAppKeys\";\nimport { googleCredentialSchema } from \"./googleCredentialSchema\";\n\ninterface GoogleCalError extends Error {\n  code?: number;\n}\n\nconst ONE_MINUTE_MS = 60 * 1000;\nconst CACHING_TIME = ONE_MINUTE_MS;\n\n/** Expand the start date to the start of the month */\nfunction getTimeMin(timeMin: string) {\n  const dateMin = new Date(timeMin);\n  return new Date(dateMin.getFullYear(), dateMin.getMonth(), 1, 0, 0, 0, 0).toISOString();\n}\n\n/** Expand the end date to the end of the month */\nfunction getTimeMax(timeMax: string) {\n  const dateMax = new Date(timeMax);\n  return new Date(dateMax.getFullYear(), dateMax.getMonth() + 1, 0, 0, 0, 0, 0).toISOString();\n}\n\n/**\n * Enable or disable the expanded cache\n * TODO: Make this configurable\n * */\nconst ENABLE_EXPANDED_CACHE = true;\n\n/**\n * By expanding the cache to whole months, we can save round trips to the third party APIs.\n * In this case we already have the data in the database, so we can just return it.\n */\nfunction handleMinMax(min: string, max: string) {\n  if (!ENABLE_EXPANDED_CACHE) return { timeMin: min, timeMax: max };\n  return { timeMin: getTimeMin(min), timeMax: getTimeMax(max) };\n}\n\nexport default class GoogleCalendarService implements Calendar {\n  private integrationName = \"\";\n  private auth: { getToken: () => Promise<MyGoogleAuth> };\n  private log: typeof logger;\n  private credential: CredentialPayload;\n\n  constructor(credential: CredentialPayload) {\n    this.integrationName = \"google_calendar\";\n    this.credential = credential;\n    this.auth = this.googleAuth(credential);\n    this.log = logger.getChildLogger({ prefix: [`[[lib] ${this.integrationName}`] });\n    this.credential = credential;\n  }\n\n  private googleAuth = (credential: CredentialPayload) => {\n    const googleCredentials = googleCredentialSchema.parse(credential.key);\n\n    async function getGoogleAuth() {\n      const { client_id, client_secret, redirect_uris } = await getGoogleAppKeys();\n      const myGoogleAuth = new MyGoogleAuth(client_id, client_secret, redirect_uris[0]);\n      myGoogleAuth.setCredentials(googleCredentials);\n      return myGoogleAuth;\n    }\n\n    const refreshAccessToken = async (myGoogleAuth: Awaited<ReturnType<typeof getGoogleAuth>>) => {\n      try {\n        const res = await refreshOAuthTokens(\n          async () => {\n            const fetchTokens = await myGoogleAuth.refreshToken(googleCredentials.refresh_token);\n            return fetchTokens.res;\n          },\n          \"google-calendar\",\n          credential.userId\n        );\n        const token = res?.data;\n        googleCredentials.access_token = token.access_token;\n        googleCredentials.expiry_date = token.expiry_date;\n        const key = parseRefreshTokenResponse(googleCredentials, googleCredentialSchema);\n        await prisma.credential.update({\n          where: { id: credential.id },\n          data: { key },\n        });\n        myGoogleAuth.setCredentials(googleCredentials);\n      } catch (err) {\n        let message;\n        if (err instanceof Error) message = err.message;\n        else message = String(err);\n        // if not invalid_grant, default behaviour (which admittedly isn't great)\n        if (message !== \"invalid_grant\") return myGoogleAuth;\n        // when the error is invalid grant, it's unrecoverable and the credential marked invalid.\n        // TODO: Evaluate bubbling up and handling this in the CalendarManager. IMO this should be done\n        //       but this is a bigger refactor.\n        await prisma.credential.update({\n          where: { id: credential.id },\n          data: {\n            invalid: true,\n          },\n        });\n      }\n      return myGoogleAuth;\n    };\n    return {\n      getToken: async () => {\n        const myGoogleAuth = await getGoogleAuth();\n        const isExpired = () => myGoogleAuth.isTokenExpiring();\n        return !isExpired() ? Promise.resolve(myGoogleAuth) : refreshAccessToken(myGoogleAuth);\n      },\n    };\n  };\n\n  private authedCalendar = async () => {\n    const myGoogleAuth = await this.auth.getToken();\n    const calendar = google.calendar({\n      version: \"v3\",\n      auth: myGoogleAuth,\n    });\n    return calendar;\n  };\n\n  private getAttendees = (event: CalendarEvent) => {\n    // When rescheduling events we know the external id of the calendar so we can just look for it in the destinationCalendar array.\n    const selectedHostDestinationCalendar = event.destinationCalendar?.find(\n      (cal) => cal.credentialId === this.credential.id\n    );\n    const eventAttendees = event.attendees.map(({ id: _id, ...rest }) => ({\n      ...rest,\n      responseStatus: \"accepted\",\n    }));\n    const attendees: calendar_v3.Schema$EventAttendee[] = [\n      {\n        ...event.organizer,\n        id: String(event.organizer.id),\n        responseStatus: \"accepted\",\n        organizer: true,\n        // Tried changing the display name to the user but GCal will not let you do that. It will only display the name of the external calendar. Leaving this in just incase it works in the future.\n        displayName: event.organizer.name,\n        email: selectedHostDestinationCalendar?.externalId ?? event.organizer.email,\n      },\n      ...eventAttendees,\n    ];\n\n    if (event.team?.members) {\n      // TODO: Check every other CalendarService for team members\n      const teamAttendeesWithoutCurrentUser = event.team.members\n        .filter((member) => member.email !== this.credential.user?.email)\n        .map((m) => {\n          const teamMemberDestinationCalendar = event.destinationCalendar?.find(\n            (calendar) => calendar.integration === \"google_calendar\" && calendar.userId === m.id\n          );\n          return {\n            email: teamMemberDestinationCalendar?.externalId ?? m.email,\n            displayName: m.name,\n            responseStatus: \"accepted\",\n          };\n        });\n      attendees.push(...teamAttendeesWithoutCurrentUser);\n    }\n",
+        "startLine": 17,
+        "endLine": 177,
+        "totalLines": 494,
+        "completeFile": false,
+        "filePath": "packages/app-store/googlecalendar/lib/CalendarService.ts",
+        "exists": true,
+        "changed": true,
+        "deleted": false,
+        "unavailable": false,
+        "source": "review-overlay"
+      }
+    },
+    {
+      "binding": "Observed source for issue_5, packages/app-store/office365calendar/lib/CalendarService.ts:263:",
+      "source": {
+        "fileContent": "    } catch (err) {\n      console.log(err);\n      return Promise.reject([]);\n    }\n  }\n\n  async listCalendars(): Promise<IntegrationCalendar[]> {\n    const officeCalendars: OfficeCalendar[] = [];\n    // List calendars from MS are paginated\n    let finishedParsingCalendars = false;\n    const calendarFilterParam = \"$select=id,name,isDefaultCalendar,canEdit\";\n\n    // Store @odata.nextLink if in response\n    let requestLink = `/me/calendars?${calendarFilterParam}`;\n\n    while (!finishedParsingCalendars) {\n      const response = await this.fetcher(requestLink);\n      let responseBody = await handleErrorsJson<{ value: OfficeCalendar[]; \"@odata.nextLink\"?: string }>(\n        response\n      );\n      // If responseBody is valid then parse the JSON text\n      if (typeof responseBody === \"string\") {\n        responseBody = JSON.parse(responseBody) as { value: OfficeCalendar[] };\n      }\n\n      officeCalendars.push(...responseBody.value);\n\n      if (responseBody[\"@odata.nextLink\"]) {\n        requestLink = responseBody[\"@odata.nextLink\"].replace(this.apiGraphUrl, \"\");\n      } else {\n        finishedParsingCalendars = true;\n      }\n    }\n\n    const user = await this.fetcher(\"/me\");\n    const userResponseBody = await handleErrorsJson<User>(user);\n    const email = userResponseBody.mail ?? userResponseBody.userPrincipalName;\n\n    return officeCalendars.map((cal: OfficeCalendar) => {\n      const calendar: IntegrationCalendar = {\n        externalId: cal.id ?? \"No Id\",\n        integration: this.integrationName,\n        name: cal.name ?? \"No calendar name\",\n        primary: cal.isDefaultCalendar ?? false,\n        readOnly: !cal.canEdit && true,\n        email: email ?? \"\",\n      };\n      return calendar;\n    });\n  }\n\n  private o365Auth = (credential: CredentialPayload) => {\n    const isExpired = (expiryDate: number) => {\n      if (!expiryDate) {\n        return true;\n      } else {\n        return expiryDate < Math.round(+new Date() / 1000);\n      }\n    };\n    const o365AuthCredentials = credential.key as O365AuthCredentials;\n\n    const refreshAccessToken = async (o365AuthCredentials: O365AuthCredentials) => {\n      const { client_id, client_secret } = await getOfficeAppKeys();\n      const response = await refreshOAuthTokens(\n        async () =>\n          await fetch(\"https://login.microsoftonline.com/common/oauth2/v2.0/token\", {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/x-www-form-urlencoded\" },\n            body: new URLSearchParams({\n              scope: \"User.Read Calendars.Read Calendars.ReadWrite\",\n              client_id,\n              refresh_token: o365AuthCredentials.refresh_token,\n              grant_type: \"refresh_token\",\n              client_secret,\n            }),\n          }),\n        \"office365-calendar\",\n        credential.userId\n      );\n      const responseJson = await handleErrorsJson(response);\n      const tokenResponse = parseRefreshTokenResponse(responseJson, refreshTokenResponseSchema);\n      o365AuthCredentials = { ...o365AuthCredentials, ...(tokenResponse.success && tokenResponse.data) };\n      await prisma.credential.update({\n        where: {\n          id: credential.id,\n        },\n        data: {\n          key: o365AuthCredentials,\n        },\n      });\n      return o365AuthCredentials.access_token;\n    };\n\n    return {\n      getToken: () =>\n        refreshTokenResponseSchema.safeParse(o365AuthCredentials).success &&\n        !isExpired(o365AuthCredentials.expires_in)\n          ? Promise.resolve(o365AuthCredentials.access_token)\n          : refreshAccessToken(o365AuthCredentials),\n    };\n  };\n\n  private translateEvent = (event: CalendarEvent) => {\n    return {\n      subject: event.title,\n      body: {\n        contentType: \"HTML\",\n        content: getRichDescription(event),\n      },\n      start: {\n        dateTime: dayjs(event.startTime).tz(event.organizer.timeZone).format(\"YYYY-MM-DDTHH:mm:ss\"),\n        timeZone: event.organizer.timeZone,\n      },\n      end: {\n        dateTime: dayjs(event.endTime).tz(event.organizer.timeZone).format(\"YYYY-MM-DDTHH:mm:ss\"),\n        timeZone: event.organizer.timeZone,\n      },\n      attendees: [\n        // Add the calEvent organizer\n        {\n          emailAddress: {\n            address: event.destinationCalendar\n              ? event.destinationCalendar.find((cal) => cal.userId === event.organizer.id)?.externalId ??\n                event.organizer.email\n              : event.organizer.email,\n            name: event.organizer.name,\n          },\n        },\n        ...event.attendees.map((attendee) => ({\n          emailAddress: {\n            address: attendee.email,\n            name: attendee.name,\n          },\n          type: \"required\",\n        })),\n        ...(event.team?.members\n          ? event.team?.members\n              .filter((member) => member.email !== this.credential.user?.email)\n              .map((member) => {\n                const destinationCalendar =\n                  event.destinationCalendar &&\n                  event.destinationCalendar.find((cal) => cal.userId === member.id);\n                return {\n                  emailAddress: {\n                    address: destinationCalendar?.externalId ?? member.email,\n                    name: member.name,\n                  },\n                  type: \"required\",\n                };\n              })\n          : []),\n      ],\n      location: event.location ? { displayName: getLocation(event) } : undefined,\n    };\n  };\n\n  private fetcher = async (endpoint: string, init?: RequestInit | undefined) => {\n    this.accessToken = await this.auth.getToken();\n    return fetch(`${this.apiGraphUrl}${endpoint}`, {\n      method: \"get\",\n      headers: {",
+        "startLine": 183,
+        "endLine": 343,
+        "totalLines": 507,
+        "completeFile": false,
+        "filePath": "packages/app-store/office365calendar/lib/CalendarService.ts",
+        "exists": true,
+        "changed": true,
+        "deleted": false,
+        "unavailable": false,
+        "source": "review-overlay"
+      }
+    }
+  ],
+  "request_head_diff": "diff --git a/apps/web/pages/api/webhook/app-credential.ts b/apps/web/pages/api/webhook/app-credential.ts\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..326cfb5b4d87fac6968fe0cc5c9ece257bb3ced2\n--- /dev/null\n+++ b/apps/web/pages/api/webhook/app-credential.ts\n@@ -0,0 +1,93 @@\n+import type { NextApiRequest, NextApiResponse } from \"next\";\n+import z from \"zod\";\n+\n+import { appStoreMetadata } from \"@calcom/app-store/appStoreMetaData\";\n+import { APP_CREDENTIAL_SHARING_ENABLED } from \"@calcom/lib/constants\";\n+import { symmetricDecrypt } from \"@calcom/lib/crypto\";\n+import prisma from \"@calcom/prisma\";\n+\n+const appCredentialWebhookRequestBodySchema = z.object({\n+  // UserId of the cal.com user\n+  userId: z.number().int(),\n+  appSlug: z.string(),\n+  // Keys should be AES256 encrypted with the CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY\n+  keys: z.string(),\n+});\n+/** */\n+export default async function handler(req: NextApiRequest, res: NextApiResponse) {\n+  // Check that credential sharing is enabled\n+  if (!APP_CREDENTIAL_SHARING_ENABLED) {\n+    return res.status(403).json({ message: \"Credential sharing is not enabled\" });\n+  }\n+\n+  // Check that the webhook secret matches\n+  if (\n+    req.headers[process.env.CALCOM_WEBHOOK_HEADER_NAME || \"calcom-webhook-secret\"] !==\n+    process.env.CALCOM_WEBHOOK_SECRET\n+  ) {\n+    return res.status(403).json({ message: \"Invalid webhook secret\" });\n+  }\n+\n+  const reqBody = appCredentialWebhookRequestBodySchema.parse(req.body);\n+\n+  // Check that the user exists\n+  const user = await prisma.user.findUnique({ where: { id: reqBody.userId } });\n+\n+  if (!user) {\n+    return res.status(404).json({ message: \"User not found\" });\n+  }\n+\n+  const app = await prisma.app.findUnique({\n+    where: { slug: reqBody.appSlug },\n+    select: { slug: true },\n+  });\n+\n+  if (!app) {\n+    return res.status(404).json({ message: \"App not found\" });\n+  }\n+\n+  //   Search for the app's slug and type\n+  const appMetadata = appStoreMetadata[app.slug as keyof typeof appStoreMetadata];\n+\n+  if (!appMetadata) {\n+    return res.status(404).json({ message: \"App not found. Ensure that you have the correct app slug\" });\n+  }\n+\n+  // Decrypt the keys\n+  const keys = JSON.parse(\n+    symmetricDecrypt(reqBody.keys, process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY || \"\")\n+  );\n+\n+  // Can't use prisma upsert as we don't know the id of the credential\n+  const appCredential = await prisma.credential.findFirst({\n+    where: {\n+      userId: reqBody.userId,\n+      appId: appMetadata.slug,\n+    },\n+    select: {\n+      id: true,\n+    },\n+  });\n+\n+  if (appCredential) {\n+    await prisma.credential.update({\n+      where: {\n+        id: appCredential.id,\n+      },\n+      data: {\n+        key: keys,\n+      },\n+    });\n+    return res.status(200).json({ message: `Credentials updated for userId: ${reqBody.userId}` });\n+  } else {\n+    await prisma.credential.create({\n+      data: {\n+        key: keys,\n+        userId: reqBody.userId,\n+        appId: appMetadata.slug,\n+        type: appMetadata.type,\n+      },\n+    });\n+    return res.status(200).json({ message: `Credentials created for userId: ${reqBody.userId}` });\n+  }\n+}\ndiff --git a/packages/lib/constants.ts b/packages/lib/constants.ts\nindex 6d302d7d03b607b4b4bd28e648ad8effdab9bd10..02f532866a06c18cd3ddca054435f3eae2ccf239 100644\n--- a/packages/lib/constants.ts\n+++ b/packages/lib/constants.ts\n@@ -99,3 +99,6 @@ export const ORGANIZATION_MIN_SEATS = 30;\n // Needed for emails in E2E\n export const IS_MAILHOG_ENABLED = process.env.E2E_TEST_MAILHOG_ENABLED === \"1\";\n export const CALCOM_VERSION = process.env.NEXT_PUBLIC_CALCOM_VERSION as string;\n+\n+export const APP_CREDENTIAL_SHARING_ENABLED =\n+  process.env.CALCOM_WEBHOOK_SECRET && process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY;\n",
+  "bound_source_capture": "reports/benchmark-quality-20261008/verifier/paired-stage3/live/cal11059-changed_hunks_bound/captures/project-106935-review-11059-018df013e2a84ad8b090aeac8d1a0161.json",
+  "bound_source_assessment": {
+    "issue_id": "issue_0",
+    "verdict": "disproven",
+    "reason": "The proposed trigger requires an unset webhook secret while credential sharing remains enabled. Exact source defines APP_CREDENTIAL_SHARING_ENABLED as a conjunction of the secret and encryption key; when CALCOM_WEBHOOK_SECRET is unset, that expression is falsy and the handler's first branch returns 403 before the equality comparison or database-write path. Although two undefined values would compare as equal, that predicate is not reached under the claimed configuration.",
+    "supporting_evidence": [],
+    "contradicting_evidence": [
+      {
+        "file_path": "packages/lib/constants.ts",
+        "snippet": "export const APP_CREDENTIAL_SHARING_ENABLED =\n  process.env.CALCOM_WEBHOOK_SECRET && process.env.CALCOM_APP_CREDENTIAL_ENCRYPTION_KEY;"
+      },
+      {
+        "file_path": "apps/web/pages/api/webhook/app-credential.ts",
+        "snippet": "if (!APP_CREDENTIAL_SHARING_ENABLED) {\n    return res.status(403).json({ message: \"Credential sharing is not enabled\" });\n  }"
+      }
+    ],
+    "unresolved_questions": []
+  },
+  "review_revision": "9fde0e906897cc0f4f71793f647dd629faba3317"
+}

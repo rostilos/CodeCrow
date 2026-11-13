@@ -85,21 +85,16 @@ public class InternalIssueController {
             @RequestParam(required = false) String severity,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String branch,
-            @RequestParam(required = false) String pullRequestId,
-            @RequestParam(defaultValue = "50") int limit
+            @RequestParam(required = false) String pullRequestId
     ) {
         log.debug("Internal API: Searching issues for project {} with severity={}, category={}", 
                 projectId, severity, category);
-        
-        // Limit max results to prevent abuse
-        int effectiveLimit = Math.min(limit, 200);
-        
+
         List<CodeAnalysisIssue> issues = analysisService.findIssues(
                 projectId, branch, pullRequestId, severity, category, 0
         );
         
         List<IssueDTO> issueDTOs = issues.stream()
-                .limit(effectiveLimit)
                 .map(IssueDTO::fromEntity)
                 .toList();
 

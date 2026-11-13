@@ -116,21 +116,15 @@ class CommentCommandWebhookHandlerAnalyzeTest {
     }
 
     @Test
-    void normalAnalyzeRetainsCommandCacheShortcut() throws Exception {
-        CodeAnalysis cachedAnalysis = mock(CodeAnalysis.class);
-        when(cachedAnalysis.getId()).thenReturn(77L);
-        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
-                .thenReturn(Optional.of(cachedAnalysis));
-
+    void normalAnalyzeUsesTheCanonicalProcessorCacheAndPublicationPath() throws Exception {
+        when(pullRequestAnalysisProcessor.process(any(), any(), eq(project)))
+                .thenReturn(Map.of("cached", true, "status", "cached"));
         WebhookResult result = handler.handle(analyzePayload(), project, events::add);
-
         assertThat(result.success()).isTrue();
-        assertThat(result.data())
-                .containsEntry("cached", true)
-                .containsEntry("analysisId", 77L);
-        assertThat(events).anySatisfy(event ->
-                assertThat(event).containsEntry("state", "checking_cache"));
-        verify(pullRequestAnalysisProcessor, never()).process(any(), any(), any());
+        assertThat(result.data()).containsEntry("cached", true).containsEntry("commandType", "analyze");
+        verify(codeAnalysisService, never()).getCodeAnalysisCache(anyLong(), anyString(), anyLong());
+        verify(pullRequestAnalysisProcessor).process(any(), any(), eq(project));
+        assertThat(events).anySatisfy(event -> assertThat(event).containsEntry("state", "checking_cache"));
     }
 
     private WebhookPayload analyzePayload() {

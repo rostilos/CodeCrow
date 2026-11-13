@@ -102,7 +102,7 @@ public class BranchFileOperationsService {
             BranchArchiveService.ArchiveSnapshot snapshot = branchArchiveService.downloadSnapshot(
                     vcsRepoInfoImpl.vcsConnection(), vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
                     branchOrCommit, requestedFiles);
-            return BranchFileSnapshot.fromArchive(snapshot);
+            return BranchFileSnapshot.fromArchive(snapshot).atRevision(branchOrCommit);
         } catch (Exception e) {
             boolean allowPerFileFallback =
                     fileRetrievalPolicy.allowPerFileFallback(requestedFiles.size());
@@ -111,7 +111,7 @@ public class BranchFileOperationsService {
                     allowPerFileFallback
                             ? "A bounded per-file fallback remains available"
                             : "Per-file fallback is disabled above the shared archive threshold");
-            return BranchFileSnapshot.unavailable(allowPerFileFallback, e.getMessage());
+            return BranchFileSnapshot.unavailable(allowPerFileFallback, e.getMessage()).atRevision(branchOrCommit);
         }
     }
 
@@ -135,13 +135,40 @@ public class BranchFileOperationsService {
 
     public Set<String> updateBranchFiles(Set<String> changedFiles, Project project,
                                          String branchName, BranchFileSnapshot fileSnapshot) {
+        Set<String> existing = resolveExistingFiles(changedFiles, project, branchName, fileSnapshot);
+        persistBranchFiles(existing, project, branchName);
+        return existing;
+    }
+
+    public record PreparedBranchFiles(Set<String> existingFiles, Map<String, String> contents) {}
+
+    public PreparedBranchFiles prepareBranchFiles(Set<String> paths, Project project,
+            BranchProcessRequest request, BranchFileSnapshot snapshot) {
+        Set<String> existing = resolveExistingFiles(paths, project, request.getTargetBranchName(), snapshot);
+        return new PreparedBranchFiles(existing, buildFileContentsMap(existing, project, request, snapshot));
+    }
+
+    /** Source acquisition is complete before the caller starts its ownership-fenced transaction. */
+    public void persistPreparedFiles(Branch branch, Project project, BranchProcessRequest request,
+            PreparedBranchFiles prepared) {
+        persistBranchFiles(prepared.existingFiles(), project, request.getTargetBranchName());
+        fileSnapshotService.persistSnapshotsForBranch(branch, prepared.contents(), request.getCommitHash());
+    }
+
+    public void persistBranchFiles(Set<String> existingFiles, Project project, String branchName) {
+        Branch branch = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName).orElse(null);
+        for (String path : existingFiles) {
+            persistBranchFile(project, branchName, path, branch,
+                    (int) countUnresolvedIssues(branch, project, branchName, path));
+        }
+    }
+
+    private Set<String> resolveExistingFiles(Set<String> changedFiles, Project project,
+            String branchName, BranchFileSnapshot fileSnapshot) {
         Set<String> filesExistingInBranch = new HashSet<>();
         BranchFileSnapshot snapshot = fileSnapshot != null
                 ? fileSnapshot
                 : BranchFileSnapshot.unavailable(true, "snapshot not provided");
-
-        Branch branchEntity = branchRepository
-                .findByProjectIdAndBranchName(project.getId(), branchName).orElse(null);
 
         // Resolve provider clients only when a bounded per-file fallback is
         // actually allowed. An authoritative archive snapshot (including its
@@ -170,8 +197,6 @@ public class BranchFileOperationsService {
             }
             filesExistingInBranch.add(filePath);
 
-            long unresolvedCount = countUnresolvedIssues(branchEntity, project, branchName, filePath);
-            persistBranchFile(project, branchName, filePath, branchEntity, (int) unresolvedCount);
         }
         return filesExistingInBranch;
     }
@@ -309,7 +334,8 @@ public class BranchFileOperationsService {
             return true;
         }
         try {
-            return client.fileExists(workspace, repoSlug, branchName, filePath);
+            return client.fileExists(workspace, repoSlug,
+                    snapshot.sourceRevision() != null ? snapshot.sourceRevision() : branchName, filePath);
         } catch (Exception e) {
             snapshot.stopPerFileFallback();
             log.warn("File-existence fallback stopped after provider failure for {} in branch {}: {}. "
@@ -416,7 +442,8 @@ public class BranchFileOperationsService {
             boolean archiveAvailable,
             boolean allowPerFileFallback,
             String diagnostic,
-            AtomicBoolean providerUnavailable
+            AtomicBoolean providerUnavailable,
+            String sourceRevision
     ) {
         public BranchFileSnapshot {
             contents = Collections.unmodifiableMap(new LinkedHashMap<>(
@@ -432,14 +459,14 @@ public class BranchFileOperationsService {
                 BranchArchiveService.ArchiveSnapshot snapshot) {
             return new BranchFileSnapshot(
                     snapshot.contents(), snapshot.presentFiles(), true, false, null,
-                    new AtomicBoolean(false));
+                    new AtomicBoolean(false), null);
         }
 
         public static BranchFileSnapshot unavailable(
                 boolean allowPerFileFallback, String diagnostic) {
             return new BranchFileSnapshot(
                     Collections.emptyMap(), Collections.emptySet(), false,
-                    allowPerFileFallback, diagnostic, new AtomicBoolean(false));
+                    allowPerFileFallback, diagnostic, new AtomicBoolean(false), null);
         }
 
         public static BranchFileSnapshot legacy(Map<String, String> contents) {
@@ -450,7 +477,12 @@ public class BranchFileOperationsService {
             }
             return new BranchFileSnapshot(
                     safeContents, safeContents.keySet(), true, false, null,
-                    new AtomicBoolean(false));
+                    new AtomicBoolean(false), null);
+        }
+
+        private BranchFileSnapshot atRevision(String revision) {
+            return new BranchFileSnapshot(contents, presentFiles, archiveAvailable, allowPerFileFallback,
+                    diagnostic, providerUnavailable, revision);
         }
 
         public boolean allowContentApiFallback() {

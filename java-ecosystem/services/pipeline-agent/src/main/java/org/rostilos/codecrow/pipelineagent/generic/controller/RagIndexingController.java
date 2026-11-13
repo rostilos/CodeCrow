@@ -2,11 +2,11 @@ package org.rostilos.codecrow.pipelineagent.generic.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
-import org.rostilos.codecrow.ragengine.service.VcsRagIndexingService;
 import org.rostilos.codecrow.ragengine.branch.BranchIndexMaintenanceService;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -18,6 +18,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 
@@ -31,21 +32,21 @@ public class RagIndexingController {
     private static final Logger log = LoggerFactory.getLogger(RagIndexingController.class);
     private static final String EOF_MARKER = "__EOF__";
 
-    private final VcsRagIndexingService vcsRagIndexingService;
     private final BranchIndexMaintenanceService branchIndexMaintenanceService;
     private final ProjectRepository projectRepository;
     private final ObjectMapper objectMapper;
+    private final Executor maintenanceExecutor;
 
     public RagIndexingController(
-            VcsRagIndexingService vcsRagIndexingService,
             BranchIndexMaintenanceService branchIndexMaintenanceService,
             ProjectRepository projectRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            @Qualifier("ragExecutor") Executor maintenanceExecutor
     ) {
-        this.vcsRagIndexingService = vcsRagIndexingService;
         this.branchIndexMaintenanceService = branchIndexMaintenanceService;
         this.projectRepository = projectRepository;
         this.objectMapper = objectMapper;
+        this.maintenanceExecutor = maintenanceExecutor;
     }
 
     /**
@@ -73,14 +74,12 @@ public class RagIndexingController {
 
             CompletableFuture<Map<String, Object>> indexingFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    if (request.allConfiguredBranches()
-                            || (request.branch() != null && !request.branch().isBlank())) {
-                        var project = projectRepository.findByIdWithFullDetails(authProject.id())
-                                .orElseThrow(() -> new IllegalStateException("Project not found"));
-                        return branchIndexMaintenanceService.rebuild(
-                                project, request.branch(), request.allConfiguredBranches(), messageConsumer);
-                    }
-                    return vcsRagIndexingService.indexProjectFromVcs(authProject, null, messageConsumer);
+                    var project = projectRepository.findByIdWithFullDetails(authProject.id())
+                            .orElseThrow(() -> new IllegalStateException("Project not found"));
+                    return branchIndexMaintenanceService.rebuild(
+                            project,
+                            request.branch(),
+                            messageConsumer);
                 } catch (Exception e) {
                     log.error("RAG indexing failed", e);
                     return Map.of(
@@ -90,7 +89,7 @@ public class RagIndexingController {
                 } finally {
                     messageConsumer.accept(Map.of("_eof", true));
                 }
-            });
+            }, maintenanceExecutor);
 
             // Stream messages to client
             try {
@@ -147,7 +146,6 @@ public class RagIndexingController {
     }
 
     public record RagIndexRequest(
-            String branch,
-            boolean allConfiguredBranches
+            String branch
     ) {}
 }

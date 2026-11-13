@@ -32,6 +32,9 @@ import org.rostilos.codecrow.pipelineagent.qadoc.QaDocGenerationService;
 import org.rostilos.codecrow.pipelineagent.qadoc.QaDocPublicPreviewService;
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileRelationshipDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
@@ -64,6 +67,10 @@ class QaDocCommandProcessorTest {
     @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private QaDocPublicPreviewService qaDocPublicPreviewService;
     @Mock private PrFileEnrichmentService enrichmentService;
+    @Mock private org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService snapshots;
+    @Mock private org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService operationService;
+    @Mock private org.rostilos.codecrow.pipelineagent.qadoc.QaDocOperationService.Operation operation;
+    @Mock private org.rostilos.codecrow.core.service.PrChangeSummaryService prChangeSummaryService;
 
     private QaDocCommandProcessor processor;
     private Project project;
@@ -113,10 +120,15 @@ class QaDocCommandProcessorTest {
                 qaDocDocumentService,
                 qaDocPublicPreviewService,
                 enrichmentService
-        );
+        , prChangeSummaryService, operationService);
+        ReflectionTestUtils.setField(processor, "snapshots", snapshots);
+        lenient().when(operationService.open(any(), any(), anyString(), any())).thenReturn(operation);
+        lenient().when(operation.commit(any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
 
         project = new Project();
         ReflectionTestUtils.setField(project, "id", PROJECT_ID);
+        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
+        ReflectionTestUtils.setField(workspace, "id", 9L); project.setWorkspace(workspace);
         ReflectionTestUtils.setField(project, "name", "Test Project");
 
         QaDocDocument persistedDocument = new QaDocDocument(project, 7L);
@@ -126,6 +138,9 @@ class QaDocCommandProcessorTest {
         )).thenReturn(persistedDocument);
         lenient().when(qaDocPublicPreviewService.createPreviewUrl(any()))
                 .thenReturn("https://app.codecrow.example/share#token=ccs_test-token");
+        lenient().when(qaDocPublicPreviewService.buildPrivateTaskComment(any(), anyLong()))
+                .thenReturn("<!-- codecrow-qa-autodoc -->\n\n[View QA documentation (sign-in required)]"
+                        + "(https://app.codecrow.example/dashboard/acme/projects/checkout?prNumber=7&subTab=qa-doc)");
         lenient().when(qaDocPublicPreviewService.buildTaskComment(anyString(), anyString()))
                 .thenReturn("<!-- codecrow-qa-autodoc -->\n\n"
                         + "### 1. Change Summary\nLogin validation changed.\n\n"
@@ -139,6 +154,265 @@ class QaDocCommandProcessorTest {
     }
 
     // ── Helpers ──
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(EVcsProvider.class)
+    void recoverableFormattingKeepsThePublicPreviewWithoutAnotherGeneration(EVcsProvider provider) throws IOException {
+        setupHappyPath();
+        String guide = GENERATED_QA_DOC.replace("<!-- codecrow-test-cases:content -->", "")
+                .replace("<!-- codecrow-environment:content -->", "")
+                .replace("**Reject an invalid password** (HIGH)", "1. **Reject an invalid password (HIGH)**")
+                .replace("<!-- codecrow-", "<!--CODECROW-");
+        var saved = new QaDocDocument(project, 7L);
+        saved.replaceContent(TASK_ID, null, "abc123", guide); saved.setId(701L);
+        when(qaDocDocumentService.upsertLatestDocument(any(), anyLong(), anyString(), any(), any(), eq(guide)))
+                .thenReturn(saved);
+        when(qaDocGenerationService.generateQaDocumentation(any(), anyLong(), anyInt(), anyInt(), anyMap(), any()))
+                .thenReturn(guide);
+        var shares = mock(org.rostilos.codecrow.publicshare.service.PublicShareLinkService.class);
+        when(shares.issue(anyString(), anyString())).thenReturn(
+                new org.rostilos.codecrow.publicshare.api.IssuedPublicShare("ccs_format-test"));
+        var settings = mock(org.rostilos.codecrow.core.service.SiteSettingsProvider.class);
+        when(settings.getBaseUrlSettings()).thenReturn(new org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO(
+                "https://api.example", "https://app.example/", "https://hooks.example"));
+        ReflectionTestUtils.setField(processor, "qaDocPublicPreviewService", new QaDocPublicPreviewService(shares, settings));
+        var payload = new WebhookPayload(provider, "qa_documentation", "repo-id", "my-repo", "my-org",
+                PR_ID, "feature/PROJ-123", "main", "abc123", null);
+
+        assertThat(processor.process(payload, project, eventConsumer, Map.of()).success()).isTrue();
+
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), any());
+        verify(qaDocDocumentService).upsertLatestDocument(eq(project), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(guide));
+        var comment = ArgumentCaptor.forClass(String.class);
+        verify(taskManagementClient).postComment(eq(TASK_ID), comment.capture());
+        assertThat(comment.getValue()).contains("/share#token=ccs_format-test&tab=test-cases", "&tab=environment")
+                .doesNotContain("Test steps here", "No special setup is required.", "sign-in required");
+        assertThat(capturedEvents).noneMatch(event -> "qa_preview_unavailable".equals(event.get("state")));
+        verify(shares).issue(anyString(), anyString());
+        verify(qaDocStateRepository).save(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(EVcsProvider.class)
+    void unmarkedGuideIsSavedAndDeliveredPrivatelyWithoutAnotherGeneration(EVcsProvider provider) throws IOException {
+        setupHappyPath();
+        String guide = "# QA guide\n\n**Check login** (HIGH)\nVerify invalid passwords show an error.";
+        when(qaDocGenerationService.generateQaDocumentation(any(), anyLong(), anyInt(), anyInt(), anyMap(), any()))
+                .thenReturn(guide);
+        var shares = mock(org.rostilos.codecrow.publicshare.service.PublicShareLinkService.class);
+        var settings = mock(org.rostilos.codecrow.core.service.SiteSettingsProvider.class);
+        when(settings.getBaseUrlSettings()).thenReturn(new org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO(
+                "https://api.example", "https://app.example/", "https://hooks.example"));
+        project.setNamespace("checkout"); project.getWorkspace().setSlug("acme");
+        ReflectionTestUtils.setField(processor, "qaDocPublicPreviewService", new QaDocPublicPreviewService(shares, settings));
+        var payload = new WebhookPayload(provider, "qa_documentation", "repo-id", "my-repo", "my-org",
+                PR_ID, "feature/PROJ-123", "main", "abc123", null);
+
+        var result = processor.process(payload, project, eventConsumer, Map.of());
+
+        assertThat(result.success()).isTrue();
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), any());
+        verify(qaDocDocumentService).upsertLatestDocument(eq(project), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(guide));
+        var comment = ArgumentCaptor.forClass(String.class);
+        verify(taskManagementClient).postComment(eq(TASK_ID), comment.capture());
+        assertThat(comment.getValue()).contains("sign-in required", "/dashboard/acme/projects/checkout?prNumber=7&subTab=qa-doc")
+                .doesNotContain("Check login", "invalid passwords", "/share", "token=");
+        assertThat(capturedEvents).anyMatch(event -> "qa_preview_unavailable".equals(event.get("state")));
+        verify(qaDocStateRepository).save(any());
+        verifyNoInteractions(shares);
+    }
+
+    @Test
+    void explicitHandoffRetryReusesUnmarkedGuideAfterALostPublicationResponse() throws IOException {
+        setupHappyPath();
+        String guide = "# QA guide\n\n**Check login** (HIGH)\nVerify invalid passwords show an error.";
+        when(qaDocGenerationService.generateQaDocumentation(any(), anyLong(), anyInt(), anyInt(), anyMap(), any()))
+                .thenReturn(guide);
+        var saved = new QaDocDocument(project, 7L);
+        saved.replaceContent(TASK_ID, null, "abc123", guide); saved.setId(701L);
+        when(qaDocDocumentService.upsertLatestDocument(any(), anyLong(), anyString(), any(), any(), eq(guide)))
+                .thenReturn(saved);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L))
+                .thenReturn(Optional.empty(), Optional.of(saved));
+        String privateComment = "<!-- codecrow-qa-autodoc -->\n\nSign in to CodeCrow to read the saved guide.";
+        when(qaDocPublicPreviewService.buildPrivateTaskComment(project, 7L)).thenReturn(privateComment);
+        when(taskManagementClient.postComment(TASK_ID, privateComment)).thenThrow(new IOException("response lost"));
+        var payload = createPayload("feature/PROJ-123");
+
+        assertThat(processor.process(payload, project, eventConsumer, Map.of()).success()).isFalse();
+        verify(qaDocStateRepository, never()).save(any());
+        when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString())).thenReturn(Optional.of(
+                new TaskComment("accepted-comment", "bot", privateComment, OffsetDateTime.now(), null)));
+
+        assertThat(processor.process(payload, project, eventConsumer, Map.of()).success()).isTrue();
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), any());
+        verify(qaDocDocumentService).upsertLatestDocument(any(), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(guide));
+        verify(taskManagementClient).postComment(TASK_ID, privateComment);
+        verify(taskManagementClient).updateComment(TASK_ID, "accepted-comment", privateComment);
+        verify(qaDocPublicPreviewService, never()).createPreviewUrl(any());
+        verify(qaDocStateRepository).save(any());
+    }
+
+    private static String sourceAndMapDiff() {
+        return "diff --git a/src/A.java b/src/A.java\n--- a/src/A.java\n+++ b/src/A.java\n@@ -1 +1 @@\n-old\n+source\n"
+                + "diff --git a/web/checkout.js.map b/web/checkout.js.map\n--- a/web/checkout.js.map\n+++ b/web/checkout.js.map\n@@ -1 +1 @@\n-old\n+generated-source-map\n";
+    }
+
+    @Test
+    void savedQaDiffUsesReviewExclusionsBeforeBuildingModelInputs() throws IOException {
+        setupHappyPath();
+        when(prChangeSummaryService.reviewSource(any())).thenReturn(Map.of("rawDiff", sourceAndMapDiff()));
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
+        var context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
+        assertThat(context.getValue().diff()).contains("+source").doesNotContain("checkout.js.map", "generated-source-map");
+        assertThat(context.getValue().changedFilePaths()).containsExactly("src/A.java");
+    }
+
+    @Test
+    void samePrDeltaUsesItsOwnDocumentCommitAfterAnotherPrUpdatedTheTask() throws IOException {
+        setupHappyPath();
+        when(prChangeSummaryService.find(eq(PROJECT_ID), eq(7L), eq("abc123"), isNull())).thenReturn(null);
+        project = spy(project);
+        var repo = mock(org.rostilos.codecrow.core.model.vcs.VcsRepoInfo.class);
+        var connection = mock(org.rostilos.codecrow.core.model.vcs.VcsConnection.class);
+        doReturn(repo).when(project).getEffectiveVcsRepoInfo();
+        when(repo.getVcsConnection()).thenReturn(connection);
+        when(repo.getRepoWorkspace()).thenReturn("workspace");
+        when(repo.getRepoSlug()).thenReturn("repo");
+        when(connection.getProviderType()).thenReturn(EVcsProvider.GITHUB);
+        var vcs = mock(org.rostilos.codecrow.vcsclient.VcsClient.class);
+        when(vcsClientProvider.getClient(connection)).thenReturn(vcs);
+        when(vcs.getPullRequest("workspace", "repo", 7L)).thenReturn(new org.rostilos.codecrow.vcsclient.model.VcsPullRequest(7L, "title", "body", "feature", "main", "base", "abc123", "open", false, "url"));
+        when(vcs.getCommitRangeDiff(eq("workspace"), eq("repo"), anyString(), eq("abc123"))).thenReturn(sourceAndMapDiff());
+        var source = mock(org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService.PreparedSnapshot.class);
+        when(snapshots.prepare(connection, "workspace", "repo", "abc123", "abc123")).thenReturn(Optional.of(source));
+        var contents = new PrEnrichmentDataDto(List.of(FileContentDto.of("src/A.java", "class A {}")),
+                List.of(), List.of(), PrEnrichmentDataDto.EnrichmentStats.empty());
+        var enriched = new PrEnrichmentDataDto(contents.fileContents(), List.of(),
+                List.of(FileRelationshipDto.imports("src/A.java", "src/B.java", "B")), contents.stats());
+        when(enrichmentService.fetchFileContentsOnly(source, List.of("src/A.java"))).thenReturn(contents);
+        when(enrichmentService.enrichContents(contents, List.of("src/A.java"))).thenReturn(enriched);
+        var previousPrDoc = new QaDocDocument(project, 7L);
+        previousPrDoc.replaceContent(TASK_ID, null, "pr-a-old", GENERATED_QA_DOC);
+        var state = new QaDocState(project, TASK_ID);
+        state.recordGeneration("pr-a-old", null, 7L);
+        state.recordGeneration("pr-b-new", null, 8L);
+        when(qaDocStateRepository.findByProjectIdAndTaskId(PROJECT_ID, TASK_ID)).thenReturn(Optional.of(state));
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L)).thenReturn(Optional.of(previousPrDoc));
+
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
+        verify(vcs).getCommitRangeDiff("workspace", "repo", "pr-a-old", "abc123");
+        verify(vcs, never()).getCommitRangeDiff("workspace", "repo", "pr-b-new", "abc123");
+        var context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
+        assertThat(context.getValue().deltaDiff()).contains("+source").doesNotContain("checkout.js.map");
+        assertThat(context.getValue().enrichmentData()).isSameAs(enriched);
+        verify(enrichmentService).fetchFileContentsOnly(any(), eq(List.of("src/A.java")));
+        verify(enrichmentService).enrichContents(contents, List.of("src/A.java"));
+        verify(vcs, never()).getFileContent(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void samePrRerunKeepsTheLatestTaskAccumulationFromOtherPrs() throws IOException {
+        setupHappyPath();
+        var state = new QaDocState(project, TASK_ID);
+        state.recordGeneration("pr-a-old", null, 7L);
+        state.recordGeneration("pr-b-new", null, 8L);
+        when(qaDocStateRepository.findByProjectIdAndTaskId(PROJECT_ID, TASK_ID)).thenReturn(Optional.of(state));
+        var own = new QaDocDocument(project, 7L);
+        own.replaceContent(TASK_ID, null, "pr-a-old", "PR A only");
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L)).thenReturn(Optional.of(own));
+        var accumulated = new QaDocDocument(project, 8L);
+        accumulated.replaceContent(TASK_ID, null, "pr-b-new", "PR A and PR B coverage");
+        lenient().when(qaDocDocumentService.findLatestDocumentForTask(PROJECT_ID, TASK_ID, null))
+                .thenReturn(Optional.of(accumulated));
+
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isTrue();
+        ArgumentCaptor<QaDocGenerationContext> context = ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(), eq(7L), anyInt(), anyInt(), anyMap(), context.capture());
+        assertThat(context.getValue().previousDocumentation()).isEqualTo("PR A and PR B coverage");
+    }
+
+    @Test
+    void olderReviewCannotRegenerateOrPublishOverANewerPrDocument() throws IOException {
+        setupHappyPath();
+        var older = createAnalysisWithIssues(0, "src/A.java");
+        ReflectionTestUtils.setField(older, "id", 100L);
+        when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null)).thenReturn(Optional.of(older));
+        var newer = new QaDocDocument(project, 7L);
+        newer.replaceContent(TASK_ID, 101L, "newer-head", GENERATED_QA_DOC);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID, 7L)).thenReturn(Optional.of(newer));
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).status()).isEqualTo("ignored");
+        verifyNoInteractions(qaDocGenerationService);
+        verify(taskManagementClient, never()).postComment(anyString(), anyString());
+    }
+
+    @Test
+    void failedStateCommitRemainsAnExplicitFailureAfterDocumentAndHandoff() throws IOException {
+        setupHappyPath();
+        when(qaDocStateRepository.save(any())).thenThrow(new IllegalStateException("state database write unavailable"));
+        var result = processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of());
+        assertThat(result.success()).isFalse();
+        verify(qaDocDocumentService).upsertLatestDocument(any(), eq(7L), eq(TASK_ID), any(), eq("abc123"), eq(GENERATED_QA_DOC));
+        verify(taskManagementClient).postComment(eq(TASK_ID), anyString());
+    }
+
+    @Test
+    void lostOperationLeasePreservesStoredDocumentationAndSkipsExternalPublication() throws IOException {
+        setupHappyPath();
+        doThrow(new IllegalStateException("QA operation lease lost")).when(operation).assertOwnership();
+        assertThat(processor.process(createPayload("feature/PROJ-123"), project, eventConsumer, Map.of()).success()).isFalse();
+        verify(qaDocDocumentService, never()).upsertLatestDocument(any(), any(), any(), any(), any(), any());
+        verify(taskManagementClient, never()).postComment(anyString(), anyString());
+        verify(operation).close();
+        var order = inOrder(operationService, qaDocStateRepository);
+        order.verify(operationService).open(eq(project), eq(7L), eq(TASK_ID), any());
+        order.verify(qaDocStateRepository).findByProjectIdAndTaskId(PROJECT_ID, TASK_ID);
+    }
+
+    @Test void handoffRetryRegeneratesWhenAnotherPrHasNewerPendingTaskCoverage() throws IOException {
+        setupHappyPath();
+        var own=new QaDocDocument(project,7L); own.replaceContent(TASK_ID,null,"abc123",GENERATED_QA_DOC);
+        ReflectionTestUtils.setField(own,"id",7L);
+        var latest=new QaDocDocument(project,8L); latest.replaceContent(TASK_ID,null,"b-head","PR A and PR B pending coverage");
+        ReflectionTestUtils.setField(latest,"id",8L);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID,7L)).thenReturn(Optional.of(own));
+        when(qaDocDocumentService.findLatestDocumentForTask(PROJECT_ID,TASK_ID,null)).thenReturn(Optional.of(latest));
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isTrue();
+        var context=ArgumentCaptor.forClass(QaDocGenerationContext.class);
+        verify(qaDocGenerationService).generateQaDocumentation(any(),eq(7L),anyInt(),anyInt(),anyMap(),context.capture());
+        assertThat(context.getValue().previousDocumentation()).isEqualTo("PR A and PR B pending coverage");
+    }
+
+    @Test void handoffRetryCannotReuseAnotherReviewAtTheSameHead() throws IOException {
+        setupHappyPath();
+        var analysis=createAnalysisWithIssues(0,"src/A.java"); ReflectionTestUtils.setField(analysis,"id",101L);
+        when(codeAnalysisService.getAnalysisForReview(PROJECT_ID,7L,"abc123",null)).thenReturn(Optional.of(analysis));
+        var own=new QaDocDocument(project,7L); own.replaceContent(TASK_ID,100L,"abc123",GENERATED_QA_DOC);
+        when(qaDocDocumentService.findLatestDocument(PROJECT_ID,7L)).thenReturn(Optional.of(own));
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isTrue();
+        verify(qaDocGenerationService).generateQaDocumentation(any(),eq(7L),anyInt(),anyInt(),anyMap(),any());
+    }
+
+    @Test void unavailableHistoryRetainsStoredCoverageAndMakesTheQaJobRetryable() throws IOException {
+        setupHappyPath();
+        when(qaDocDocumentService.findLatestDocumentForTask(PROJECT_ID,TASK_ID,null)).thenThrow(new IllegalStateException("history unavailable"));
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isFalse();
+        verifyNoInteractions(qaDocGenerationService);
+        verify(qaDocDocumentService,never()).upsertLatestDocument(any(),any(),any(),any(),any(),any());
+        verify(taskManagementClient,never()).postComment(anyString(),anyString());
+    }
+
+    @Test void taskConnectionReadIsScopedToTheProjectsWorkspace() throws IOException {
+        configureProject(enabledConfig());
+        var workspace=new org.rostilos.codecrow.core.model.workspace.Workspace();
+        ReflectionTestUtils.setField(workspace,"id",9L); project.setWorkspace(workspace);
+        when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID,9L)).thenReturn(Optional.empty());
+        assertThat(processor.process(createPayload("feature/PROJ-123"),project,eventConsumer,Map.of()).success()).isFalse();
+        verify(connectionRepository).findByIdAndWorkspaceId(CONNECTION_ID,9L);
+        verifyNoInteractions(qaDocGenerationService);
+    }
 
     private QaAutoDocConfig enabledConfig() {
         return new QaAutoDocConfig(
@@ -227,7 +501,7 @@ class QaDocCommandProcessorTest {
         configureProject(enabledConfig());
 
         TaskManagementConnection conn = createConnection();
-        when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+        when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
         when(clientFactory.createClient(
                 eq(ETaskManagementPlatform.JIRA_CLOUD), anyString(), anyString(), anyString()
         )).thenReturn(taskManagementClient);
@@ -240,7 +514,7 @@ class QaDocCommandProcessorTest {
                 .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
 
         CodeAnalysis analysis = createAnalysisWithIssues(5, "src/A.java", "src/B.java", "src/A.java");
-        when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+        when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null))
                 .thenReturn(Optional.of(analysis));
 
         lenient().when(qaDocGenerationService.generateQaDocumentation(
@@ -302,7 +576,7 @@ class QaDocCommandProcessorTest {
         @DisplayName("should return error when connection not found")
         void shouldReturnErrorWhenConnectionNotFound() {
             configureProject(enabledConfig());
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.empty());
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.empty());
             WebhookPayload payload = createPayload("feature/PROJ-123");
 
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
@@ -320,7 +594,7 @@ class QaDocCommandProcessorTest {
         void setUpConnection() {
             configureProject(enabledConfig());
             TaskManagementConnection conn = createConnection();
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
             when(clientFactory.createClient(any(), anyString(), anyString(), anyString()))
                     .thenReturn(taskManagementClient);
         }
@@ -679,7 +953,7 @@ class QaDocCommandProcessorTest {
         void setUpBase() {
             configureProject(enabledConfig());
             TaskManagementConnection conn = createConnection();
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
             when(clientFactory.createClient(any(), anyString(), anyString(), anyString()))
                     .thenReturn(taskManagementClient);
         }
@@ -776,7 +1050,7 @@ class QaDocCommandProcessorTest {
         @Test
         @DisplayName("should handle no PR analysis data gracefully")
         void shouldHandleNoAnalysisData() throws IOException {
-            when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+            when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null))
                     .thenReturn(Optional.empty());
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
@@ -818,7 +1092,7 @@ class QaDocCommandProcessorTest {
         @DisplayName("should include Jira provider response when posting comment fails")
         void shouldIncludeProviderResponseWhenPostingCommentFails() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
-            when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+            when(codeAnalysisService.getAnalysisForReview(PROJECT_ID, 7L, "abc123", null))
                     .thenReturn(Optional.empty());
             when(qaDocGenerationService.generateQaDocumentation(
                     any(), anyLong(), anyInt(), anyInt(), anyMap(), any(QaDocGenerationContext.class)
@@ -858,7 +1132,7 @@ class QaDocCommandProcessorTest {
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
 
             assertThat(result.success()).isFalse();
-            assertThat(result.message()).contains("secure public preview");
+            assertThat(result.message()).contains("could not be saved");
             // Should not attempt to look up analysis when PR number is null
             verify(codeAnalysisService, never()).getPreviousVersionCodeAnalysis(anyLong(), anyLong());
         }
@@ -872,7 +1146,7 @@ class QaDocCommandProcessorTest {
         void setUpBase() {
             configureProject(enabledConfig());
             TaskManagementConnection conn = createConnection();
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.of(conn));
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.of(conn));
             when(clientFactory.createClient(any(), anyString(), anyString(), anyString()))
                     .thenReturn(taskManagementClient);
         }
@@ -924,7 +1198,7 @@ class QaDocCommandProcessorTest {
         @DisplayName("should delegate to multi-arg overload with empty additionalData")
         void shouldDelegateToMultiArgOverload() {
             configureProject(enabledConfig());
-            when(connectionRepository.findById(CONNECTION_ID)).thenReturn(Optional.empty());
+            when(connectionRepository.findByIdAndWorkspaceId(CONNECTION_ID, 9L)).thenReturn(Optional.empty());
             WebhookPayload payload = createPayload("feature/PROJ-123");
 
             // Call the 3-arg overload (no additionalData)

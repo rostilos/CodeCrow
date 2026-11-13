@@ -31,6 +31,7 @@ class ReportGeneratorTest {
     @Mock private SiteSettingsProvider siteSettingsProvider;
     @Mock private AnalysisStatusEvaluator analysisStatusEvaluator;
 
+    @Mock private org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService checks;
     private ReportGenerator generator;
 
     private static void setId(Object entity, Long id) throws Exception {
@@ -43,7 +44,7 @@ class ReportGeneratorTest {
     void setUp() {
         BaseUrlSettingsDTO baseUrlSettings = new BaseUrlSettingsDTO("https://app.example.com", "https://app.example.com", null);
         lenient().when(siteSettingsProvider.getBaseUrlSettings()).thenReturn(baseUrlSettings);
-        generator = new ReportGenerator(siteSettingsProvider, analysisStatusEvaluator);
+        generator = new ReportGenerator(siteSettingsProvider, analysisStatusEvaluator, checks);
     }
 
     private CodeAnalysis buildAnalysis(List<CodeAnalysisIssue> issues) throws Exception {
@@ -79,6 +80,64 @@ class ReportGeneratorTest {
     }
 
     // ── createAnalysisSummary ────────────────────────────────────────────
+
+    @Test
+    void twentyComposerAdvisoriesUseOneFilteredSummaryWhileOtherSecurityIssuesStayInline() throws Exception {
+        var issues = new java.util.ArrayList<CodeAnalysisIssue>();
+        var check = new org.rostilos.codecrow.core.model.reviewcheck.ReviewCheckResult();
+        check.setCheckId("composer-audit"); check.setComplete(true);
+        for (long id = 1; id <= 20; id++) {
+            var advisory = new org.rostilos.codecrow.core.model.reviewcheck.ReviewCheckFinding();
+            advisory.setSeverity(IssueSeverity.HIGH); advisory.setTitle("Advisory " + id);
+            advisory.setFilePath("composer.lock"); check.addFinding(advisory);
+        }
+        when(checks.findForAnalysis(any())).thenReturn(List.of(check));
+        var security = buildIssue(21L, IssueSeverity.HIGH, false);
+        security.setIssueCategory(IssueCategory.SECURITY);
+        security.setFilePath("composer.json");
+        issues.add(security);
+        var analysis = buildAnalysis(issues);
+        var summary = generator.createAnalysisSummary(analysis, 100L);
+        assertThat(summary.getTotalIssues()).isEqualTo(1);
+        assertThat(summary.getHighSeverityIssues().getCount()).isEqualTo(1);
+        assertThat(summary.getIssues()).singleElement().satisfies(issue -> assertThat(issue.getIssueId()).isEqualTo(21L));
+        assertThat(generator.createReportAnnotations(analysis, analysis.getProject())).hasSize(1);
+        assertThat(generator.createDetailedIssuesMarkdown(summary, true)).contains("Test issue 21").doesNotContain("Reason for issue 1");
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L))
+                .contains("### Composer audit", "20 open dependency advisories (20 high, 0 medium, 0 low)")
+                .contains("https://app.example.com/dashboard/ws/projects/test-proj?prId=100&version=1&status=open&reviewCheckId=composer-audit&subTab=checks")
+                .doesNotContain("Reason for issue", "Test issue 21");
+        for (boolean github : List.of(false, true)) {
+            String markdown = generator.createMarkdownSummary(analysis, summary, github);
+            assertThat(markdown).contains("| 🔒 Composer audit | [20](", "View Composer audit dependency details")
+                    .contains("subTab=checks").doesNotContain("Advisory 1");
+        }
+        check.getFindings().forEach(finding -> finding.setResolved(true));
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isEmpty();
+        check.getFindings().forEach(finding -> finding.setResolved(false));
+        analysis.getIssues().clear();
+        var onlyChecks = generator.createAnalysisSummary(analysis, 100L);
+        assertThat(generator.createMarkdownSummary(analysis, onlyChecks))
+                .contains("| 🔒 Composer audit | [20](").doesNotContain("No Issues Found");
+        check.getFindings().clear(); check.setComplete(false);
+        assertThat(generator.createMarkdownSummary(analysis, generator.createAnalysisSummary(analysis, 100L)))
+                .contains("coverage is incomplete").doesNotContain("No Issues Found");
+        check.setComplete(true);
+        check.getFindings().forEach(finding -> finding.setResolved(true));
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isEmpty();
+    }
+
+    @Test
+    void unavailableChecksKeepSourceReviewPublishableWithoutClaimingACleanAudit() throws Exception {
+        var analysis = buildAnalysis(List.of(buildIssue(1L, IssueSeverity.HIGH, false)));
+        when(checks.findForAnalysis(analysis)).thenThrow(new IllegalStateException("unavailable"));
+        var summary = generator.createAnalysisSummary(analysis, 100L);
+        assertThat(summary.getIssues()).hasSize(1);
+        assertThat(generator.createMarkdownSummary(analysis, summary))
+                .contains("Dependency checks unavailable", "coverage is incomplete", "subTab=checks")
+                .doesNotContain("No Issues Found");
+        assertThat(generator.createReviewChecksMarkdown(analysis, 100L)).isNull();
+    }
 
     @Nested
     class CreateAnalysisSummary {

@@ -1,18 +1,36 @@
 from pathlib import Path
-from typing import List, Optional, Generator, Mapping
+from dataclasses import dataclass
+from typing import Callable, Generator, List, Mapping, Optional
 import logging
 import re
 
-from llama_index.core.schema import Document
-from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, clean_archive_path
+from .documents import Document
+from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file
 from ..models.config import RAGConfig
 from .source_tree import (
+    RepositoryFileSizeLimitExceeded,
     RepositorySourceTreeError,
     iter_repository_regular_file_paths,
     read_repository_file_bytes,
 )
 
 logger = logging.getLogger(__name__)
+
+REPOSITORY_FILE_SIZE_LIMIT_CODE = "repository_file_size_limit_exceeded"
+
+
+@dataclass(frozen=True)
+class RepositoryFileSkip:
+    """Observable whole-file omission emitted by the repository loader."""
+
+    code: str
+    path: str
+    message: str
+    size_bytes: int | None = None
+    max_file_size_bytes: int | None = None
+
+
+RepositoryFileSkipCallback = Callable[[RepositoryFileSkip], None]
 
 # Detects build-tool-generated assets with content hashes in their filenames.
 # Examples: index-D25HpPdh.js, main.a1b2c3d4.css, vendor~lib.9fca3e.mjs
@@ -56,12 +74,53 @@ class DocumentLoader:
     def __init__(self, config: RAGConfig):
         self.config = config
 
+    @staticmethod
+    def _report_size_limit_skip(
+        exception: RepositoryFileSizeLimitExceeded,
+        on_skip: RepositoryFileSkipCallback | None,
+        *,
+        phase: str,
+    ) -> None:
+        diagnostic = RepositoryFileSkip(
+            code=REPOSITORY_FILE_SIZE_LIMIT_CODE,
+            path=exception.relative_path,
+            message=(
+                "Repository file exceeds the configured indexing ceiling and "
+                "was omitted as a whole without truncation."
+            ),
+            size_bytes=exception.size_bytes,
+            max_file_size_bytes=exception.max_size_bytes,
+        )
+        logger.warning(
+            "Repository file exceeds the configured indexing ceiling; "
+            "skipping it without truncation: code=%s phase=%s path=%s "
+            "bytes=%d max_bytes=%d",
+            diagnostic.code,
+            phase,
+            diagnostic.path,
+            diagnostic.size_bytes,
+            diagnostic.max_file_size_bytes,
+        )
+        if on_skip is None:
+            return
+        try:
+            on_skip(diagnostic)
+        except Exception as callback_exception:
+            # Skip reporting is observability enrichment. It must not turn an
+            # otherwise recoverable oversized source file into an index failure.
+            logger.warning(
+                "Repository file skip callback failed for %s: %s",
+                diagnostic.path,
+                callback_exception,
+            )
+
     def iter_repository_files(
         self,
         repo_path: Path,
         extra_include_patterns: Optional[List[str]] = None,
         extra_exclude_patterns: Optional[List[str]] = None,
         expected_file_sha256: Optional[Mapping[str, str]] = None,
+        on_skip: RepositoryFileSkipCallback | None = None,
     ) -> Generator[Path, None, None]:
         """Iterate over repository files without loading them into memory.
         
@@ -127,7 +186,15 @@ class DocumentLoader:
                     repo_path,
                     relative_path,
                     expected_sha256=expected_digest,
+                    max_size_bytes=self.config.max_file_size_bytes,
                 )
+            except RepositoryFileSizeLimitExceeded as exception:
+                self._report_size_limit_skip(
+                    exception,
+                    on_skip,
+                    phase="scan",
+                )
+                continue
             except RepositorySourceTreeError:
                 if expected_file_sha256 is not None:
                     raise
@@ -162,6 +229,7 @@ class DocumentLoader:
         commit: str,
         strict: bool = False,
         expected_file_sha256: Optional[Mapping[str, str]] = None,
+        on_skip: RepositoryFileSkipCallback | None = None,
     ) -> List[Document]:
         """Load a batch of files as Documents.
         
@@ -204,12 +272,20 @@ class DocumentLoader:
                     repo_base,
                     relative_path,
                     expected_sha256=expected_digest,
+                    max_size_bytes=self.config.max_file_size_bytes,
                 )
                 text = content.decode("utf-8")
 
                 if not text or not text.strip():
                     continue
 
+            except RepositoryFileSizeLimitExceeded as exception:
+                self._report_size_limit_skip(
+                    exception,
+                    on_skip,
+                    phase="load",
+                )
+                continue
             except UnicodeDecodeError as exception:
                 logger.warning(f"Cannot decode file, skipping: {relative_path_str}")
                 if strict:
@@ -228,14 +304,11 @@ class DocumentLoader:
             language = detect_language_from_path(str(full_path))
             filetype = full_path.suffix.lstrip('.')
 
-            # Clean archive root prefix from path (e.g., 'owner-repo-commit/src/file.php' -> 'src/file.php')
-            clean_path = clean_archive_path(relative_path_str)
-
             metadata = {
                 "workspace": workspace,
                 "project": project,
                 "branch": branch,
-                "path": clean_path,
+                "path": Path(relative_path).as_posix(),
                 "commit": commit,
                 "language": language,
                 "filetype": filetype,
@@ -279,73 +352,3 @@ class DocumentLoader:
             branch,
             commit,
         )
-
-    def load_specific_files(
-        self,
-        file_paths: List[Path],
-        repo_base: Path,
-        workspace: str,
-        project: str,
-        branch: str,
-        commit: str
-    ) -> List[Document]:
-        """Load specific files (for incremental updates)"""
-        documents = []
-
-        for relative_file_path in file_paths:
-            # file_paths contains relative paths, join with repo_base to get full path
-            full_path = repo_base / relative_file_path
-            relative_path = str(relative_file_path)
-            
-            if should_exclude_file(relative_path, self.config.excluded_patterns):
-                logger.debug(f"Excluding file: {relative_path}")
-                continue
-
-            if _is_generated_asset(full_path.name):
-                logger.debug(f"Generated asset, skipping: {relative_path}")
-                continue
-
-            try:
-                content = read_repository_file_bytes(
-                    repo_base,
-                    relative_file_path,
-                )
-                if len(content) > self.config.max_file_size_bytes:
-                    logger.warning(f"File too large, skipping: {relative_path}")
-                    continue
-                text = _decode_text(content)
-                if text is None:
-                    logger.debug(f"Binary file, skipping: {relative_path}")
-                    continue
-            except Exception as e:
-                logger.error(f"Error reading file {relative_path}: {e}")
-                continue
-
-            language = detect_language_from_path(str(full_path))
-            filetype = full_path.suffix.lstrip('.')
-
-            # Incremental callers already provide repository-relative VCS
-            # paths.  Archive-root heuristics would corrupt legitimate module
-            # directories whose names happen to resemble archive prefixes.
-            clean_path = relative_path.replace('\\', '/')
-
-            metadata = {
-                "workspace": workspace,
-                "project": project,
-                "branch": branch,
-                "path": clean_path,
-                "commit": commit,
-                "language": language,
-                "filetype": filetype,
-            }
-
-            doc = Document(
-                text=text,
-                metadata=metadata
-                # Don't set id_ - let LlamaIndex/Qdrant generate it automatically
-            )
-
-            documents.append(doc)
-            logger.debug(f"Loaded document: {clean_path}")
-
-        return documents

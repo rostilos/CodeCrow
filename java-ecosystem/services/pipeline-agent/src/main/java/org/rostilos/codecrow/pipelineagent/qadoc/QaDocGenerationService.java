@@ -2,6 +2,10 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -10,7 +14,6 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
-import org.rostilos.codecrow.core.util.RetryExecutor;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
@@ -25,9 +28,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -37,31 +38,35 @@ import java.util.stream.Collectors;
  * This service is responsible for:
  * <ul>
  *   <li>Assembling the request payload (analysis summary, task context, template config)</li>
- *   <li>Making the HTTP call with retry logic</li>
+ *   <li>Making one HTTP call without replaying paid generation on failure</li>
  *   <li>Parsing the response into the full document stored by CodeCrow</li>
  * </ul>
  */
 @Service
 public class QaDocGenerationService {
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.core.service.AIConnectionResolver aiConnectionResolver =
+            new org.rostilos.codecrow.core.service.AIConnectionResolver();
+
 
     private static final Logger log = LoggerFactory.getLogger(QaDocGenerationService.class);
-
-    private static class NonRetryableQaDocGenerationException extends RuntimeException {
-        NonRetryableQaDocGenerationException(String message) {
-            super(message);
-        }
-    }
 
     private final String inferenceOrchestratorUrl;
     private final String serviceSecret;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final TokenEncryptionService tokenEncryptionService;
+    private final LocalRepositorySnapshotService snapshots;
+    private final VcsClientProvider vcsClients;
 
     public QaDocGenerationService(
             @Value("${codecrow.inference-orchestrator.url:http://inference-orchestrator:8000}") String inferenceOrchestratorUrl,
             @Value("${codecrow.inference-orchestrator.service-secret:${codecrow.internal.api.secret:}}") String serviceSecret,
-            TokenEncryptionService tokenEncryptionService) {
+            TokenEncryptionService tokenEncryptionService,
+            LocalRepositorySnapshotService snapshots,
+            VcsClientProvider vcsClients) {
+        this.snapshots = snapshots;
+        this.vcsClients = vcsClients;
         this.inferenceOrchestratorUrl = inferenceOrchestratorUrl;
         this.serviceSecret = serviceSecret == null ? "" : serviceSecret.trim();
         this.tokenEncryptionService = tokenEncryptionService;
@@ -85,14 +90,14 @@ public class QaDocGenerationService {
      * @param event   the analysis completed event (contains metrics with issue count, files, etc.)
      * @param ctx     the immutable generation context with all data
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
-     * @throws IOException if the inference orchestrator call fails after retries
+     * @throws IOException if the inference orchestrator call fails (the generation POST is never automatically retried)
      */
     public String generateQaDocumentation(Project project,
                                            AnalysisCompletedEvent event,
                                            QaDocGenerationContext ctx) throws IOException {
         Map<String, Object> payload = buildPayloadFromContext(project, event.getPrNumber(),
                 event.getIssuesFound(), event.getFilesAnalyzed(), event.getMetrics(), ctx);
-        return callInferenceOrchestrator(payload);
+        return generateWithRepositorySnapshot(project, ctx, payload);
     }
 
     /**
@@ -106,7 +111,7 @@ public class QaDocGenerationService {
      * @param prMetadata    a map with optional keys: sourceBranch, targetBranch, prTitle, prDescription
      * @param ctx           the immutable generation context with all data
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
-     * @throws IOException if the inference orchestrator call fails after retries
+     * @throws IOException if the inference orchestrator call fails (the generation POST is never automatically retried)
      */
     public String generateQaDocumentation(Project project,
                                            Long prNumber,
@@ -116,54 +121,119 @@ public class QaDocGenerationService {
                                            QaDocGenerationContext ctx) throws IOException {
         Map<String, Object> payload = buildPayloadFromContext(
                 project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
-        return callInferenceOrchestrator(payload);
+        return generateWithRepositorySnapshot(project, ctx, payload);
+    }
+
+    private String generateWithRepositorySnapshot(Project project, QaDocGenerationContext ctx,
+                                                   Map<String, Object> payload) throws IOException {
+        LocalRepositorySnapshotService.PreparedSnapshot snapshot = null;
+        try (var acquisition = snapshots.openAcquisition(project.getId())) {
+            // Saved paths belong to a completed review; every QA operation owns fresh paths.
+            if (ctx.prChangeSummary() != null || ctx.reviewSource() != null && !ctx.reviewSource().isEmpty()) {
+                ObjectNode summary = ctx.prChangeSummary() != null ? objectMapper.valueToTree(ctx.prChangeSummary()) : objectMapper.createObjectNode();
+                ObjectNode tools = summary.get("toolContext") instanceof ObjectNode savedTools ? savedTools : objectMapper.createObjectNode();
+                summary.set("toolContext", tools);
+                ObjectNode repository = tools.get("repository") instanceof ObjectNode savedRepository ? savedRepository : objectMapper.createObjectNode();
+                tools.set("repository", repository);
+                String targetRevision = ctx.reviewSource() != null && ctx.reviewSource().get("targetRevision") instanceof String target ? target : null;
+                if (targetRevision == null) targetRevision = repository.path("localRepoRevision").asText(null);
+                repository.remove(List.of("localRepoPath", "localReviewOverlayPath", "mcpLocalOnly"));
+                if (ctx.prChangeSummary() != null) payload.put("pr_change_summary", summary);
+                payload.put("tool_context", tools);
+                var repo = project.getEffectiveVcsRepoInfo();
+                if (repo != null && repo.getVcsConnection() != null && ctx.sourceRevision() != null
+                        && targetRevision != null && !targetRevision.isBlank()) {
+                    repository.put("vcsQuotaIdentity", VcsClientProvider.quotaIdentity(repo.getVcsConnection()));
+                    repository.put("vcsJobId", org.slf4j.MDC.get("jobId"));
+                    var changed = new LinkedHashSet<String>();
+                    var deleted = new LinkedHashSet<String>();
+                    if (ctx.changedFilePaths() != null) changed.addAll(ctx.changedFilePaths());
+                    if (ctx.reviewSource() != null) {
+                        if (ctx.reviewSource().get("changedFiles") instanceof List<?> paths) {
+                            paths.stream().filter(String.class::isInstance).map(String.class::cast).forEach(changed::add);
+                        }
+                        if (ctx.reviewSource().get("deletedFiles") instanceof List<?> paths) {
+                            paths.stream().filter(String.class::isInstance).map(String.class::cast).forEach(deleted::add);
+                        }
+                    }
+                    for (JsonNode file : summary.path("files")) {
+                        String path = file.path("path").asText(null);
+                        if (path == null || path.isBlank()) continue;
+                        changed.add(path);
+                        if ("deleted".equalsIgnoreCase(file.path("changeType").asText())) deleted.add(path);
+                    }
+                    if (ctx.diff() != null) deleted.addAll(DiffParser.extractDeletedFiles(ctx.diff()));
+                    var contents = new LinkedHashMap<String, String>();
+                    if (ctx.enrichmentData() != null && ctx.enrichmentData().fileContents() != null) {
+                        for (var file : ctx.enrichmentData().fileContents()) {
+                            if (!file.skipped() && file.content() != null) contents.put(file.path(), file.content());
+                        }
+                    }
+                    var missing = new LinkedHashSet<>(changed);
+                    missing.removeAll(deleted);
+                    missing.removeAll(contents.keySet());
+                    try {
+                        contents.putAll(snapshots.readSourceFiles(repo.getVcsConnection(), repo.getRepoWorkspace(),
+                                repo.getRepoSlug(), ctx.sourceRevision(), missing, 5 * 1024 * 1024));
+                    } catch (Exception unavailable) {
+                        log.warn("QA proposed archive unavailable; continuing with saved source: {}", unavailable.getMessage());
+                    }
+                    String targetBranch = ctx.targetBranch() != null ? ctx.targetBranch()
+                            : repository.path("localRepoTargetBranch").asText(null);
+                    snapshot = snapshots.prepareForReview(repo.getVcsConnection(), repo.getRepoWorkspace(),
+                            repo.getRepoSlug(), targetBranch, targetRevision, contents, changed, deleted).orElse(null);
+                    if (snapshot != null) {
+                        var binding = snapshot.transport();
+                        repository.put("localRepoPath", binding.path());
+                        repository.put("localRepoTargetBranch", binding.targetBranch());
+                        repository.put("localRepoRevision", binding.revision());
+                        if (binding.reviewOverlayPath() != null) repository.put("localReviewOverlayPath", binding.reviewOverlayPath());
+                    }
+                }
+                if (snapshot == null) log.warn("QA exact source snapshot unavailable; continuing with saved context and provider tools");
+            }
+        } catch (Exception unavailable) {
+            log.warn("QA exact source snapshot preparation failed; continuing from available context: {}", unavailable.getMessage());
+        }
+        try {
+            return callInferenceOrchestrator(payload);
+        } finally {
+            if (snapshot != null) snapshot.close();
+        }
     }
 
     /**
      * Shared HTTP call to the inference-orchestrator's /qa-documentation endpoint.
      */
     private String callInferenceOrchestrator(Map<String, Object> payload) throws IOException {
-        String responseBody;
-        try {
-            responseBody = RetryExecutor.withExponentialBackoff(() -> {
-                String jsonPayload = objectMapper.writeValueAsString(payload);
-
-                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                        .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
-                        .header("Content-Type", "application/json")
-                        .header("Accept", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                        .timeout(Duration.ofSeconds(300));
-
-                if (serviceSecret.isBlank()) {
-                    log.warn("QA doc generation service secret is not configured; inference orchestrator may reject the request");
-                } else {
-                    requestBuilder.header("x-service-secret", serviceSecret);
-                }
-
-                HttpRequest request = requestBuilder.build();
-
-                HttpResponse<String> response;
-                try {
-                    response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("QA doc generation interrupted", e);
-                }
-
-                if (response.statusCode() >= 500) {
-                    throw new IOException("Inference orchestrator returned " + response.statusCode());
-                }
-                if (response.statusCode() != 200) {
-                    log.warn("QA doc generation returned non-200: {} — {}", response.statusCode(), response.body());
-                    throw new NonRetryableQaDocGenerationException(
-                            "Inference orchestrator returned " + response.statusCode());
-                }
-                return response.body();
-            });
-        } catch (NonRetryableQaDocGenerationException e) {
-            throw new IOException(e.getMessage(), e);
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("QA submission cancelled");
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+                .timeout(Duration.ofSeconds(300));
+        if (serviceSecret.isBlank()) {
+            log.warn("QA doc generation service secret is not configured; inference orchestrator may reject the request");
+        } else {
+            requestBuilder.header("x-service-secret", serviceSecret);
         }
+
+        // A lost response does not mean generation stopped; retrying this POST repeats paid work.
+        HttpResponse<String> response;
+        try {
+            response = httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("QA doc generation interrupted; not automatically retried", e);
+        } catch (IOException e) {
+            throw new IOException("QA doc generation response unavailable; not automatically retried: " + e.getMessage(), e);
+        }
+        if (response.statusCode() != 200) {
+            throw new IOException("Inference orchestrator returned " + response.statusCode()
+                    + failureDiagnostics(response.body()) + "; not automatically retried");
+        }
+        String responseBody = response.body();
 
         if (responseBody == null || responseBody.isBlank()) {
             throw new IOException("Inference orchestrator returned an empty response");
@@ -203,6 +273,27 @@ public class QaDocGenerationService {
         }
     }
 
+    private String failureDiagnostics(String body) {
+        if (body == null || body.length() > 16_384) return "";
+        try {
+            JsonNode detail = objectMapper.readTree(body).path("detail");
+            if (!"qa_generation_failed".equals(detail.path("error").asText())) return "";
+            String errorId = detail.path("error_id").asText();
+            if (!errorId.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) return "";
+            String diagnostics = " (error_id=" + errorId;
+            String errorType = detail.path("error_type").asText();
+            if (errorType.matches("[A-Za-z_][A-Za-z0-9_]{0,99}")) diagnostics += ", error_type=" + errorType;
+            JsonNode status = detail.path("upstream_status");
+            if (status.isIntegralNumber() && status.asInt() >= 400 && status.asInt() <= 599) {
+                diagnostics += ", upstream_status=" + status.asInt();
+            }
+            return diagnostics + ")";
+        } catch (Exception ignored) {
+            // Older servers and proxies may return plain text; never expose their raw body.
+            return "";
+        }
+    }
+
     /**
      * Build the full HTTP payload from a {@link QaDocGenerationContext}.
      * <p>
@@ -222,6 +313,24 @@ public class QaDocGenerationService {
         payload.put("pr_number", prNumber);
         payload.put("issues_found", issuesFound);
         payload.put("files_analyzed", filesAnalyzed);
+
+        payload.put("pr_change_summary", ctx.prChangeSummary());
+        payload.put("source_revision", ctx.sourceRevision());
+        payload.put("project_workspace", project.getWorkspace() != null ? project.getWorkspace().getName() : "");
+        payload.put("project_namespace", project.getNamespace());
+        var repoInfo = project.getEffectiveVcsRepoInfo();
+        if (repoInfo != null && repoInfo.getVcsConnection() != null) {
+            try {
+                var credentials = new org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor(tokenEncryptionService)
+                        .extractCredentials(repoInfo.getVcsConnection());
+                payload.put("access_token", credentials.accessToken());
+                payload.put("oauth_client", credentials.oAuthClient());
+                payload.put("oauth_secret", credentials.oAuthSecret());
+                payload.put("vcs_base_url", credentials.vcsBaseUrl());
+            } catch (Exception exception) {
+                log.warn("QA repository tools credentials unavailable; documentation continues from saved context");
+            }
+        }
 
         // ── AI credentials ──────────────────────────────────────────
         addAiCredentials(payload, project);
@@ -276,6 +385,7 @@ public class QaDocGenerationService {
         Map<String, Object> prMeta = (prMetadata != null)
                 ? new LinkedHashMap<>(prMetadata)
                 : new LinkedHashMap<>();
+        prMeta.put("maxAllowedTokens", project.getEffectiveConfig().maxAnalysisTokenLimit());
         if (ctx.analysis() != null) {
             prMeta.put("analysisSummary", buildAnalysisSummary(ctx.analysis()));
         }
@@ -316,13 +426,13 @@ public class QaDocGenerationService {
      */
     private void addAiCredentials(Map<String, Object> payload, Project project) {
         try {
-            ProjectAiConnectionBinding binding = project.getAiBinding();
-            if (binding == null || binding.getAiConnection() == null) {
+            AIConnection aiConn = aiConnectionResolver.resolve(project);
+            if (aiConn == null) {
+                if (!aiConnectionResolver.allowEnvironmentFallback(project)) throw new IllegalStateException("AI connection is not configured");
                 log.warn("No AI connection configured for project {} — inference-orchestrator will fall back to env vars",
                         project.getId());
                 return;
             }
-            AIConnection aiConn = binding.getAiConnection();
             payload.put("ai_provider", aiConn.getProviderKey().name().toLowerCase());
             payload.put("ai_model", aiConn.getAiModel());
             payload.put("ai_api_key", tokenEncryptionService.decrypt(aiConn.getApiKeyEncrypted()));
@@ -330,6 +440,7 @@ public class QaDocGenerationService {
                 payload.put("ai_base_url", aiConn.getBaseUrl());
             }
         } catch (Exception e) {
+            if (!aiConnectionResolver.allowEnvironmentFallback(project)) throw new IllegalStateException("AI credentials are unavailable", e);
             log.warn("Failed to extract AI credentials for project {} — inference-orchestrator will fall back to env vars: {}",
                     project.getId(), e.getMessage());
         }
@@ -345,8 +456,8 @@ public class QaDocGenerationService {
      * replacing the previous "No analysis summary available." fallback.
      * <p>
      * The output is Markdown-formatted and grouped by file, with severity breakdown,
-     * issue titles, reasons, and suggested fixes. Truncated to ~10 KB to avoid
-     * exceeding LLM context limits.
+     * issue titles, reasons, and suggested fixes. Every active issue record is retained;
+     * request-aware prompt packing is handled by the inference orchestrator.
      */
     static String buildAnalysisSummary(CodeAnalysis analysis) {
         if (analysis == null) {
@@ -404,12 +515,12 @@ public class QaDocGenerationService {
 
                 // Reason / description
                 if (issue.getReason() != null && !issue.getReason().isBlank()) {
-                    sb.append("  ").append(truncate(issue.getReason(), 400)).append('\n');
+                    sb.append("  ").append(issue.getReason()).append('\n');
                 }
 
                 // Suggested fix
                 if (issue.getSuggestedFixDescription() != null && !issue.getSuggestedFixDescription().isBlank()) {
-                    sb.append("  **Suggested fix**: ").append(truncate(issue.getSuggestedFixDescription(), 300)).append('\n');
+                    sb.append("  **Suggested fix**: ").append(issue.getSuggestedFixDescription()).append('\n');
                 }
 
                 // Line location
@@ -424,18 +535,6 @@ public class QaDocGenerationService {
             sb.append('\n');
         }
 
-        // Truncate to prevent prompt bloat
-        String result = sb.toString();
-        if (result.length() > 10_000) {
-            result = result.substring(0, 10_000)
-                    + "\n\n... (truncated — " + activeIssues.size() + " total active issues across "
-                    + byFile.size() + " files)";
-        }
-        return result;
-    }
-
-    private static String truncate(String text, int maxLength) {
-        if (text == null || text.length() <= maxLength) return text;
-        return text.substring(0, maxLength) + "…";
+        return sb.toString();
     }
 }

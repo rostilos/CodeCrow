@@ -4,6 +4,26 @@ import re
 from dataclasses import dataclass
 
 
+class OptionalJavaScriptEnrichmentError(RuntimeError):
+    """An expected, recoverable limit of optional frontend enrichment."""
+
+    diagnostic_code = "magento-optional-javascript-unavailable"
+    source_specific = False
+
+
+class JavaScriptParserUnavailable(OptionalJavaScriptEnrichmentError):
+    """The optional tree-sitter JavaScript parser is not installed."""
+
+    diagnostic_code = "magento-javascript-parser-unavailable"
+
+
+class MalformedJavaScriptSource(OptionalJavaScriptEnrichmentError):
+    """A frontend source is syntactically incomplete or malformed."""
+
+    diagnostic_code = "magento-javascript-source-malformed"
+    source_specific = True
+
+
 @dataclass(frozen=True, order=True)
 class RequireJsRelation:
     kind: str
@@ -117,6 +137,31 @@ def _mask_php(content: str) -> str:
     )
 
 
+def _parse_javascript(content: str):
+    """Return a syntax-valid JavaScript tree for optional enrichment.
+
+    Import failure and source syntax failure are expected degradation modes.
+    Parser API failures and other unexpected exceptions deliberately retain
+    their original types so repository orchestration treats them as defects.
+    """
+
+    try:
+        from tree_sitter import Language, Parser
+        import tree_sitter_javascript
+    except ImportError as exception:
+        raise JavaScriptParserUnavailable(
+            "optional Magento frontend analysis requires tree-sitter-javascript"
+        ) from exception
+
+    source = content.encode("utf-8")
+    tree = Parser(Language(tree_sitter_javascript.language())).parse(source)
+    if tree.root_node.has_error:
+        raise MalformedJavaScriptSource(
+            "optional Magento frontend JavaScript contains syntax errors"
+        )
+    return source, tree
+
+
 def extract_template_global_references(
     content: str,
 ) -> tuple[TemplateGlobalReference, ...]:
@@ -126,19 +171,10 @@ def extract_template_global_references(
     property names, or unqualified identifiers as runtime relationships.
     """
 
-    try:
-        from tree_sitter import Language, Parser
-        import tree_sitter_javascript
-    except ImportError as exception:
-        raise RuntimeError(
-            "Magento template-global analysis requires tree-sitter-javascript"
-        ) from exception
-
     references: set[TemplateGlobalReference] = set()
     for script in _SCRIPT.finditer(content):
         body = _mask_php(script.group("body"))
-        source = body.encode("utf-8")
-        tree = Parser(Language(tree_sitter_javascript.language())).parse(source)
+        source, tree = _parse_javascript(body)
         line_offset = content.count("\n", 0, script.start("body"))
         pending = [tree.root_node]
         while pending:
@@ -180,19 +216,10 @@ def extract_template_event_references(
     strings remain unresolved.
     """
 
-    try:
-        from tree_sitter import Language, Parser
-        import tree_sitter_javascript
-    except ImportError as exception:
-        raise RuntimeError(
-            "Magento template-event analysis requires tree-sitter-javascript"
-        ) from exception
-
     references: set[TemplateEventReference] = set()
     for script in _SCRIPT.finditer(content):
         body = _mask_php(script.group("body"))
-        source = body.encode("utf-8")
-        tree = Parser(Language(tree_sitter_javascript.language())).parse(source)
+        source, tree = _parse_javascript(body)
         line_offset = content.count("\n", 0, script.start("body"))
         pending = [tree.root_node]
         while pending:
@@ -253,16 +280,7 @@ def extract_template_event_references(
 
 def extract_requirejs_relations(content: str) -> tuple[RequireJsRelation, ...]:
     """Parse Magento RequireJS config object relations with tree-sitter."""
-    try:
-        from tree_sitter import Language, Parser
-        import tree_sitter_javascript
-    except ImportError as exception:
-        raise RuntimeError(
-            "Magento RequireJS analysis requires tree-sitter-javascript"
-        ) from exception
-
-    source = content.encode("utf-8")
-    tree = Parser(Language(tree_sitter_javascript.language())).parse(source)
+    source, tree = _parse_javascript(content)
     relations: set[RequireJsRelation] = set()
 
     def visit_object(node, context: tuple[str, ...]) -> None:

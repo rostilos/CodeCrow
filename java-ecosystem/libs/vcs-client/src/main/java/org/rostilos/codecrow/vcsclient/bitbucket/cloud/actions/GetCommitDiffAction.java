@@ -45,6 +45,7 @@ public class GetCommitDiffAction {
         try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
             if (!resp.isSuccessful()) {
                 String body = resp.body() != null ? resp.body().string() : "";
+                org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(resp, body);
                 String msg = String.format("Bitbucket returned non-success response %d for URL %s: %s",
                         resp.code(), apiUrl, body);
                 log.warn(msg);

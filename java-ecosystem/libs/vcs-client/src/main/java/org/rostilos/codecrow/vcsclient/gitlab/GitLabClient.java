@@ -455,6 +455,18 @@ public class GitLabClient implements VcsClient {
     }
     
     @Override
+    public String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        String url = api.projectUrl(workspaceId, repoIdOrSlug) + "/repository/merge_base?refs[]="
+                + api.encode(baseCommit) + "&refs[]=" + api.encode(headCommit);
+        try (Response response = api.execute(api.get(url))) {
+            if (!response.isSuccessful() || response.body() == null) throw new IOException("Merge-base lookup failed");
+            String hash = api.objectMapper().readTree(response.body().string()).path("id").asText(null);
+            if (hash == null || hash.isBlank()) throw new IOException("Merge-base revision is unavailable");
+            return hash;
+        }
+    }
+
+    @Override
     public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
         String url = api.projectUrl(workspaceId, repoIdOrSlug)
                 + "/repository/files/" + api.encode(filePath)
@@ -677,6 +689,7 @@ public class GitLabClient implements VcsClient {
         if (baseCommit == null || baseCommit.isBlank()) {
             baseCommit = metadata.path("diff_refs").path("start_sha").asText(null);
         }
+        String targetHeadCommit = metadata.path("diff_refs").path("start_sha").asText(null);
         String headCommit = metadata.path("diff_refs").path("head_sha").asText(null);
         if (headCommit == null || headCommit.isBlank()) {
             headCommit = metadata.path("sha").asText(null);
@@ -687,11 +700,14 @@ public class GitLabClient implements VcsClient {
                 getTextOrNull(metadata, "description"),
                 getTextOrNull(metadata, "source_branch"),
                 getTextOrNull(metadata, "target_branch"),
+                targetHeadCommit,
                 baseCommit,
                 headCommit,
                 state,
                 "merged".equalsIgnoreCase(state),
-                getTextOrNull(metadata, "web_url"));
+                getTextOrNull(metadata, "web_url"),
+                metadata.path("author").path("id").asText(null),
+                metadata.path("author").path("username").asText(null));
     }
 
     @Override
@@ -824,9 +840,34 @@ public class GitLabClient implements VcsClient {
             String filePath,
             int newLine
     ) throws IOException {
+        postMergeRequestLineComment(workspaceId, repoIdOrSlug, mergeRequestIid, body, baseSha, headSha, startSha, filePath, newLine,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public void postMergeRequestLineComment(
+            String workspaceId,
+            String repoIdOrSlug,
+            long mergeRequestIid,
+            String body,
+            String baseSha,
+            String headSha,
+            String startSha,
+            String filePath,
+            int newLine,
+            org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide
+    ) throws IOException {
         mergeRequestApi.postLineComment(
                 workspaceId, repoIdOrSlug, mergeRequestIid,
-                body, baseSha, headSha, startSha, filePath, newLine);
+                body, baseSha, headSha, startSha, filePath, newLine, anchorSide);
+    }
+
+    public List<JsonNode> listMergeRequestDiscussions(String workspaceId, String repoIdOrSlug, long mergeRequestIid) throws IOException {
+        return mergeRequestApi.listDiscussions(workspaceId, repoIdOrSlug, mergeRequestIid);
+    }
+
+    public void deleteMergeRequestDiscussionNote(String workspaceId, String repoIdOrSlug, long mergeRequestIid,
+                                                String discussionId, long noteId) throws IOException {
+        mergeRequestApi.deleteDiscussionNote(workspaceId, repoIdOrSlug, mergeRequestIid, discussionId, noteId);
     }
 
     public List<Map<String, Object>> listMergeRequestNotes(
@@ -1147,65 +1188,4 @@ public class GitLabClient implements VcsClient {
         return node.has(field) && !node.get(field).isNull() ? node.get(field).asText() : null;
     }
     
-    /**
-     * Batch fetch file contents with parallel execution and exponential backoff.
-     * GitLab doesn't have a batch API, so we fetch in parallel with rate limit handling.
-     */
-    @Override
-    public java.util.Map<String, String> getFileContents(
-            String workspaceId, 
-            String repoIdOrSlug, 
-            java.util.List<String> filePaths, 
-            String branchOrCommit,
-            int maxFileSizeBytes
-    ) throws IOException {
-        java.util.Map<String, String> results = new java.util.concurrent.ConcurrentHashMap<>();
-        
-        // Use parallel stream with controlled concurrency
-        int parallelism = Math.min(10, filePaths.size()); // Max 10 concurrent requests
-        java.util.concurrent.ForkJoinPool customPool = new java.util.concurrent.ForkJoinPool(parallelism);
-        
-        try {
-            customPool.submit(() -> 
-                filePaths.parallelStream().forEach(path -> {
-                    int maxRetries = 3;
-                    int retryCount = 0;
-                    long backoffMs = 1000; // Start with 1 second
-                    
-                    while (retryCount < maxRetries) {
-                        try {
-                            String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
-                            if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
-                                results.put(path, content);
-                            }
-                            break; // Success, exit retry loop
-                        } catch (IOException e) {
-                            retryCount++;
-                            if (e.getMessage() != null && (e.getMessage().contains("429") || e.getMessage().contains("rate limit"))) {
-                                // Rate limited - exponential backoff
-                                try {
-                                    Thread.sleep(backoffMs);
-                                    backoffMs *= 2; // Double the backoff
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    break;
-                                }
-                            } else if (retryCount >= maxRetries) {
-                                // Log and skip this file
-                                log.warn("Failed to fetch file {} after {} retries: {}", path, maxRetries, e.getMessage());
-                            }
-                        }
-                    }
-                })
-            ).get();
-        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
-            log.error("Error in parallel file fetch: {}", e.getMessage());
-            throw new IOException("Batch file fetch failed", e);
-        } finally {
-            customPool.shutdown();
-        }
-        
-        log.info("Batch fetched {}/{} files from GitLab", results.size(), filePaths.size());
-        return results;
-    }
 }

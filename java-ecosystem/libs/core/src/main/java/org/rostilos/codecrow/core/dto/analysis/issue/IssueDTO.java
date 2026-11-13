@@ -51,7 +51,8 @@ public record IssueDTO (
     String introducingCommitHash,
     String introducingAuthorName,
     String introducingAuthorEmail,
-    String authorProvenanceConfidence
+    String authorProvenanceConfidence,
+    String anchorSide
 ) {
 
     /** Backward-compatible constructor for callers predating SCM provenance. */
@@ -76,7 +77,7 @@ public record IssueDTO (
                 resolvedDescription, resolvedByPr, resolvedCommitHash,
                 resolvedAnalysisId, resolvedAt, resolvedBy, vcsAuthorId,
                 vcsAuthorUsername, detectionSource, issueScope,
-                endLineNumber, originIssueId, null, null, null, null);
+                endLineNumber, originIssueId, null, null, null, null, "HEAD");
     }
 
     /**
@@ -142,7 +143,8 @@ public record IssueDTO (
                 bi.getIntroducingCommitHash(),
                 bi.getIntroducingAuthorName(),
                 bi.getIntroducingAuthorEmail(),
-                bi.getAuthorProvenanceConfidence()
+                bi.getAuthorProvenanceConfidence(),
+                bi.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD"
         );
     }
 
@@ -200,7 +202,8 @@ public record IssueDTO (
                 issue.getIntroducingCommitHash(),
                 issue.getIntroducingAuthorName(),
                 issue.getIntroducingAuthorEmail(),
-                issue.getAuthorProvenanceConfidence()
+                issue.getAuthorProvenanceConfidence(),
+                issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "BASE" : "HEAD"
         );
     }
 }

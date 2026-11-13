@@ -238,6 +238,22 @@ public final class GitLabMergeRequestApi {
             String filePath,
             int newLine
     ) throws IOException {
+        postLineComment(namespace, project, mergeRequestIid, body, baseSha, headSha, startSha, filePath, newLine,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public void postLineComment(
+            String namespace,
+            String project,
+            long mergeRequestIid,
+            String body,
+            String baseSha,
+            String headSha,
+            String startSha,
+            String filePath,
+            int newLine,
+            org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide
+    ) throws IOException {
         Map<String, Object> position = new LinkedHashMap<>();
         position.put("base_sha", baseSha);
         position.put("head_sha", headSha);
@@ -245,7 +261,7 @@ public final class GitLabMergeRequestApi {
         position.put("position_type", "text");
         position.put("old_path", filePath);
         position.put("new_path", filePath);
-        position.put("new_line", newLine);
+        position.put(anchorSide == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "old_line" : "new_line", newLine);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("body", body);
@@ -260,22 +276,43 @@ public final class GitLabMergeRequestApi {
                         api.objectMapper().writeValueAsString(payload)));
     }
 
+    public List<JsonNode> listDiscussions(String namespace, String project, long mergeRequestIid) throws IOException {
+        List<JsonNode> discussions = new java.util.ArrayList<>();
+        for (int page = 1; ; page++) {
+            JsonNode entries = api.executeJson("list merge request discussions", api.get(
+                    mergeRequestUrl(namespace, project, mergeRequestIid) + "/discussions?per_page=100&page=" + page));
+            if (!entries.isArray()) throw new IOException("Invalid GitLab discussion list");
+            entries.forEach(discussions::add);
+            if (entries.size() < 100) return List.copyOf(discussions);
+        }
+    }
+
+    public void deleteDiscussionNote(String namespace, String project, long mergeRequestIid,
+                                     String discussionId, long noteId) throws IOException {
+        try (Response response = api.execute(api.delete(
+                discussionUrl(namespace, project, mergeRequestIid, discussionId) + "/notes/" + noteId))) {
+            if (!response.isSuccessful() && response.code() != 404)
+                throw new IOException("Could not remove GitLab discussion note: HTTP " + response.code());
+        }
+    }
+
     public List<Map<String, Object>> listNotes(
             String namespace,
             String project,
             long mergeRequestIid
     ) throws IOException {
-        String url = notesUrl(namespace, project, mergeRequestIid)
-                + "?per_page=100";
-        try (Response response = api.execute(api.get(url))) {
-            if (!response.isSuccessful()) {
-                log.warn("Failed to list GitLab MR notes: HTTP {} - {}",
-                        response.code(), api.bodyOr(response, ""));
-                return List.of();
+        List<Map<String, Object>> notes = new java.util.ArrayList<>();
+        for (int page = 1; ; page++) {
+            String url = notesUrl(namespace, project, mergeRequestIid) + "?per_page=100&page=" + page;
+            try (Response response = api.execute(api.get(url))) {
+                if (!response.isSuccessful()) {
+                    throw new IOException("Failed to list GitLab notes: HTTP " + response.code());
+                }
+                List<Map<String, Object>> entries = api.objectMapper().readValue(
+                        api.bodyOr(response, "[]"), new TypeReference<>() {});
+                notes.addAll(entries);
+                if (entries.size() < 100) return List.copyOf(notes);
             }
-            return api.objectMapper().readValue(
-                    api.bodyOr(response, "[]"),
-                    new TypeReference<List<Map<String, Object>>>() {});
         }
     }
 

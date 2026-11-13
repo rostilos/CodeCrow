@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reproducibility-package.schema.json",
+  "title": "CodeCrow Magento 2 reproducibility package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "artifactRootLabel",
+    "studyId",
+    "registrationDigest",
+    "sealLedgerDigest",
+    "judgeEvaluationDigest",
+    "corpusDigest",
+    "metricsDigest",
+    "semanticVerification",
+    "artifactSets",
+    "files",
+    "rerunInstructions",
+    "limitations",
+    "nonCircularity",
+    "packageDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-reproducibility-package"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "artifactRootLabel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "studyId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "registrationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "sealLedgerDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "judgeEvaluationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "metricsDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "semanticVerification": {
+      "$ref": "#/$defs/semanticVerification"
+    },
+    "artifactSets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpus",
+        "registration",
+        "seal",
+        "judge_evaluation",
+        "metrics",
+        "dashboard",
+        "analysis",
+        "judgment",
+        "runtime",
+        "config",
+        "source",
+        "curation",
+        "replay",
+        "current_comment",
+        "post_fix",
+        "execution",
+        "repository"
+      ],
+      "properties": {
+        "corpus": {
+          "$ref": "#/$defs/pathList"
+        },
+        "registration": {
+          "$ref": "#/$defs/pathList"
+        },
+        "seal": {
+          "$ref": "#/$defs/pathList"
+        },
+        "judge_evaluation": {
+          "$ref": "#/$defs/pathList"
+        },
+        "metrics": {
+          "$ref": "#/$defs/pathList"
+        },
+        "dashboard": {
+          "$ref": "#/$defs/pathList"
+        },
+        "analysis": {
+          "$ref": "#/$defs/pathList"
+        },
+        "judgment": {
+          "$ref": "#/$defs/pathList"
+        },
+        "runtime": {
+          "$ref": "#/$defs/pathList"
+        },
+        "config": {
+          "$ref": "#/$defs/pathList"
+        },
+        "source": {
+          "$ref": "#/$defs/pathList"
+        },
+        "curation": {
+          "$ref": "#/$defs/pathList"
+        },
+        "replay": {
+          "$ref": "#/$defs/pathList"
+        },
+        "current_comment": {
+          "$ref": "#/$defs/pathList"
+        },
+        "post_fix": {
+          "$ref": "#/$defs/pathList"
+        },
+        "execution": {
+          "$ref": "#/$defs/pathList"
+        },
+        "repository": {
+          "$ref": "#/$defs/pathList"
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 17,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "category",
+          "sha256",
+          "sizeBytes"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "rerunInstructions": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nonCircularity": {
+      "const": "This package binds the finalized metrics artifact. The metrics artifact does not bind this later package manifest."
+    },
+    "packageDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "pathList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "semanticVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceCuration",
+        "executionCorpus",
+        "repositoryEvidence",
+        "operatorPreflight",
+        "primaryReplay",
+        "postFix",
+        "metricsDerivation"
+      ],
+      "properties": {
+        "sourceCuration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "corpusDigest",
+            "selectionDigest",
+            "discoveryDigest",
+            "discoverySelectionLinkageDigest",
+            "sourceArchiveDigest",
+            "threadEvidenceDigest",
+            "curationPacketDigest",
+            "currentCommentAttestationDigest"
+          ],
+          "properties": {
+            "corpusDigest": {"$ref": "#/$defs/sha256"},
+            "selectionDigest": {"$ref": "#/$defs/sha256"},
+            "discoveryDigest": {"$ref": "#/$defs/sha256"},
+            "discoverySelectionLinkageDigest": {
+              "$ref": "#/$defs/sha256"
+            },
+            "sourceArchiveDigest": {"$ref": "#/$defs/sha256"},
+            "threadEvidenceDigest": {"$ref": "#/$defs/sha256"},
+            "curationPacketDigest": {"$ref": "#/$defs/sha256"},
+            "currentCommentAttestationDigest": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "executionCorpus": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "corpusId",
+            "corpusDigest",
+            "executionCorpusDigest",
+            "cases",
+            "partitionCounts",
+            "sizeBands"
+          ],
+          "properties": {
+            "corpusId": {"type": "string", "minLength": 1},
+            "corpusDigest": {"$ref": "#/$defs/sha256"},
+            "executionCorpusDigest": {"$ref": "#/$defs/sha256"},
+            "cases": {"const": 50},
+            "partitionCounts": {"type": "object"},
+            "sizeBands": {"type": "object"}
+          }
+        },
+        "repositoryEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidenceDigest",
+            "repository",
+            "objectFormat",
+            "repositoryPath",
+            "cases",
+            "requiredCommits",
+            "objectCount",
+            "objectIdentityDigest",
+            "repositoryContentDigest"
+          ],
+          "properties": {
+            "evidenceDigest": {"$ref": "#/$defs/sha256"},
+            "repository": {"const": "magento/magento2"},
+            "objectFormat": {"const": "sha1"},
+            "repositoryPath": {"const": "repository.git"},
+            "cases": {"const": 50},
+            "requiredCommits": {"type": "integer", "minimum": 1},
+            "objectCount": {"type": "integer", "minimum": 1},
+            "objectIdentityDigest": {"$ref": "#/$defs/sha256"},
+            "repositoryContentDigest": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "operatorPreflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "readinessDigest",
+            "executionCorpusDigest",
+            "runReady"
+          ],
+          "properties": {
+            "readinessDigest": {"$ref": "#/$defs/sha256"},
+            "executionCorpusDigest": {"$ref": "#/$defs/sha256"},
+            "runReady": {"const": true}
+          }
+        },
+        "primaryReplay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lockDigest", "attestationDigest", "analysisRuns"],
+          "properties": {
+            "lockDigest": {"$ref": "#/$defs/sha256"},
+            "attestationDigest": {"$ref": "#/$defs/sha256"},
+            "analysisRuns": {"type": "integer", "minimum": 1}
+          }
+        },
+        "postFix": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "planDigest",
+            "lockDigest",
+            "attestationDigest",
+            "analysisRuns",
+            "judgments",
+            "controlSetDigest",
+            "controls"
+          ],
+          "properties": {
+            "planDigest": {"$ref": "#/$defs/sha256"},
+            "lockDigest": {"$ref": "#/$defs/sha256"},
+            "attestationDigest": {"$ref": "#/$defs/sha256"},
+            "analysisRuns": {"type": "integer", "minimum": 1},
+            "judgments": {"type": "integer", "minimum": 1},
+            "controlSetDigest": {"$ref": "#/$defs/sha256"},
+            "controls": {"type": "integer", "minimum": 1}
+          }
+        },
+        "metricsDerivation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metricsDigest",
+            "configurations",
+            "scoredCases",
+            "pairwiseComparisons",
+            "bootstrapIterations",
+            "bootstrapSeed",
+            "artifactIntegrityReady",
+            "paperReady",
+            "paperGateFailures"
+          ],
+          "properties": {
+            "metricsDigest": {"$ref": "#/$defs/sha256"},
+            "configurations": {"type": "integer", "minimum": 1},
+            "scoredCases": {"type": "integer", "minimum": 1},
+            "pairwiseComparisons": {"type": "integer", "minimum": 0},
+            "bootstrapIterations": {"type": "integer", "minimum": 10000},
+            "bootstrapSeed": {"type": "integer"},
+            "artifactIntegrityReady": {"const": true},
+            "paperReady": {"type": "boolean"},
+            "paperGateFailures": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

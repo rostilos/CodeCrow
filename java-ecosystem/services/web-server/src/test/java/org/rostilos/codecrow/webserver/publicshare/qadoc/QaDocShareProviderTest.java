@@ -20,8 +20,9 @@ import static org.mockito.Mockito.when;
 
 class QaDocShareProviderTest {
 
-    @Test
-    void returnsTheExplicitlyShareableDocumentTabs() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void returnsTheExplicitlyShareableDocumentTabs(boolean recoverableFormatting) {
         QaDocDocumentService documents = mock(QaDocDocumentService.class);
         CodeAnalysisService analyses = mock(CodeAnalysisService.class);
         WorkspaceSecurity workspaceSecurity = mock(WorkspaceSecurity.class);
@@ -52,6 +53,13 @@ class QaDocShareProviderTest {
                 - Enable saved cards in the QA environment.
                 <!-- codecrow-environment:end -->
                 """);
+        if (recoverableFormatting) {
+            document.setMarkdownContent(document.getMarkdownContent()
+                    .replace("<!-- codecrow-test-cases:content -->", "")
+                    .replace("<!-- codecrow-environment:content -->", "")
+                    .replace("**Save the form** (HIGH)", "1. **Save the form (HIGH)**")
+                    .replace("<!-- codecrow-", "<!--CODECROW-"));
+        }
         CodeAnalysis analysis = mock(CodeAnalysis.class);
         when(analysis.getProject()).thenReturn(project);
         when(analysis.getTaskId()).thenReturn("SHOP-42");
@@ -71,7 +79,10 @@ class QaDocShareProviderTest {
                 .contains("What Changed", "Customers can reuse a saved card")
                 .doesNotContain("Save the form", "Setup and Environment Notes");
         assertThat(preview.testCases()).singleElement()
-                .satisfies(testCase -> assertThat(testCase.title()).isEqualTo("Save the form"));
+                .satisfies(testCase -> {
+                    assertThat(testCase.title()).isEqualTo(recoverableFormatting ? "Test scenarios" : "Save the form");
+                    assertThat(testCase.descriptionMarkdown()).contains("The confirmation appears");
+                });
         assertThat(preview.environmentMarkdown())
                 .isEqualTo("- Enable saved cards in the QA environment.");
         assertThat(Arrays.stream(QaDocPublicPreview.class.getRecordComponents())

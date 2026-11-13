@@ -30,7 +30,7 @@ final class BitbucketInlineCommentFormatter {
                 continue;
             }
 
-            comments.add(new InlineComment(path, line, formatBody(issue, marker)));
+            comments.add(new InlineComment(path, line, formatBody(issue, marker), issue.getAnchorSide()));
         }
         return List.copyOf(comments);
     }
@@ -130,6 +130,6 @@ final class BitbucketInlineCommentFormatter {
         return result.toString();
     }
 
-    record InlineComment(String path, int line, String body) {
+    record InlineComment(String path, int line, String body, org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide) {
     }
 }

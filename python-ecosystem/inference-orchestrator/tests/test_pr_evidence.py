@@ -1,6 +1,8 @@
 from model.multi_stage import CrossFileIssue
 from service.review.pr_evidence import (
-    STAGE_2_PR_EVIDENCE_CHAR_BUDGET,
+    PERSISTED_TASK_EVIDENCE_CHAR_BUDGET,
+    PERSISTED_TASK_EVIDENCE_MAX_ITEMS,
+    _extract_task_terms,
     build_pr_evidence_ledger,
     gate_task_coverage_candidates,
 )
@@ -73,7 +75,9 @@ def test_incremental_ledger_keeps_delta_review_separate_from_full_pr_state():
     assert "app/Tracking/NewRelicCouponTracker.php" not in ledger.incremental_delta_context
     assert "app/UPS/GenerateLabel.php" in ledger.incremental_delta_context
     assert "app/Tracking/NewRelicCouponTracker.php" in ledger.task_relevant_paths
-    assert ledger.prompt_chars <= STAGE_2_PR_EVIDENCE_CHAR_BUDGET
+    assert ledger.prompt_chars == (
+        len(ledger.full_pr_context) + len(ledger.incremental_delta_context)
+    )
 
     persisted = ledger.task_implementation_evidence_payload("SHOP-42")
     assert persisted is not None
@@ -240,7 +244,7 @@ def test_task_metadata_does_not_rank_unrelated_code_as_implementation_evidence()
     assert ledger.task_implementation_evidence_payload("SHOP-42") is None
 
 
-def test_full_review_requires_complete_changed_line_evidence_for_gap():
+def test_full_review_preserves_large_changed_line_evidence_for_gap():
     sections = []
     for index in range(120):
         sections.append(
@@ -272,14 +276,15 @@ def test_full_review_requires_complete_changed_line_evidence_for_gap():
         ledger=ledger,
     )
 
-    assert ledger.prompt_chars <= STAGE_2_PR_EVIDENCE_CHAR_BUDGET
     assert ledger.manifest_complete
-    assert not ledger.full_evidence_complete
-    assert result.kept == ()
-    assert result.rejected[0][1] == "full_pr_changed_line_evidence_bounded"
+    assert ledger.full_evidence_complete
+    assert len(ledger.evidence_by_ref) == 120
+    assert "new_coupon_tracking_119_" in ledger.full_pr_context
+    assert result.kept == (issue,)
+    assert result.rejected == ()
 
 
-def test_full_review_marks_a_truncated_hunk_excerpt_as_bounded():
+def test_full_review_preserves_a_large_hunk_excerpt():
     changed_lines = "\n".join(
         f"+coupon_tracking_step_{index}('{('x' * 80)}');"
         for index in range(30)
@@ -300,8 +305,9 @@ def test_full_review_marks_a_truncated_hunk_excerpt_as_bounded():
     )
 
     assert ledger.manifest_complete
-    assert not ledger.full_evidence_complete
-    assert "Changed-line evidence status: BOUNDED" in ledger.full_pr_context
+    assert ledger.full_evidence_complete
+    assert "coupon_tracking_step_29" in ledger.full_pr_context
+    assert "Changed-line evidence status: COMPLETE" in ledger.full_pr_context
 
 
 def test_full_review_allows_evidence_backed_gap_when_full_diff_fits():
@@ -385,3 +391,34 @@ def test_missing_incremental_full_pr_scope_cannot_prove_task_coverage_gap():
     assert not ledger.manifest_complete
     assert result.kept == ()
     assert result.rejected[0][1] == "full_pr_manifest_incomplete"
+
+
+def test_persisted_task_evidence_and_task_terms_are_bounded():
+    full_pr = DiffProcessor().process("".join(
+        _section(
+            f"src/Coupon{index}.php",
+            "old();",
+            "coupon_tracking_" + ("x" * 600),
+        )
+        for index in range(20)
+    ))
+    ledger = build_pr_evidence_ledger(
+        full_pr,
+        full_pr,
+        incremental=False,
+        task_context={"task_summary": "coupon tracking"},
+    )
+
+    payload = ledger.task_implementation_evidence_payload("SHOP-42")
+
+    assert payload is not None
+    assert 1 <= len(payload["items"]) <= PERSISTED_TASK_EVIDENCE_MAX_ITEMS
+    assert sum(len(item["excerpt"]) for item in payload["items"]) <= (
+        PERSISTED_TASK_EVIDENCE_CHAR_BUDGET
+    )
+    terms = _extract_task_terms(
+        {"description": " ".join(f"semanticword{index}" for index in range(200))},
+        "",
+        "",
+    )
+    assert len(terms) == 80

@@ -9,20 +9,15 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
 import org.springframework.stereotype.Service;
 
-/** Enforces PR-wide hard limits before any enrichment or AI request is made. */
+/** Enforces explicitly configured spending limits; batching handles large diffs by default. */
 @Service
 public class AnalysisLimitEnforcer {
-    public static final int DEFAULT_MAX_FILES = 150;
-    public static final long DEFAULT_MAX_FILE_SIZE_BYTES = 5L * 1024 * 1024;
-    public static final long DEFAULT_MAX_TOTAL_DIFF_SIZE_BYTES = 20L * 1024 * 1024;
-    public static final int DEFAULT_MAX_TOTAL_TOKENS = 1_000_000;
-
     public AnalysisLimitsConfig effectiveLimits(Project project) {
         AnalysisLimitsConfig deployment = new AnalysisLimitsConfig(
-                envInt("ANALYSIS_MAX_FILES", DEFAULT_MAX_FILES),
-                envLong("ANALYSIS_MAX_FILE_SIZE_BYTES", DEFAULT_MAX_FILE_SIZE_BYTES),
-                envLong("ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES", DEFAULT_MAX_TOTAL_DIFF_SIZE_BYTES),
-                envInt("ANALYSIS_MAX_TOTAL_TOKENS", DEFAULT_MAX_TOTAL_TOKENS));
+                envInt("ANALYSIS_MAX_FILES"),
+                envLong("ANALYSIS_MAX_FILE_SIZE_BYTES"),
+                envLong("ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES"),
+                envInt("ANALYSIS_MAX_TOTAL_TOKENS"));
         AnalysisLimitsConfig workspace = project.getWorkspace() != null
                 ? project.getWorkspace().getAnalysisLimits() : null;
         AnalysisLimitsConfig projectLimits = project.getConfiguration() != null
@@ -37,19 +32,19 @@ public class AnalysisLimitEnforcer {
         }
         AnalysisLimitsConfig limits = effectiveLimits(project);
         List<DiffParsingUtils.FileChange> sections = DiffParsingUtils.parseFileChanges(scopedDiff);
-        if (sections.size() > limits.maxFiles()) {
+        if (limits.maxFiles() != null && sections.size() > limits.maxFiles()) {
             throw exceeded(LimitType.FILES, sections.size(), limits.maxFiles(), project, pullRequestId, null);
         }
 
         long totalBytes = scopedDiff.getBytes(StandardCharsets.UTF_8).length;
-        if (totalBytes > limits.maxTotalDiffSizeBytes()) {
+        if (limits.maxTotalDiffSizeBytes() != null && totalBytes > limits.maxTotalDiffSizeBytes()) {
             throw exceeded(LimitType.TOTAL_DIFF_SIZE, totalBytes, limits.maxTotalDiffSizeBytes(),
                     project, pullRequestId, null);
         }
 
         for (DiffParsingUtils.FileChange section : sections) {
             long bytes = section.diff().getBytes(StandardCharsets.UTF_8).length;
-            if (bytes > limits.maxFileSizeBytes()) {
+            if (limits.maxFileSizeBytes() != null && bytes > limits.maxFileSizeBytes()) {
                 throw exceeded(LimitType.FILE_SIZE, bytes, limits.maxFileSizeBytes(),
                         project, pullRequestId,
                         section.newPath() != null ? section.newPath() : section.oldPath());
@@ -57,7 +52,7 @@ public class AnalysisLimitEnforcer {
         }
 
         int estimatedTokens = TokenEstimator.estimateTokens(scopedDiff);
-        if (estimatedTokens > limits.maxTotalTokens()) {
+        if (limits.maxTotalTokens() != null && estimatedTokens > limits.maxTotalTokens()) {
             throw exceeded(LimitType.TOKENS, estimatedTokens, limits.maxTotalTokens(),
                     project, pullRequestId, null);
         }
@@ -77,20 +72,20 @@ public class AnalysisLimitEnforcer {
                 child.maxTotalTokens() != null ? child.maxTotalTokens() : parent.maxTotalTokens());
     }
 
-    private static int envInt(String name, int fallback) {
+    private static Integer envInt(String name) {
         try {
-            int value = Integer.parseInt(System.getenv().getOrDefault(name, String.valueOf(fallback)));
-            return value > 0 ? value : fallback;
+            int value = Integer.parseInt(System.getenv(name));
+            return value > 0 ? value : null;
         }
-        catch (NumberFormatException e) { return fallback; }
+        catch (NumberFormatException e) { return null; }
     }
 
-    private static long envLong(String name, long fallback) {
+    private static Long envLong(String name) {
         try {
-            long value = Long.parseLong(System.getenv().getOrDefault(name, String.valueOf(fallback)));
-            return value > 0 ? value : fallback;
+            long value = Long.parseLong(System.getenv(name));
+            return value > 0 ? value : null;
         }
-        catch (NumberFormatException e) { return fallback; }
+        catch (NumberFormatException e) { return null; }
     }
 
 }

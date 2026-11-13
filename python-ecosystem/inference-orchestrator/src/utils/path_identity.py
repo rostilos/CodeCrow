@@ -1,5 +1,6 @@
 """Neutral repository-path identity helpers used by inference host services."""
 
+import re
 from typing import Any
 
 
@@ -9,6 +10,20 @@ def normalize_repository_path(path: Any) -> str:
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized.lstrip("/")
+
+
+def repository_source_location(value: Any) -> tuple[str, int, int]:
+    """Split a repository path, :line, or :start-end without changing display text."""
+    normalized = normalize_repository_path(value)
+    path, separator, suffix = normalized.rpartition(":")
+    match = re.fullmatch(r"(\d+)(?:-(\d+))?", suffix) if separator else None
+    if match:
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if end >= start and (start > 0 or match.group(2) is None):
+            return path, start, end
+    # Unrecognized auxiliary metadata cannot invent an observed source anchor.
+    return normalized, 0, 0
 
 
 def repository_paths_match(left: Any, right: Any) -> bool:

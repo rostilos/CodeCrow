@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "post-fix-replay-attestation.schema.json",
+  "title": "CodeCrow Magento 2 verified-F live replay attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "collectedAt",
+    "corpusId",
+    "corpusDigest",
+    "executionCorpusDigest",
+    "primaryReplayLockDigest",
+    "postFixReplayLockDigest",
+    "planDigest",
+    "forkRepository",
+    "repositoryObservation",
+    "cases",
+    "attestationDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-post-fix-replay-attestation"
+    },
+    "collectedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "planDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "forkRepository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "repositoryObservation": {
+      "type": "object"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "baseRef",
+          "finalRef",
+          "pullRequest"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseRef": {
+            "type": "object"
+          },
+          "finalRef": {
+            "type": "object"
+          },
+          "pullRequest": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "attestationDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -85,7 +85,6 @@ class RagBranchIndexRegistryServiceTest {
                 .startsWith("cc_w0_p42_b")
                 .doesNotContain("client", "private", "develop");
         assertThat(registration.operation().getOperationKey()).hasSize(64);
-        assertThat(registration.sourceCollectionTarget()).isNull();
     }
 
     @Test
@@ -106,8 +105,6 @@ class RagBranchIndexRegistryServiceTest {
         var registration = service.registerBuild(
                 project, "develop", RagBranchIndexKind.DURABLE,
                 "develop-400", "develop-401", "representation");
-        assertThat(registration.sourceCollectionTarget())
-                .isEqualTo("generation-400");
         when(operationRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(registration.operation()));
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
@@ -118,7 +115,7 @@ class RagBranchIndexRegistryServiceTest {
         assertThat(previous.getStatus()).isEqualTo(RagBranchIndexGenerationStatus.SUPERSEDED);
         assertThat(published.getStatus()).isEqualTo(RagBranchIndexGenerationStatus.ACTIVE);
         assertThat(branchIndex.getActiveGeneration()).isSameAs(published);
-        assertThat(branchIndex.getCommitHash()).isEqualTo("develop-401");
+        assertThat(branchIndex.getActiveGeneration().getRevision()).isEqualTo("develop-401");
         assertThat(registration.operation().getStatus()).isEqualTo(RagIndexOperationStatus.SUCCEEDED);
         assertThat(registration.operation().getAttemptCount()).isEqualTo(1);
         assertThat(registration.operation().getJobId()).isEqualTo(99L);
@@ -159,7 +156,7 @@ class RagBranchIndexRegistryServiceTest {
                 .isEqualTo(RagBranchIndexGenerationStatus.SUPERSEDED);
         assertThat(published.getManifestDigest()).isEqualTo("manifest-401");
         assertThat(branchIndex.getActiveGeneration()).isSameAs(active);
-        assertThat(branchIndex.getCommitHash()).isEqualTo("develop-400");
+        assertThat(branchIndex.getActiveGeneration().getRevision()).isEqualTo("develop-400");
         assertThat(branchIndex.getDesiredCommitHash()).isEqualTo("develop-402");
         assertThat(operation.getStatus()).isEqualTo(RagIndexOperationStatus.SUCCEEDED);
         verify(branchIndexRepository, never()).save(branchIndex);
@@ -187,10 +184,10 @@ class RagBranchIndexRegistryServiceTest {
         when(branchIndexRepository.findByIdForPublication(10L))
                 .thenReturn(Optional.of(branchIndex));
 
-        service.fail(30L, "vector publication failed");
+        service.fail(30L, "repository publication failed");
 
         assertThat(branchIndex.getActiveGeneration()).isSameAs(active);
-        assertThat(branchIndex.getCommitHash()).isEqualTo("master-100");
+        assertThat(branchIndex.getActiveGeneration().getRevision()).isEqualTo("master-100");
         assertThat(branchIndex.getDesiredCommitHash()).isEqualTo("master-101");
         assertThat(branchIndex.getLifecycleStatus()).isEqualTo(RagBranchIndexLifecycleStatus.READY);
         assertThat(registration.generation().getStatus()).isEqualTo(RagBranchIndexGenerationStatus.FAILED);

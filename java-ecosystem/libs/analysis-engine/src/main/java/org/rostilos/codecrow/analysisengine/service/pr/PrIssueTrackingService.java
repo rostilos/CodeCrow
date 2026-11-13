@@ -9,6 +9,7 @@ import org.rostilos.codecrow.core.util.anchoring.SnippetLocator;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.util.tracking.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,13 +42,16 @@ public class PrIssueTrackingService {
     private final CodeAnalysisIssueRepository issueRepository;
     private final IssueReconciliationEngine reconciliationEngine;
     private final AstScopeEnricher astScopeEnricher;
+    private final CodeAnalysisService codeAnalysisService;
 
     public PrIssueTrackingService(CodeAnalysisIssueRepository issueRepository,
                                   IssueReconciliationEngine reconciliationEngine,
-                                  AstScopeEnricher astScopeEnricher) {
+                                  AstScopeEnricher astScopeEnricher,
+                                  CodeAnalysisService codeAnalysisService) {
         this.issueRepository = issueRepository;
         this.reconciliationEngine = reconciliationEngine;
         this.astScopeEnricher = astScopeEnricher;
+        this.codeAnalysisService = codeAnalysisService;
     }
 
     /**
@@ -79,8 +83,20 @@ public class PrIssueTrackingService {
             return new TrackingSummary(0, 0, newAnalysis.getIssues().size(), 0);
         }
 
-        List<CodeAnalysisIssue> newIssues = newAnalysis.getIssues();
-        List<CodeAnalysisIssue> prevIssues = previousAnalysis.getIssues();
+        if (newAnalysis.getProject() != null && newAnalysis.getPrNumber() != null) {
+            var decisions = PrIssueHistory.decisions(issueRepository.findByProjectIdAndPrNumber(
+                    newAnalysis.getProject().getId(), newAnalysis.getPrNumber()));
+            for (var issue : newAnalysis.getIssues()) {
+                PrIssueHistory.apply(issue, PrIssueHistory.decisionFor(issue, decisions));
+            }
+        }
+
+        // BASE findings describe removal impact. HEAD content hashes cannot prove
+        // their survival/resolution or relocate their immutable source anchor.
+        List<CodeAnalysisIssue> newIssues = newAnalysis.getIssues().stream()
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE).toList();
+        List<CodeAnalysisIssue> prevIssues = previousAnalysis.getIssues().stream()
+                .filter(i -> i.getAnchorSide() != org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE).toList();
 
         if (newIssues.isEmpty() && prevIssues.isEmpty()) {
             return new TrackingSummary(0, 0, 0, 0);
@@ -174,7 +190,7 @@ public class PrIssueTrackingService {
                             unanchoredResolved++;
                             log.info("Unanchored issue {} resolved by AI (new issue {}, file={})",
                                     prevIssue.getId(), matchedNew.getId(), filePath);
-                        } else if (prevIssue.isResolved()) {
+                        } else if (prevIssue.isResolved() && !Boolean.FALSE.equals(matchedNew.getManualStatusResolved())) {
                             // Previous was resolved (user dismissed) → carry forward
                             matchedNew.setResolved(true);
                             matchedNew.setResolvedDescription(prevIssue.getResolvedDescription());
@@ -245,7 +261,7 @@ public class PrIssueTrackingService {
                 // 1. Previous issue was resolved (user dismissed, or previous reconciliation)
                 // 2. New issue was marked resolved by the AI in Stage 1 review
                 //    (createIssueFromData sets isResolved=true when AI says isResolved: true)
-                if (prevIssue.isResolved()) {
+                if (prevIssue.isResolved() && !Boolean.FALSE.equals(newIssue.getManualStatusResolved())) {
                     // Carry forward previous resolution
                     newIssue.setResolved(true);
                     newIssue.setResolvedDescription(prevIssue.getResolvedDescription());
@@ -320,6 +336,8 @@ public class PrIssueTrackingService {
         ResolutionCheckResult resolutionCheck = resolveUnmatchedPreviousIssues(
                 unmatchedPreviousIssues, newAnalysis, newFileContents);
         resolved += resolutionCheck.resolvedCount();
+        codeAnalysisService.saveAnalysis(newAnalysis);
+        codeAnalysisService.saveAnalysis(previousAnalysis);
         int sweepRevived = resolutionCheck.keptUnresolvedCount();
 
         log.info("PR tracking for analysis {}: {} matched, {} new, {} resolved " +

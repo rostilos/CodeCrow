@@ -3,19 +3,20 @@
 # =============================================================================
 # CodeCrow Full Backup Script
 # =============================================================================
-# Creates a complete backup of all CodeCrow data stores:
+# Creates a complete backup of CodeCrow's durable application state:
 #   - PostgreSQL database (pg_dump)
-#   - Qdrant vector snapshots (HTTP API)
 #   - Redis data (RDB snapshot)
 #   - Config files (tar archive)
+# Structural repository indexes are derived from repository source and are
+# not part of this durable application backup. Run normal branch indexing to
+# rebuild them after a restore.
 #
 # Usage:
 #   ./backup-all.sh                      # backup to default directory
 #   ./backup-all.sh /path/to/backup/dir  # backup to custom directory
 #   ./backup-all.sh --pg-only            # PostgreSQL only
-#   ./backup-all.sh --skip-qdrant        # skip Qdrant (faster)
 #
-# Requirements: docker, curl, tar
+# Requirements: docker, tar
 # =============================================================================
 
 set -euo pipefail
@@ -32,7 +33,6 @@ source "$SCRIPT_DIR/backup-lib.sh"
 # Defaults
 BACKUP_DIR="$DEFAULT_BACKUP_DIR"
 DO_PG=true
-DO_QDRANT=true
 DO_REDIS=true
 DO_CONFIG=true
 
@@ -41,9 +41,7 @@ DO_CONFIG=true
 for arg in "$@"; do
   case "$arg" in
     --pg-only)
-      DO_QDRANT=false; DO_REDIS=false; DO_CONFIG=false ;;
-    --skip-qdrant)
-      DO_QDRANT=false ;;
+      DO_REDIS=false; DO_CONFIG=false ;;
     --skip-redis)
       DO_REDIS=false ;;
     --skip-config)
@@ -52,7 +50,6 @@ for arg in "$@"; do
       echo "Usage: ./backup-all.sh [backup-dir] [flags]"
       echo "  backup-dir        Output directory (default: tools/environment/backups)"
       echo "  --pg-only         Backup PostgreSQL only"
-      echo "  --skip-qdrant     Skip Qdrant vector backup"
       echo "  --skip-redis      Skip Redis backup"
       echo "  --skip-config     Skip config files backup"
       echo "  --help            Show this help"
@@ -94,44 +91,10 @@ if $DO_PG; then
   fi
 fi
 
-# ── 2. Qdrant Vector Backup ──────────────────────────────────────────────
-
-if $DO_QDRANT; then
-  header "2. Qdrant Vectors"
-  if check_container "$QDRANT_CONTAINER"; then
-    read_qdrant_api_key "$DEPLOYMENT_DIR"
-    QDRANT_DIR="$BACKUP_PATH/qdrant"
-    mkdir -p "$QDRANT_DIR"
-
-    # Get all collections
-    COLLECTIONS=$(curl -s $(qdrant_auth_header) http://localhost:6333/collections 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
-
-    if [[ -z "$COLLECTIONS" ]]; then
-      warn "No Qdrant collections found or Qdrant not accessible on localhost:6333."
-    else
-      for collection in $COLLECTIONS; do
-        info "Creating snapshot for collection: $collection"
-        SNAPSHOT_RESPONSE=$(curl -s $(qdrant_auth_header) -X POST "http://localhost:6333/collections/$collection/snapshots" 2>/dev/null)
-        SNAPSHOT_NAME=$(echo "$SNAPSHOT_RESPONSE" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-        if [[ -n "$SNAPSHOT_NAME" ]]; then
-          info "Downloading snapshot: $SNAPSHOT_NAME"
-          curl -s $(qdrant_auth_header) "http://localhost:6333/collections/$collection/snapshots/$SNAPSHOT_NAME" \
-            --output "$QDRANT_DIR/${collection}_${SNAPSHOT_NAME}" 2>/dev/null
-          SNAP_SIZE=$(du -h "$QDRANT_DIR/${collection}_${SNAPSHOT_NAME}" | cut -f1)
-          success "Qdrant '$collection': $SNAP_SIZE"
-        else
-          warn "Failed to create snapshot for '$collection'"
-        fi
-      done
-    fi
-  fi
-fi
-
-# ── 3. Redis Backup ─────────────────────────────────────────────────────
+# ── 2. Redis Backup ─────────────────────────────────────────────────────
 
 if $DO_REDIS; then
-  header "3. Redis Cache"
+  header "2. Redis Cache"
   if check_container "$REDIS_CONTAINER"; then
     REDIS_FILE="$BACKUP_PATH/redis_dump.rdb"
 
@@ -155,10 +118,10 @@ if $DO_REDIS; then
   fi
 fi
 
-# ── 4. Config Files ─────────────────────────────────────────────────────
+# ── 3. Config Files ─────────────────────────────────────────────────────
 
 if $DO_CONFIG; then
-  header "4. Configuration Files"
+  header "3. Configuration Files"
   CONFIG_FILE="$BACKUP_PATH/config_files.tar.gz"
 
   CONFIG_FILES=()

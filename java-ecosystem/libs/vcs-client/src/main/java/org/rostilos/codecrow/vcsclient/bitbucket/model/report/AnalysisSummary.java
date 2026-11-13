@@ -27,6 +27,7 @@ public final class AnalysisSummary {
     private final List<IssueSummary> issues;
     private final Map<String, Integer> fileIssueCount;
     private final QualityGateResult qualityGateResult;
+    private final List<CheckSummary> reviewChecks;
 
     private AnalysisSummary(Builder builder) {
         this.projectNamespace = builder.projectNamespace;
@@ -45,6 +46,7 @@ public final class AnalysisSummary {
         this.fileIssueCount = builder.fileIssueCount;
         this.resolvedIssues = builder.resolvedIssues;
         this.qualityGateResult = builder.qualityGateResult;
+        this.reviewChecks = List.copyOf(builder.reviewChecks);
     }
 
     public String getProjectNamespace() {
@@ -109,6 +111,12 @@ public final class AnalysisSummary {
         return qualityGateResult;
     }
 
+    public List<CheckSummary> getReviewChecks() { return reviewChecks; }
+
+    public record CheckSummary(String label, String url, boolean complete, int high, int medium, int low, int info) {
+        public int total() { return high + medium + low + info; }
+    }
+
     /**
      * Formats the analysis summary for display in pull request comments
      *
@@ -157,6 +165,7 @@ public final class AnalysisSummary {
         private List<IssueSummary> issues;
         private Map<String, Integer> fileIssueCount;
         private QualityGateResult qualityGateResult;
+        private List<CheckSummary> reviewChecks = List.of();
 
         private Builder() {
             super();
@@ -237,6 +246,11 @@ public final class AnalysisSummary {
             return this;
         }
 
+        public Builder withReviewChecks(List<CheckSummary> checks) {
+            this.reviewChecks = checks;
+            return this;
+        }
+
         public Builder withQualityGateResult(QualityGateResult qualityGateResult) {
             this.qualityGateResult = qualityGateResult;
             return this;
@@ -294,6 +308,7 @@ public final class AnalysisSummary {
         private final String issueUrl;
         private final Long issueId;
         private final String codeSnippet;
+        private final org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide;
 
         public IssueSummary(
                 IssueSeverity severity,
@@ -308,6 +323,25 @@ public final class AnalysisSummary {
                 Long issueId,
                 String codeSnippet
         ) {
+            this(severity, category, filePath, lineNumber, title, reason, suggestedFix,
+                    suggestedFixDiff, issueUrl, issueId, codeSnippet,
+                    org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+        }
+
+        public IssueSummary(
+                IssueSeverity severity,
+                String category,
+                String filePath,
+                Integer lineNumber,
+                String title,
+                String reason,
+                String suggestedFix,
+                String suggestedFixDiff,
+                String issueUrl,
+                Long issueId,
+                String codeSnippet,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide
+        ) {
             this.severity = severity;
             this.category = category;
             this.filePath = filePath;
@@ -319,6 +353,8 @@ public final class AnalysisSummary {
             this.issueUrl = issueUrl;
             this.issueId = issueId;
             this.codeSnippet = codeSnippet;
+            this.anchorSide = anchorSide == null
+                    ? org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD : anchorSide;
         }
 
         /**
@@ -339,6 +375,8 @@ public final class AnalysisSummary {
             this(severity, category, filePath, lineNumber, title, reason,
                     suggestedFix, suggestedFixDiff, issueUrl, issueId, null);
         }
+
+        public org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide getAnchorSide() { return anchorSide; }
 
         public IssueSeverity getSeverity() {
             return severity;

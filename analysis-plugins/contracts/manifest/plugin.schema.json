@@ -29,6 +29,7 @@
           "index",
           "planning",
           "prompt",
+          "review-check",
           "syntax",
           "validation"
         ]

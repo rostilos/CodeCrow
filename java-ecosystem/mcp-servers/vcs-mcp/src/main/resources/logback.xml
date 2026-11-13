@@ -6,7 +6,7 @@
         Any text to STDOUT will break the JSON-RPC communication.
     -->
 
-    <!-- STDERR appender (default for all logs) -->
+    <!-- STDERR is the only log destination for this stdio subprocess. -->
     <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
         <target>System.err</target>
         <encoder>
@@ -14,26 +14,12 @@
         </encoder>
     </appender>
 
-    <!-- File appender (optional, for persistent logs) -->
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/mcp-server.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/mcp-server-%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>7</maxHistory>
-        </rollingPolicy>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
     <!-- Suppress overly verbose libraries -->
     <logger name="okhttp3" level="WARN"/>
     <logger name="org.apache" level="WARN"/>
 
-    <!-- Root logger - ALL output goes to STDERR and FILE, NEVER to STDOUT -->
+    <!-- Root logger - ALL output goes to STDERR, NEVER to STDOUT -->
     <root level="INFO">
         <appender-ref ref="STDERR"/>
-        <appender-ref ref="FILE"/>
     </root>
 </configuration>
-

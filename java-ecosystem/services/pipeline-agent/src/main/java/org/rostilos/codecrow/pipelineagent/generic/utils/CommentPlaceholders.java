@@ -4,14 +4,15 @@ public class CommentPlaceholders {
     /** Comment markers for CodeCrow command responses */
     public static final String CODECROW_COMMAND_MARKER = "<!-- codecrow-command-response -->";
     public static final String CODECROW_SUMMARY_MARKER = "<!-- codecrow-summary -->";
-    public static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
+    // Command cleanup must never match the permanent Bitbucket review report.
+    public static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review-command -->";
     
     /** Placeholder messages for commands */
     public static final String PLACEHOLDER_ANALYZE = """
         🔄 **CodeCrow is analyzing this PR...**
         
         This may take a few minutes depending on the size of the changes.
-        I'll update this comment with the results when the analysis is complete.
+        The PR review report will be refreshed when the analysis is complete.
         """;
     
     public static final String PLACEHOLDER_SUMMARIZE = """
@@ -25,7 +26,7 @@ public class CommentPlaceholders {
         🔄 **CodeCrow is reviewing this PR...**
         
         I'm examining the code changes for potential issues.
-        This comment will be updated with the review results when complete.
+        The PR review report will be refreshed when complete.
         """;
     
     public static final String PLACEHOLDER_ASK = """

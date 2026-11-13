@@ -17,6 +17,10 @@ public interface AnalysisLockRepository extends JpaRepository<AnalysisLock, Long
 
     Optional<AnalysisLock> findByLockKey(String lockKey);
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT l FROM AnalysisLock l WHERE l.lockKey = :lockKey")
+    Optional<AnalysisLock> findOwnedLockForUpdate(@Param("lockKey") String lockKey);
+
     Optional<AnalysisLock> findByProjectIdAndBranchNameAndAnalysisType(
             Long projectId,
             String branchName,

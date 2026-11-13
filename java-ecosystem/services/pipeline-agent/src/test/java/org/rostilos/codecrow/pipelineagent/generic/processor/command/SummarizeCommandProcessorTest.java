@@ -53,7 +53,7 @@ class SummarizeCommandProcessorTest {
                 summarizeCacheRepository,
                 aiCommandClient,
                 tokenEncryptionService
-        );
+        , org.mockito.Mockito.mock(org.rostilos.codecrow.core.service.PrChangeSummaryService.class));
     }
 
     @Test
@@ -90,6 +90,49 @@ class SummarizeCommandProcessorTest {
         assertThat(result.data().get("content"))
                 .asString()
                 .contains("could not generate a detailed AI summary");
+    }
+
+    @Test
+    @DisplayName("fallback summary prompt bounds the acquired diff")
+    void fallbackSummaryPromptBoundsLargeDiff() {
+        String diff = "diff-evidence-λ\n".repeat(5_000) + "TAIL-DIFF-EVIDENCE";
+
+        String prompt = ReflectionTestUtils.invokeMethod(
+                processor,
+                "buildSummaryPrompt",
+                createPayload(),
+                diff,
+                null,
+                PrSummarizeCache.DiagramType.ASCII
+        );
+
+        assertThat(prompt)
+                .contains("... (truncated)")
+                .doesNotContain("TAIL-DIFF-EVIDENCE");
+    }
+
+    @Test
+    @DisplayName("posted summaries stay inside the VCS comment boundary")
+    void postedSummaryIsBounded() {
+        String summary = "summary-record-界\n".repeat(5_000) + "TAIL-SUMMARY";
+        SummarizeCommandProcessor.SummaryResult generated =
+                new SummarizeCommandProcessor.SummaryResult(
+                        summary,
+                        "diagram",
+                        PrSummarizeCache.DiagramType.ASCII
+                );
+
+        String content = ReflectionTestUtils.invokeMethod(
+                processor,
+                "formatSummaryForPosting",
+                generated,
+                PrSummarizeCache.DiagramType.ASCII
+        );
+
+        assertThat(content)
+                .hasSizeLessThanOrEqualTo(65_000)
+                .endsWith("... (truncated)")
+                .doesNotContain("TAIL-SUMMARY");
     }
 
     private Project createProject() {

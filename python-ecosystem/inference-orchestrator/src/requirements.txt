@@ -14,7 +14,6 @@ mcp-use==1.7.0
 # service crash before FastAPI and the Redis review consumer can start.
 mcp==1.27.1
 redis>=5.0.0
-newrelic==11.5.0
 
 # Runtime validation executes installed analysis plugins against
 # exact enriched source. These native wheels must match the RAG parser ABI.
@@ -26,3 +25,6 @@ tree-sitter-typescript==0.23.2
 tree-sitter-go==0.25.0
 tree-sitter-php==0.24.1
 tree-sitter-ruby==0.23.1
+
+# Source-backed pnpm catalog facts in the installed pnpm plugin.
+PyYAML==6.0.3

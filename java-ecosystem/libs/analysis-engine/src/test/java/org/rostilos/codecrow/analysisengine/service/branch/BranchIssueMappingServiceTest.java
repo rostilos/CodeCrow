@@ -49,6 +49,23 @@ class BranchIssueMappingServiceTest {
 
     // ── mapCodeAnalysisIssuesToBranch ─────────────────────────────────────
 
+    @Test void importsRemovalImpactFromDeletedPathButSkipsOldHeadFinding() throws Exception {
+        var branch = new Branch(); setId(branch, 1L); branch.setBranchName("main");
+        var project = new Project(); setId(project, 7L);
+        var removed = new CodeAnalysisIssue(); setId(removed, 10L); removed.setFilePath("deleted.py");
+        removed.setSeverity(IssueSeverity.HIGH);
+        removed.setAnchorSide(org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        var head = new CodeAnalysisIssue(); setId(head, 11L); head.setFilePath("deleted.py");
+        head.setSeverity(IssueSeverity.HIGH);
+        org.mockito.Mockito.lenient().when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberAndFilePathNewestFirst(7L, 9L, "deleted.py"))
+                .thenReturn(List.of(removed, head));
+        service.mapCodeAnalysisIssuesToBranch(Set.of("deleted.py"), Set.of(), branch, project, 9L);
+        var captured = org.mockito.ArgumentCaptor.forClass(BranchIssue.class);
+        verify(branchIssueRepository).saveAndFlush(captured.capture());
+        assertThat(captured.getValue().getOriginIssue()).isSameAs(removed);
+        assertThat(captured.getValue().getAnchorSide()).isEqualTo(org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+    }
+
     @Nested
     class MapIssuesToBranch {
 
@@ -66,7 +83,7 @@ class BranchIssueMappingServiceTest {
         }
 
         @Test
-        void fileNotInBranch_shouldSkip() throws Exception {
+        void fileNotInBranch_withoutRemovalFindings_shouldNotImport() throws Exception {
             Branch branch = new Branch();
             setId(branch, 1L);
             branch.setBranchName("main");
@@ -78,7 +95,8 @@ class BranchIssueMappingServiceTest {
             service.mapCodeAnalysisIssuesToBranch(
                     Set.of("a.java"), Set.of("b.java"), branch, project);
 
-            verifyNoInteractions(codeAnalysisIssueRepository);
+            verify(codeAnalysisIssueRepository).findByProjectIdAndBranchNameAndFilePath(1L, "main", "a.java");
+            verify(branchIssueRepository, never()).saveAndFlush(any());
         }
 
         @Test

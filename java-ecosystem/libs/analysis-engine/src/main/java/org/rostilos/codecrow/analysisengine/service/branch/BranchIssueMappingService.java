@@ -116,12 +116,6 @@ public class BranchIssueMappingService {
 
         // ── Per-file mapping loop ─────────────────────────────────────────────
         for (String filePath : changedFiles.stream().sorted().toList()) {
-            if (!filesExistingInBranch.contains(filePath)) {
-                log.debug("Skipping issue mapping for file {} - does not exist in branch {} (cached)",
-                        filePath, branch.getBranchName());
-                continue;
-            }
-
             List<CodeAnalysisIssue> allIssues;
             if (!prNumbers.isEmpty()) {
                 allIssues = prNumbers.size() == 1
@@ -143,6 +137,8 @@ public class BranchIssueMappingService {
 
             List<CodeAnalysisIssue> unresolvedIssues = logicalIssues.stream()
                     .filter(issue -> !issue.isResolved())
+                    .filter(issue -> filesExistingInBranch.contains(filePath)
+                            || issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE)
                     .toList();
 
             if (!unresolvedIssues.isEmpty()) {

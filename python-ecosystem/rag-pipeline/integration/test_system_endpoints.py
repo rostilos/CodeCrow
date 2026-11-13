@@ -109,7 +109,7 @@ class TestSystemRoot:
         assert resp.status_code == 200
         body = resp.json()
         assert "message" in body
-        assert "RAG" in body["message"]
+        assert body["message"] == "CodeCrow Repository Index API"
 
 
 @pytest.mark.asyncio

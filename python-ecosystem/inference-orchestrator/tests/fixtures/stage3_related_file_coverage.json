@@ -1,0 +1,254 @@
+{
+  "provenance": {
+    "capture": "/var/www/html/codecrow-old/reports/benchmark-quality-20261010/batch-packing/full50_runtime/control/captures/project-104935-review-2-86e0179d2d8b45c28b6af0ae43f05bec.json",
+    "capture_sha256": "feb7ccfa0e7c3f82d6e1687ea064f38ab7f9566565df710e86b2da2dc6d95847",
+    "stage3_call": 84,
+    "candidate_id": "sha256:46a05c795c0a13db54d57c186467e28f01ea792baeb9998467a64bf922209345",
+    "full_fixture_sha256": "539a0aa2a9391b43294b4231275891b9f3600116bed630699eab92a4d28cc935",
+    "scope": "Exact four-file diff, six admitted HEAD blocks, and one archived primary MCP source window; unrelated candidates/prompt sections omitted."
+  },
+  "review_revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+  "verification_id": "issue_3",
+  "issue": {
+    "verification_id": "issue_3",
+    "original_id": "CROSS_001",
+    "id": "CROSS_001",
+    "severity": "MEDIUM",
+    "category": "BUG_RISK",
+    "file": "app/models/topic.rb",
+    "anchorSide": "HEAD",
+    "line": 719,
+    "scope": "LINE",
+    "title": "Email unsubscribe link is generated as a relative URL",
+    "reason": "`Topic#unsubscribe_url` extends the topic's site-relative `url` and the mailer passes that value directly into the email translation. The resulting email link lacks the site origin, so external email clients cannot reliably resolve it to the Discourse installation.\nEvidence: PRF014 constructs the unsubscribe URL solely from `Topic#url`; PRF009 passes it unchanged as `unsubscribe_url`; PRF001 inserts that value directly into Markdown link syntax; and PRF002 cooks the translation into email HTML without making the URL absolute.\nBusiness impact: Recipients may receive a per-topic unsubscribe link that is broken or points at the email provider rather than the Discourse site, preventing the advertised unsubscribe flow.\nAlso affects: app/mailers/user_notifications.rb, config/locales/server.en.yml, lib/email/message_builder.rb",
+    "suggestedFixDescription": "Generate an absolute URL before it reaches the email template, for example by prefixing the topic path with `Discourse.base_url` in `Topic#unsubscribe_url` or by passing an absolute URL from the mailer. Add an email-rendering assertion that the resulting `href` contains the forum origin.",
+    "suggestedFixDiff": null,
+    "isResolved": false,
+    "resolutionReason": null,
+    "resolutionExplanation": null,
+    "resolvedInCommit": null,
+    "visibility": null,
+    "codeSnippet": "\"#{url}/unsubscribe\"",
+    "hypothesis": "When a notification email is generated, `%{unsubscribe_url}` becomes a path such as `/t/example/123/unsubscribe`; because an email message has no dependable document base URL, following the rendered link fails or resolves against the mail client's own origin.",
+    "evidenceGaps": [],
+    "evidenceRefs": [],
+    "claimKind": "",
+    "relatedLocations": [
+      "app/mailers/user_notifications.rb",
+      "config/locales/server.en.yml",
+      "lib/email/message_builder.rb"
+    ],
+    "exact_source_anchor": "\"#{url}/unsubscribe\"",
+    "related_locations": [
+      "app/mailers/user_notifications.rb",
+      "config/locales/server.en.yml",
+      "lib/email/message_builder.rb"
+    ]
+  },
+  "raw_assessment": {
+    "issue_id": "issue_3",
+    "verdict": "disproven",
+    "reason": "Topic#url delegates to Topic.url, which starts with Discourse.base_url. Topic#unsubscribe_url appends /unsubscribe to that absolute URL, and the mailer passes it unchanged as unsubscribe_url. Therefore the generated email link includes the forum origin rather than being site-relative.",
+    "supporting_evidence": [],
+    "contradicting_evidence": [
+      {
+        "file_path": "app/models/topic.rb",
+        "snippet": "  def self.url(id, slug, post_number=nil)\n    url = \"#{Discourse.base_url}/t/#{slug}/#{id}\"\n    url << \"/#{post_number}\" if post_number.to_i > 1\n    url\n  end\n\n  def url(post_number = nil)\n    self.class.url id, slug, post_number\n  end"
+      },
+      {
+        "file_path": "app/models/topic.rb",
+        "snippet": "  def unsubscribe_url\n    \"#{url}/unsubscribe\"\n  end"
+      },
+      {
+        "file_path": "app/mailers/user_notifications.rb",
+        "snippet": "      unsubscribe_url: post.topic.unsubscribe_url,"
+      },
+      {
+        "file_path": "config/locales/server.en.yml",
+        "snippet": "    To stop receiving notifications about this particular topic, [click here](%{unsubscribe_url})."
+      },
+      {
+        "file_path": "lib/email/message_builder.rb",
+        "snippet": "        unsubscribe_link = PrettyText.cook(I18n.t('unsubscribe_link', template_args)).html_safe\n        html_override.gsub!(\"%{unsubscribe_link}\", unsubscribe_link)"
+      }
+    ],
+    "unresolved_questions": []
+  },
+  "request_head_diff": "diff --git a/app/mailers/user_notifications.rb b/app/mailers/user_notifications.rb\nindex da27294d7f404f33a0902fc99ca5769e16f68d8c..438e63f6f308c22c4b918165ebe2bf7e9679830e 100644\n--- a/app/mailers/user_notifications.rb\n+++ b/app/mailers/user_notifications.rb\n@@ -292,6 +292,7 @@ class UserNotifications < ActionMailer::Base\n       context: context,\n       username: username,\n       add_unsubscribe_link: true,\n+      unsubscribe_url: post.topic.unsubscribe_url,\n       allow_reply_by_email: allow_reply_by_email,\n       use_site_subject: use_site_subject,\n       add_re_to_subject: add_re_to_subject,\n@@ -306,9 +307,7 @@ class UserNotifications < ActionMailer::Base\n     }\n \n     # If we have a display name, change the from address\n-    if from_alias.present?\n-      email_opts[:from_alias] = from_alias\n-    end\n+    email_opts[:from_alias] = from_alias if from_alias.present?\n \n     TopicUser.change(user.id, post.topic_id, last_emailed_post_number: post.post_number)\n \ndiff --git a/app/models/topic.rb b/app/models/topic.rb\nindex 60ad4cc567c96cc7ab0e99d2fba44bb901793e2a..30bd8fc343a5055a5e5676b890c77d7a074ccc56 100644\n--- a/app/models/topic.rb\n+++ b/app/models/topic.rb\n@@ -716,6 +716,10 @@ class Topic < ActiveRecord::Base\n     url\n   end\n \n+  def unsubscribe_url\n+    \"#{url}/unsubscribe\"\n+  end\n+\n   def clear_pin_for(user)\n     return unless user.present?\n     TopicUser.change(user.id, id, cleared_pinned_at: Time.now)\ndiff --git a/config/locales/server.en.yml b/config/locales/server.en.yml\nindex 7d10fb4eaf54e2680c0df9ad227156436c3bd967..b919935436122dbbf35c5e67cd5dbaf90c947e34 100644\n--- a/config/locales/server.en.yml\n+++ b/config/locales/server.en.yml\n@@ -1849,7 +1849,10 @@ en:\n       subject_template: \"Downloading remote images disabled\"\n       text_body_template: \"The `download_remote_images_to_local` setting was disabled because the disk space limit at `download_remote_images_threshold` was reached.\"\n \n-  unsubscribe_link: \"To unsubscribe from these emails, visit your [user preferences](%{user_preferences_url}).\"\n+  unsubscribe_link: |\n+    To unsubscribe from these emails, visit your [user preferences](%{user_preferences_url}).\n+\n+    To stop receiving notifications about this particular topic, [click here](%{unsubscribe_url}).\n \n   subject_re: \"Re: \"\n   subject_pm: \"[PM] \"\ndiff --git a/lib/email/message_builder.rb b/lib/email/message_builder.rb\nindex 5e1428d9696bc8e3f6bcc87765cae1b3c40a9b6b..bacc5f1cf1ecd5515bc991b5f2dc4e3eefd9c7a5 100644\n--- a/lib/email/message_builder.rb\n+++ b/lib/email/message_builder.rb\n@@ -21,20 +21,21 @@ module Email\n       @to = to\n       @opts = opts || {}\n \n-      @template_args = {site_name: SiteSetting.email_prefix.presence || SiteSetting.title,\n-                        base_url: Discourse.base_url,\n-                        user_preferences_url: \"#{Discourse.base_url}/my/preferences\" }.merge!(@opts)\n+      @template_args = {\n+        site_name: SiteSetting.email_prefix.presence || SiteSetting.title,\n+        base_url: Discourse.base_url,\n+        user_preferences_url: \"#{Discourse.base_url}/my/preferences\",\n+      }.merge!(@opts)\n \n       if @template_args[:url].present?\n         if @opts[:include_respond_instructions] == false\n           @template_args[:respond_instructions] = ''\n         else\n-          @template_args[:respond_instructions] =\n-            if allow_reply_by_email?\n-              I18n.t('user_notifications.reply_by_email', @template_args)\n-            else\n-              I18n.t('user_notifications.visit_link_to_respond', @template_args)\n-            end\n+          @template_args[:respond_instructions] = if allow_reply_by_email?\n+            I18n.t('user_notifications.reply_by_email', @template_args)\n+          else\n+            I18n.t('user_notifications.visit_link_to_respond', @template_args)\n+          end\n         end\n       end\n     end\n@@ -56,15 +57,15 @@ module Email\n \n     def html_part\n       return unless html_override = @opts[:html_override]\n-      if @opts[:add_unsubscribe_link]\n \n+      if @opts[:add_unsubscribe_link]\n         if response_instructions = @template_args[:respond_instructions]\n           respond_instructions = PrettyText.cook(response_instructions).html_safe\n           html_override.gsub!(\"%{respond_instructions}\", respond_instructions)\n         end\n \n         unsubscribe_link = PrettyText.cook(I18n.t('unsubscribe_link', template_args)).html_safe\n-        html_override.gsub!(\"%{unsubscribe_link}\",unsubscribe_link)\n+        html_override.gsub!(\"%{unsubscribe_link}\", unsubscribe_link)\n       end\n \n       styled = Email::Styles.new(html_override)\n",
+  "actually_visible_head_blocks": [
+    {
+      "file": "app/mailers/user_notifications.rb",
+      "start_line": 292,
+      "end_line": 298,
+      "revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "hunk_id": "sha256:b6f11a22068195d413a1b86b1f40725b3c811b5ed15e42ccd1c999381682abdd",
+      "body": "      context: context,\n      username: username,\n      add_unsubscribe_link: true,\n      unsubscribe_url: post.topic.unsubscribe_url,\n      allow_reply_by_email: allow_reply_by_email,\n      use_site_subject: use_site_subject,\n      add_re_to_subject: add_re_to_subject,"
+    },
+    {
+      "file": "app/mailers/user_notifications.rb",
+      "start_line": 307,
+      "end_line": 313,
+      "revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "hunk_id": "sha256:2af48b722740961f15924b3d7d62b8f310dd2085430ba4042553c43d2dda03d0",
+      "body": "    }\n\n    # If we have a display name, change the from address\n    email_opts[:from_alias] = from_alias if from_alias.present?\n\n    TopicUser.change(user.id, post.topic_id, last_emailed_post_number: post.post_number)\n"
+    },
+    {
+      "file": "app/models/topic.rb",
+      "start_line": 716,
+      "end_line": 725,
+      "revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "hunk_id": "sha256:31ca2397fdf98e5ae185230204b74392ec9f9a51bb6d253399cda32939ea8533",
+      "body": "    url\n  end\n\n  def unsubscribe_url\n    \"#{url}/unsubscribe\"\n  end\n\n  def clear_pin_for(user)\n    return unless user.present?\n    TopicUser.change(user.id, id, cleared_pinned_at: Time.now)"
+    },
+    {
+      "file": "config/locales/server.en.yml",
+      "start_line": 1849,
+      "end_line": 1858,
+      "revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "hunk_id": "sha256:8db29c850a6787c1e0ccb0f1a47a2782f2126191233f241701dd3d52cc411a9a",
+      "body": "      subject_template: \"Downloading remote images disabled\"\n      text_body_template: \"The `download_remote_images_to_local` setting was disabled because the disk space limit at `download_remote_images_threshold` was reached.\"\n\n  unsubscribe_link: |\n    To unsubscribe from these emails, visit your [user preferences](%{user_preferences_url}).\n\n    To stop receiving notifications about this particular topic, [click here](%{unsubscribe_url}).\n\n  subject_re: \"Re: \"\n  subject_pm: \"[PM] \""
+    },
+    {
+      "file": "lib/email/message_builder.rb",
+      "start_line": 21,
+      "end_line": 41,
+      "revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "hunk_id": "sha256:e08bdaa5636ae2547014f887745ba799c95df4f21ed8741211abea6095db9565",
+      "body": "      @to = to\n      @opts = opts || {}\n\n      @template_args = {\n        site_name: SiteSetting.email_prefix.presence || SiteSetting.title,\n        base_url: Discourse.base_url,\n        user_preferences_url: \"#{Discourse.base_url}/my/preferences\",\n      }.merge!(@opts)\n\n      if @template_args[:url].present?\n        if @opts[:include_respond_instructions] == false\n          @template_args[:respond_instructions] = ''\n        else\n          @template_args[:respond_instructions] = if allow_reply_by_email?\n            I18n.t('user_notifications.reply_by_email', @template_args)\n          else\n            I18n.t('user_notifications.visit_link_to_respond', @template_args)\n          end\n        end\n      end\n    end"
+    },
+    {
+      "file": "lib/email/message_builder.rb",
+      "start_line": 57,
+      "end_line": 71,
+      "revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "hunk_id": "sha256:926fa08c4ad91aeee74bd670b43eb56cf50b7b6ef49aa65f5f9483b740019f59",
+      "body": "\n    def html_part\n      return unless html_override = @opts[:html_override]\n\n      if @opts[:add_unsubscribe_link]\n        if response_instructions = @template_args[:respond_instructions]\n          respond_instructions = PrettyText.cook(response_instructions).html_safe\n          html_override.gsub!(\"%{respond_instructions}\", respond_instructions)\n        end\n\n        unsubscribe_link = PrettyText.cook(I18n.t('unsubscribe_link', template_args)).html_safe\n        html_override.gsub!(\"%{unsubscribe_link}\", unsubscribe_link)\n      end\n\n      styled = Email::Styles.new(html_override)"
+    }
+  ],
+  "primary_observation": {
+    "envelope_text": "{\"fileContent\":\"    @posters_summary ||= TopicPostersSummary.new(self, options).summary\\n  end\\n\\n  def participants_summary(options = {})\\n    @participants_summary ||= TopicParticipantsSummary.new(self, options).summary\\n  end\\n\\n  def make_banner!(user)\\n    # only one banner at the same time\\n    previous_banner = Topic.where(archetype: Archetype.banner).first\\n    previous_banner.remove_banner!(user) if previous_banner.present?\\n\\n    self.archetype = Archetype.banner\\n    self.add_moderator_post(user, I18n.t(\\\"archetypes.banner.message.make\\\"))\\n    self.save\\n\\n    MessageBus.publish('/site/banner', banner)\\n  end\\n\\n  def remove_banner!(user)\\n    self.archetype = Archetype.default\\n    self.add_moderator_post(user, I18n.t(\\\"archetypes.banner.message.remove\\\"))\\n    self.save\\n\\n    MessageBus.publish('/site/banner', nil)\\n  end\\n\\n  def banner\\n    post = self.posts.order(:post_number).limit(1).first\\n\\n    {\\n      html: post.cooked,\\n      key: self.id,\\n      url: self.url\\n    }\\n  end\\n\\n  # Even if the slug column in the database is null, topic.slug will return something:\\n  def slug\\n    unless slug = read_attribute(:slug)\\n      return '' unless title.present?\\n      slug = Slug.for(title)\\n      if new_record?\\n        write_attribute(:slug, slug)\\n      else\\n        update_column(:slug, slug)\\n      end\\n    end\\n\\n    slug\\n  end\\n\\n  def title=(t)\\n    slug = Slug.for(t.to_s)\\n    write_attribute(:slug, slug)\\n    write_attribute(:title,t)\\n  end\\n\\n  # NOTE: These are probably better off somewhere else.\\n  #       Having a model know about URLs seems a bit strange.\\n  def last_post_url\\n    \\\"#{Discourse.base_uri}/t/#{slug}/#{id}/#{posts_count}\\\"\\n  end\\n\\n  def self.url(id, slug, post_number=nil)\\n    url = \\\"#{Discourse.base_url}/t/#{slug}/#{id}\\\"\\n    url << \\\"/#{post_number}\\\" if post_number.to_i > 1\\n    url\\n  end\\n\\n  def url(post_number = nil)\\n    self.class.url id, slug, post_number\\n  end\\n\\n  def relative_url(post_number=nil)\\n    url = \\\"#{Discourse.base_uri}/t/#{slug}/#{id}\\\"\\n    url << \\\"/#{post_number}\\\" if post_number.to_i > 1\\n    url\\n  end\\n\\n  def unsubscribe_url\\n    \\\"#{url}/unsubscribe\\\"\\n  end\\n\\n  def clear_pin_for(user)\\n    return unless user.present?\\n    TopicUser.change(user.id, id, cleared_pinned_at: Time.now)\\n  end\\n\\n  def re_pin_for(user)\\n    return unless user.present?\\n    TopicUser.change(user.id, id, cleared_pinned_at: nil)\\n  end\\n\\n  def update_pinned(status, global=false, pinned_until=nil)\\n    pinned_until = Time.parse(pinned_until) rescue nil\\n\\n    update_columns(\\n      pinned_at: status ? Time.now : nil,\\n      pinned_globally: global,\\n      pinned_until: pinned_until\\n    )\\n\\n    Jobs.cancel_scheduled_job(:unpin_topic, topic_id: self.id)\\n    Jobs.enqueue_at(pinned_until, :unpin_topic, topic_id: self.id) if pinned_until\\n  end\\n\\n  def draft_key\\n    \\\"#{Draft::EXISTING_TOPIC}#{id}\\\"\\n  end\\n\\n  def notifier\\n    @topic_notifier ||= TopicNotifier.new(self)\\n  end\\n\\n  def muted?(user)\\n    if user && user.id\\n      notifier.muted?(user.id)\\n    end\\n  end\\n\\n  def self.ensure_consistency!\\n    # unpin topics that might have been missed\\n    Topic.where(\\\"pinned_until < now()\\\").update_all(pinned_at: nil, pinned_globally: false, pinned_until: nil)\\n  end\\n\\n  def self.auto_close\\n    Topic.where(\\\"NOT closed AND auto_close_at < ? AND auto_close_user_id IS NOT NULL\\\", 1.minute.ago).each do |t|\\n      t.auto_close\\n    end\\n  end\\n\\n  def auto_close(closer = nil)\\n    if auto_close_at && !closed? && !deleted_at && auto_close_at < 5.minutes.from_now\\n      closer ||= auto_close_user\\n      if Guardian.new(closer).can_moderate?(self)\\n        update_status('autoclosed', true, closer)\\n      end\\n    end\\n  end\\n\\n  # Valid arguments for the auto close time:\\n  #  * An integer, which is the number of hours from now to close the topic.\\n  #  * A time, like \\\"12:00\\\", which is the time at which the topic will close in the current day\\n  #    or the next day if that time has already passed today.\\n  #  * A timestamp, like \\\"2013-11-25 13:00\\\", when the topic should close.\\n  #  * A timestamp with timezone in JSON format. (e.g., \\\"2013-11-26T21:00:00.000Z\\\")\\n  #  * nil, to prevent the topic from automatically closing.\\n  # Options:\\n  #  * by_user: User who is setting the auto close time\\n  #  * timezone_offset: (Integer) offset from UTC in minutes of the given argument. Default 0.\\n  def set_auto_close(arg, opts={})\\n    self.auto_close_hours = nil\\n    by_user = opts[:by_user]\\n    offset_minutes = opts[:timezone_offset]\\n\\n    if self.auto_close_based_on_last_post\\n      num_hours = arg.to_f\\n      if num_hours > 0\\n        last_post_created_at = self.ordered_posts.last.try(:created_at) || Time.zone.now\\n        self.auto_close_at = last_post_created_at + num_hours.hours\",\"startLine\":639,\"endLine\":799,\"totalLines\":1046,\"completeFile\":false,\"filePath\":\"app/models/topic.rb\",\"exists\":true,\"changed\":true,\"deleted\":false,\"unavailable\":false,\"source\":\"review-overlay\"}",
+    "envelope": {
+      "fileContent": "    @posters_summary ||= TopicPostersSummary.new(self, options).summary\n  end\n\n  def participants_summary(options = {})\n    @participants_summary ||= TopicParticipantsSummary.new(self, options).summary\n  end\n\n  def make_banner!(user)\n    # only one banner at the same time\n    previous_banner = Topic.where(archetype: Archetype.banner).first\n    previous_banner.remove_banner!(user) if previous_banner.present?\n\n    self.archetype = Archetype.banner\n    self.add_moderator_post(user, I18n.t(\"archetypes.banner.message.make\"))\n    self.save\n\n    MessageBus.publish('/site/banner', banner)\n  end\n\n  def remove_banner!(user)\n    self.archetype = Archetype.default\n    self.add_moderator_post(user, I18n.t(\"archetypes.banner.message.remove\"))\n    self.save\n\n    MessageBus.publish('/site/banner', nil)\n  end\n\n  def banner\n    post = self.posts.order(:post_number).limit(1).first\n\n    {\n      html: post.cooked,\n      key: self.id,\n      url: self.url\n    }\n  end\n\n  # Even if the slug column in the database is null, topic.slug will return something:\n  def slug\n    unless slug = read_attribute(:slug)\n      return '' unless title.present?\n      slug = Slug.for(title)\n      if new_record?\n        write_attribute(:slug, slug)\n      else\n        update_column(:slug, slug)\n      end\n    end\n\n    slug\n  end\n\n  def title=(t)\n    slug = Slug.for(t.to_s)\n    write_attribute(:slug, slug)\n    write_attribute(:title,t)\n  end\n\n  # NOTE: These are probably better off somewhere else.\n  #       Having a model know about URLs seems a bit strange.\n  def last_post_url\n    \"#{Discourse.base_uri}/t/#{slug}/#{id}/#{posts_count}\"\n  end\n\n  def self.url(id, slug, post_number=nil)\n    url = \"#{Discourse.base_url}/t/#{slug}/#{id}\"\n    url << \"/#{post_number}\" if post_number.to_i > 1\n    url\n  end\n\n  def url(post_number = nil)\n    self.class.url id, slug, post_number\n  end\n\n  def relative_url(post_number=nil)\n    url = \"#{Discourse.base_uri}/t/#{slug}/#{id}\"\n    url << \"/#{post_number}\" if post_number.to_i > 1\n    url\n  end\n\n  def unsubscribe_url\n    \"#{url}/unsubscribe\"\n  end\n\n  def clear_pin_for(user)\n    return unless user.present?\n    TopicUser.change(user.id, id, cleared_pinned_at: Time.now)\n  end\n\n  def re_pin_for(user)\n    return unless user.present?\n    TopicUser.change(user.id, id, cleared_pinned_at: nil)\n  end\n\n  def update_pinned(status, global=false, pinned_until=nil)\n    pinned_until = Time.parse(pinned_until) rescue nil\n\n    update_columns(\n      pinned_at: status ? Time.now : nil,\n      pinned_globally: global,\n      pinned_until: pinned_until\n    )\n\n    Jobs.cancel_scheduled_job(:unpin_topic, topic_id: self.id)\n    Jobs.enqueue_at(pinned_until, :unpin_topic, topic_id: self.id) if pinned_until\n  end\n\n  def draft_key\n    \"#{Draft::EXISTING_TOPIC}#{id}\"\n  end\n\n  def notifier\n    @topic_notifier ||= TopicNotifier.new(self)\n  end\n\n  def muted?(user)\n    if user && user.id\n      notifier.muted?(user.id)\n    end\n  end\n\n  def self.ensure_consistency!\n    # unpin topics that might have been missed\n    Topic.where(\"pinned_until < now()\").update_all(pinned_at: nil, pinned_globally: false, pinned_until: nil)\n  end\n\n  def self.auto_close\n    Topic.where(\"NOT closed AND auto_close_at < ? AND auto_close_user_id IS NOT NULL\", 1.minute.ago).each do |t|\n      t.auto_close\n    end\n  end\n\n  def auto_close(closer = nil)\n    if auto_close_at && !closed? && !deleted_at && auto_close_at < 5.minutes.from_now\n      closer ||= auto_close_user\n      if Guardian.new(closer).can_moderate?(self)\n        update_status('autoclosed', true, closer)\n      end\n    end\n  end\n\n  # Valid arguments for the auto close time:\n  #  * An integer, which is the number of hours from now to close the topic.\n  #  * A time, like \"12:00\", which is the time at which the topic will close in the current day\n  #    or the next day if that time has already passed today.\n  #  * A timestamp, like \"2013-11-25 13:00\", when the topic should close.\n  #  * A timestamp with timezone in JSON format. (e.g., \"2013-11-26T21:00:00.000Z\")\n  #  * nil, to prevent the topic from automatically closing.\n  # Options:\n  #  * by_user: User who is setting the auto close time\n  #  * timezone_offset: (Integer) offset from UTC in minutes of the given argument. Default 0.\n  def set_auto_close(arg, opts={})\n    self.auto_close_hours = nil\n    by_user = opts[:by_user]\n    offset_minutes = opts[:timezone_offset]\n\n    if self.auto_close_based_on_last_post\n      num_hours = arg.to_f\n      if num_hours > 0\n        last_post_created_at = self.ordered_posts.last.try(:created_at) || Time.zone.now\n        self.auto_close_at = last_post_created_at + num_hours.hours",
+      "startLine": 639,
+      "endLine": 799,
+      "totalLines": 1046,
+      "completeFile": false,
+      "filePath": "app/models/topic.rb",
+      "exists": true,
+      "changed": true,
+      "deleted": false,
+      "unavailable": false,
+      "source": "review-overlay"
+    },
+    "executor_receipt": {
+      "tool": "getReviewFileContent",
+      "args": {
+        "verificationId": "issue_3",
+        "filePath": "app/models/topic.rb",
+        "workspace": "ai-code-review-evaluation",
+        "repoSlug": "discourse-graphite",
+        "startLine": 639,
+        "endLine": 799
+      },
+      "success": true,
+      "result_chars": 5024,
+      "evidence_valid": true,
+      "evidence_structured": true,
+      "evidence_complete_file": false,
+      "evidence_start_line": 639,
+      "evidence_end_line": 799,
+      "evidence_revision": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "evidence_source_authority": "proposed_tree",
+      "verification_ids": [
+        "issue_3"
+      ]
+    }
+  },
+  "recorded_citation_checked_assessment": {
+    "verdict": "disproven",
+    "reasonCode": "assessed",
+    "reason": "Topic#url delegates to Topic.url, which starts with Discourse.base_url. Topic#unsubscribe_url appends /unsubscribe to that absolute URL, and the mailer passes it unchanged as unsubscribe_url. Therefore the generated email link includes the forum origin rather than being site-relative.",
+    "supportingEvidence": [],
+    "contradictingEvidence": [
+      {
+        "file": "app/models/topic.rb",
+        "evidenceId": "",
+        "tool": null,
+        "snippetSha256": "f2d84c3c95d2e0d2b70864e8c7f1c622ab80b8e4cc12149c5567c349c43c898c"
+      },
+      {
+        "file": "app/models/topic.rb",
+        "evidenceId": "",
+        "tool": null,
+        "snippetSha256": "09c847fa75246e3297f02e6f49806a712325ab5389c6f653d42dca951a679fb8"
+      },
+      {
+        "file": "app/mailers/user_notifications.rb",
+        "evidenceId": "",
+        "tool": null,
+        "snippetSha256": "154612ee160d5bfa54cf2691b6bf513f29f910d454dcaaa505558d0343b0998b"
+      },
+      {
+        "file": "config/locales/server.en.yml",
+        "evidenceId": "",
+        "tool": null,
+        "snippetSha256": "763a2be197e1e5647a07171ee4a3ea2fc1d00ae64ee289948f51d4d83c3d4d6d"
+      },
+      {
+        "file": "lib/email/message_builder.rb",
+        "evidenceId": "",
+        "tool": null,
+        "snippetSha256": "f10baf0eba1fafe6927738507ceb71b17a24e65a830d44d601aa3db9e755cc90"
+      }
+    ],
+    "unresolvedQuestions": [],
+    "guarantee": "exact citation checked; semantic interpretation remains model judgment",
+    "stage": "stage_3_verification",
+    "attempted": true,
+    "completed": true
+  },
+  "recorded_effective_assessment": {
+    "attempted": true,
+    "completed": true,
+    "contradictingEvidence": [
+      {
+        "evidenceId": "",
+        "file": "app/models/topic.rb",
+        "snippetSha256": "f2d84c3c95d2e0d2b70864e8c7f1c622ab80b8e4cc12149c5567c349c43c898c",
+        "tool": null
+      },
+      {
+        "evidenceId": "",
+        "file": "app/models/topic.rb",
+        "snippetSha256": "09c847fa75246e3297f02e6f49806a712325ab5389c6f653d42dca951a679fb8",
+        "tool": null
+      },
+      {
+        "evidenceId": "",
+        "file": "app/mailers/user_notifications.rb",
+        "snippetSha256": "154612ee160d5bfa54cf2691b6bf513f29f910d454dcaaa505558d0343b0998b",
+        "tool": null
+      },
+      {
+        "evidenceId": "",
+        "file": "config/locales/server.en.yml",
+        "snippetSha256": "763a2be197e1e5647a07171ee4a3ea2fc1d00ae64ee289948f51d4d83c3d4d6d",
+        "tool": null
+      },
+      {
+        "evidenceId": "",
+        "file": "lib/email/message_builder.rb",
+        "snippetSha256": "f10baf0eba1fafe6927738507ceb71b17a24e65a830d44d601aa3db9e755cc90",
+        "tool": null
+      }
+    ],
+    "guarantee": "exact citation checked; semantic interpretation remains model judgment",
+    "reason": "Falsification lacks reviewed-revision evidence for required locations: app/mailers/user_notifications.rb, config/locales/server.en.yml, lib/email/message_builder.rb; candidate retained",
+    "reasonCode": "dismissal_evidence_incomplete",
+    "stage": "stage_3_verification",
+    "supportingEvidence": [],
+    "unresolvedQuestions": [],
+    "verdict": "unknown"
+  },
+  "expected_after_narrow_fix": "disproven"
+}

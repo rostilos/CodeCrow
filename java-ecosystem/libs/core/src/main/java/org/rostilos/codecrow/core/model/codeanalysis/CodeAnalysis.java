@@ -8,16 +8,16 @@ import java.util.List;
 import java.util.ArrayList;
 
 @Entity
-@Table(
-        name = "code_analysis",
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uq_code_analysis_project_commit",
-                        columnNames = {"project_id", "commit_hash", "pr_number"}
-                )
-        }
-)
+@Table(name = "code_analysis")
 public class CodeAnalysis {
+
+    // A late review/tracking save must not resurrect a consumed queue intent.
+    @Column(name = "qa_documentation_pending", nullable = false, updatable = false)
+    private boolean qaDocumentationPending;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isQaDocumentationPending() { return qaDocumentationPending; }
+    public void setQaDocumentationPending(boolean pending) { this.qaDocumentationPending = pending; }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -40,6 +40,9 @@ public class CodeAnalysis {
 
     @Column(name = "diff_fingerprint", length = 64)
     private String diffFingerprint;
+
+    @Column(name = "pr_change_summary_payload", columnDefinition = "TEXT")
+    private String prChangeSummaryPayload;
 
     @Column(name = "target_branch_name")
     private String branchName;
@@ -132,6 +135,10 @@ public class CodeAnalysis {
 
     public String getDiffFingerprint() { return diffFingerprint; }
     public void setDiffFingerprint(String diffFingerprint) { this.diffFingerprint = diffFingerprint; }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public String getPrChangeSummaryPayload() { return prChangeSummaryPayload; }
+    public void setPrChangeSummaryPayload(String value) { this.prChangeSummaryPayload = value; }
 
     public String getBranchName() { return branchName; }
     public void setBranchName(String branchName) { this.branchName = branchName; }

@@ -13,7 +13,15 @@
     "filesAll": [],
     "filesAny": [],
     "contentMarkers": [],
-    "alternatives": []
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": ["**/package.json", "package.json"],
+        "contentMarkers": []
+      }
+    ]
   },
   "entrypoints": {
     "java": "org.rostilos.codecrow.plugins.javascript.JavascriptPlugin",
