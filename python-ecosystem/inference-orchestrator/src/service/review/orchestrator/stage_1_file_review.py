@@ -1336,16 +1336,7 @@ def _render_stage1_prompt(
         prepared.change_context_minimum_tokens = change_summary_minimum_tokens(
             summary, prepared_context=prepared.change_context,
         )
-    context_tokens = min(
-        max(0, _stage1_batch_token_limit(material.request, prepared.change_context_minimum_tokens) - 8_000),
-        STAGE1_BATCH_TOKEN_BUDGET // 4 + prepared.change_context_minimum_tokens,
-        # Extra context must not manufacture source shards. Keep the complete
-        # PR map, then expand optional detail only beside the actual local input.
-        max(prepared.change_context_minimum_tokens,
-            _stage1_packing_token_limit(material.request, prepared.change_context_minimum_tokens)
-            - _estimated_prompt_tokens(prompt, material.batch_file_paths)),
-    )
-    prompt += change_summary_context(summary, material.batch_file_paths, max_tokens=context_tokens,
+    prompt += change_summary_context(summary, material.batch_file_paths,
                                      prepared_context=prepared.change_context)
     return prompt, plugin_context_text
 

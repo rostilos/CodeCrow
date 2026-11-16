@@ -17,7 +17,7 @@ import time
 from typing import Any, Callable, Iterator
 
 from llm.provider_errors import is_quota_exhausted, rate_limit_retry_delay, RATE_LIMIT_MAX_RETRIES, RATE_LIMIT_MAX_WAIT_SECONDS
-from service.review.inference_usage import InferenceUsage, _ACTIVE_USAGE, _ACTIVE_CALL, record_model_response, record_compute_decision
+from service.review.inference_usage import InferenceUsage, _ACTIVE_USAGE, _ACTIVE_CALL, record_model_response, record_compute_decision, usage_events_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def review_execution(
         yield
     finally:
         usage = _ACTIVE_USAGE.get()
-        if event_callback and usage is not None:
+        if event_callback and usage is not None and usage_events_enabled():
             try:
                 event_callback({"type": "status", "state": "inference_usage", "inferenceUsage": usage.summary()})
             except Exception:

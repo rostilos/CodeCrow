@@ -111,7 +111,7 @@ public class SiteSettingsProvider {
     private String propLlmGoogleKey;
 
     // ── SMTP ──
-    @Value("${codecrow.smtp.enabled:}")
+    @Value("${codecrow.smtp.enabled:${codecrow.email.enabled:}}")
     private String propSmtpEnabled;
     @Value("${spring.mail.host:}")
     private String propSmtpHost;
@@ -121,11 +121,11 @@ public class SiteSettingsProvider {
     private String propSmtpUsername;
     @Value("${spring.mail.password:}")
     private String propSmtpPassword;
-    @Value("${codecrow.smtp.from-address:}")
+    @Value("${codecrow.smtp.from-address:${codecrow.email.from:}}")
     private String propSmtpFromAddress;
-    @Value("${codecrow.smtp.from-name:}")
+    @Value("${codecrow.smtp.from-name:${codecrow.email.from-name:}}")
     private String propSmtpFromName;
-    @Value("${codecrow.smtp.starttls:}")
+    @Value("${codecrow.smtp.starttls:${spring.mail.properties.mail.smtp.starttls.enable:}}")
     private String propSmtpStarttls;
 
     // ── Google OAuth ──

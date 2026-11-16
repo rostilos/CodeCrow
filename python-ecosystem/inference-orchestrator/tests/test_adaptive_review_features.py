@@ -405,3 +405,14 @@ def test_stage_2_conversion_preserves_hypothesis_and_evidence_gaps():
         description="Removal breaks callers", evidence="Exact import", business_impact="Startup fails", suggestion="Update caller", hypothesis="Caller imports deleted module", evidenceGaps=["generated import list"])
     converted = _convert_cross_file_issues([candidate])[0]
     assert converted.hypothesis == candidate.hypothesis and converted.evidenceGaps == candidate.evidenceGaps
+
+
+@pytest.mark.asyncio
+async def test_internal_usage_remains_available_when_customer_usage_events_are_disabled(monkeypatch):
+    monkeypatch.setenv("INFERENCE_USAGE_EVENTS_ENABLED", "false")
+    events = []
+    with review_execution(FairReviewScheduler(1), asyncio.Semaphore(1), event_callback=events.append):
+        async with review_model_slot("discovery"):
+            record_model_response({"usage_metadata": {"input_tokens": 19, "output_tokens": 4}})
+        assert current_inference_usage()["stages"]["discovery"]["observedInputTokens"] == 19
+    assert all("inferenceUsage" not in event and event.get("state") != "inference_usage" for event in events)

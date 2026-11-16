@@ -878,3 +878,13 @@ def test_final_verification_assessment_controls_completion_after_recovery(remain
     ReviewService._include_coverage_notice(SimpleNamespace(), response)
     assert response['result']['analysisCompletion']['status'] == expected
     assert ('verification' in response['result']['analysisCompletion']['incompleteStages']) == bool(remaining)
+
+
+def test_cloud_visibility_omits_usage_and_private_capture_receipts(monkeypatch):
+    from service.review.review_service import ReviewService
+    monkeypatch.setenv("INFERENCE_USAGE_EVENTS_ENABLED", "false")
+    events = []
+    ReviewService._emit_event(events.append, {"type": "status", "state": "inference_usage", "inferenceUsage": {"inputTokens": 10}})
+    ReviewService._emit_event(events.append, {"type": "status", "state": "review_quality_capture_completed", "qualityCapture": {"provider": "private-provider"}})
+    ReviewService._emit_event(events.append, {"type": "status", "state": "processing", "message": "Reviewing"})
+    assert events == [{"type": "status", "state": "processing", "message": "Reviewing"}]

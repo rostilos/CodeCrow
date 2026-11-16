@@ -92,7 +92,11 @@ class QaDocumentationService:
             max_tokens=16_384,
         )
 
+        from llm.execution_authorization import authorize_model
         from llm.inference_observer import observe_model
+        llm = authorize_model(llm, project_id=project_id, operation="qa_documentation",
+                            model=ai_model or self._ai_model, provider=ai_provider or self._ai_provider,
+                            api_key=ai_api_key or self._ai_api_key)
         llm = observe_model(llm, project_id=project_id, operation="qa_documentation",
                             model=ai_model or self._ai_model, provider=ai_provider or self._ai_provider,
                             api_key=ai_api_key or self._ai_api_key)

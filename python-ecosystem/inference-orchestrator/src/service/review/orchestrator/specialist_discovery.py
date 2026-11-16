@@ -43,7 +43,9 @@ def select_specialist_batches(batches: list, prepared_context: Any, cap: int) ->
                 file = item["file"]
                 fragments.extend(str(area) for area in getattr(file, "focus_areas", ()))
                 diff = prepared_context.diff_by_path.get(file.path)
-                fragments.append(str(getattr(diff, "content", "")))
+                # Diff headers (notably composer.lock) are not behavioral evidence.
+                fragments.extend(line[1:] for line in str(getattr(diff, "content", "")).splitlines()
+                                 if line.startswith(('+', '-')) and not line.startswith(('+++', '---')))
                 risk += int(str(getattr(file, "risk_level", "")).upper() in {"HIGH", "CRITICAL"})
             text = "\n".join(fragments).casefold()
             matches = sum(bool(re.search(r"\b" + re.escape(cue), text)) for cue in specialist.cues)

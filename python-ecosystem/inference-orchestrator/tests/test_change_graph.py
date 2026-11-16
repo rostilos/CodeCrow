@@ -1252,11 +1252,12 @@ async def test_dense_symbol_graph_does_not_skip_semantic_scan(monkeypatch):
         rag_client=SimpleNamespace(query_code_graph=base, query_review_graph=proposed))
     assert result['semanticStatus'] == 'complete' and len(prompts) == 1
     assert result['files'][0]['scanStatus'] == 'scanned'
-    visible = json.JSONDecoder().raw_decode(prompts[0].split('Host-collected cumulative dependency graph:\n')[1])[0]
+    from tests.context_compaction_helpers import canonical_context, expand_context
+    visible = expand_context(json.JSONDecoder().raw_decode(prompts[0].split('Host-collected cumulative dependency graph:\n')[1])[0])
+    assert canonical_context(visible) == canonical_context(graph_prompt_context(result['graph']))
     focused = graph_prompt_context(result['graph'], ['changed.py'])
-    assert len(json.dumps(focused).encode()) // 2 > 4000
-    assert visible['edges'] == focused['edges'] and visible['entities'] == focused['entities']
     assert sum(sum(row[3]) for row in visible['edges']) == len(edges)
+    assert len(prompts[0].encode()) <= 8000
     assert len(result['graph']['edges']) == len(edges)
     assert len(focused['symbolDetail']['edges']) == len(edges)
     assert all(o['attributes']['signature'] for e in result['graph']['edges'] for o in e['observations'])

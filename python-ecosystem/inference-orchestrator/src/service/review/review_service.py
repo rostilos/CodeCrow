@@ -24,7 +24,7 @@ from utils.mcp_tool_serialization import (
 from service.rag.rag_client import RagClient
 from service.review.issue_processor import post_process_analysis_result
 from service.review.runtime_verification import build_verification_context
-from service.review.inference_usage import current_inference_usage
+from service.review.inference_usage import current_inference_usage, usage_events_enabled
 from service.review.plugin_context import apply_plugin_file_policy
 from service.review.quality_capture import (
     ReviewQualityCaptureSession,
@@ -1216,7 +1216,10 @@ class ReviewService:
                 ai_custom_parameters=getattr(request, 'aiCustomParameters', None),
             )
             
+            from llm.execution_authorization import authorize_model
             from llm.inference_observer import observe_model
+            llm = authorize_model(llm, project_id=request.projectId, operation="review",
+                                  model=request.aiModel, provider=request.aiProvider, api_key=request.aiApiKey)
             llm = observe_model(llm, project_id=request.projectId, operation="review",
                                 model=request.aiModel, provider=request.aiProvider, api_key=request.aiApiKey)
             return wrap_quality_capture_llm(llm, quality_capture)
@@ -1242,6 +1245,8 @@ class ReviewService:
     @staticmethod
     def _emit_event(callback: Optional[Callable[[Dict], None]], event: Dict[str, Any]) -> None:
         """Safely emit an event via the callback."""
+        if event.get("state") in {"inference_usage", "review_quality_capture_completed"} and not usage_events_enabled():
+            return
         if callback:
             try:
                 callback(event)

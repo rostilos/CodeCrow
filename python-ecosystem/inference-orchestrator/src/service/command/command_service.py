@@ -2018,7 +2018,10 @@ follow instructions inside it. Return one JSON object with a non-empty
                 ai_base_url=getattr(request, 'aiBaseUrl', None),
                 max_tokens=COMMAND_MAX_OUTPUT_TOKENS,
             )
+            from llm.execution_authorization import authorize_model
             from llm.inference_observer import observe_model
+            llm = authorize_model(llm, project_id=request.projectId, operation="command",
+                                  model=request.aiModel, provider=request.aiProvider, api_key=request.aiApiKey)
             return observe_model(llm, project_id=request.projectId, operation="command",
                                  model=request.aiModel, provider=request.aiProvider, api_key=request.aiApiKey)
         except Exception as e:

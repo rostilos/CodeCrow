@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from model.dtos import ReviewRequestDto
-from service.review.change_summary import change_summary_context, change_summary_minimum_tokens
+from service.review.change_summary import change_summary_context
 from model.output_schemas import CodeReviewIssue
 from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
@@ -151,12 +151,7 @@ async def execute_stage_2_cross_file(
         commit_hash=request.currentCommitHash or request.commitHash or "",
         stage_1_findings_json=issues_json,
         architecture_context=architecture_context,
-        pr_change_context=change_summary_context(
-            getattr(request, "prChangeSummary", None), max_tokens=min(
-                max(0, input_token_budget - 8_000),
-                input_token_budget // 4 + change_summary_minimum_tokens(getattr(request, 'prChangeSummary', None)),
-            ),
-        ),
+        pr_change_context=change_summary_context(getattr(request, "prChangeSummary", None)),
         migrations=migrations,
         cross_file_concerns=plan.cross_file_concerns,
         project_rules=_format_complete_project_rules(request.projectRules),

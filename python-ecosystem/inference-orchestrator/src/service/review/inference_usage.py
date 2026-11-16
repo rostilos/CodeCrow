@@ -4,7 +4,12 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import time
+import os
 from typing import Any, Mapping
+
+
+def usage_events_enabled() -> bool:
+    return os.environ.get("INFERENCE_USAGE_EVENTS_ENABLED", "true").lower() not in {"false", "0", "no"}
 
 
 def _mapping(value: Any) -> Mapping:
