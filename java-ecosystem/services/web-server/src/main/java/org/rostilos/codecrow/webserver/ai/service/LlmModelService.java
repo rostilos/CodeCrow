@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.time.OffsetDateTime;
+import org.rostilos.codecrow.core.model.ai.LlmModel;
 
 @Service
 public class LlmModelService {
@@ -65,6 +67,17 @@ public class LlmModelService {
                 modelPage.getTotalElements(),
                 modelPage.getTotalPages()
         );
+    }
+
+    public record ModelProviders(List<LlmModel.ModelProvider> providers, OffsetDateTime syncedAt) {}
+
+    @Transactional(readOnly = true)
+    public ModelProviders getOpenRouterProviders(String modelId) {
+        return llmModelRepository.findByProviderKeyAndModelId(AIProviderKey.OPENROUTER, modelId)
+                .map(model -> new ModelProviders(
+                        model.getProviders() == null ? List.of() : model.getProviders(),
+                        model.getProvidersSyncedAt()))
+                .orElseGet(() -> new ModelProviders(List.of(), null));
     }
 
     /**

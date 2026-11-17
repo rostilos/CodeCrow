@@ -183,6 +183,7 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
                 aiConnection.getAiModel(),
                 decryptedApiKey,
                 aiConnection.getBaseUrl(),
+                aiConnection.getCustomParameters(),
                 prId,
                 payload.sourceBranch(),
                 payload.targetBranch(),

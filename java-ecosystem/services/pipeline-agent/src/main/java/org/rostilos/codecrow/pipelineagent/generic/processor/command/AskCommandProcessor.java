@@ -490,6 +490,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
                 aiConnection.getAiModel(),
                 decryptedApiKey,
                 aiConnection.getBaseUrl(),
+                aiConnection.getCustomParameters(),
                 question,
                 prId,
                 repositoryBranch,

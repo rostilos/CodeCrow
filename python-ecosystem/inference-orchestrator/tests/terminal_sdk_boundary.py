@@ -172,7 +172,32 @@ async def exercise_lost_provider_response():
                     raise AssertionError('Lost provider response must fail')
                 assert len(requests) == 1, 'A lost response must not repeat paid inference'
 
+async def exercise_native_openrouter_routing():
+    from openai import APITimeoutError, InternalServerError
+    for order in (["azure"], ["azure", "openai"]):
+        for failure in ("timeout", "server_error"):
+            requests = []
+            def respond(request):
+                requests.append(json.loads(request.content))
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("Outcome unknown", request=request)
+                return httpx.Response(503, json={"error": {"message": "Unavailable"}})
+            routing = {"order": order, "allow_fallbacks": False}
+            with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+                with patch("llm.llm_factory.ChatOpenRouter", side_effect=lambda **kw: ChatOpenRouter(http_client=http, **kw)):
+                    model = LLMFactory.create_llm("openai/gpt-4o", "OPENROUTER", "offline-key",
+                        ai_custom_parameters={"extra_body": {"provider": routing}})
+                try:
+                    model.invoke("offline test")
+                except (APITimeoutError, InternalServerError):
+                    pass
+                else:
+                    raise AssertionError("Failed provider must surface failure")
+            assert len(requests) == 1, "Provider routing must not add paid retries"
+            assert requests[0]["provider"] == routing
+
 async def main():
+    await exercise_native_openrouter_routing()
     await exercise_lost_provider_response()
     await exercise_openrouter_exploration()
     for model_type in (ChatOpenAI, ChatOpenRouter):

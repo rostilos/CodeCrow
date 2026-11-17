@@ -861,6 +861,9 @@ class LLMFactory:
                 default_headers=extra_headers,
                 **_provider_transport_settings(),
             )
+            routing = (ai_custom_parameters or {}).get("extra_body", {}).get("provider")
+            if routing:
+                kwargs["extra_body"] = {"provider": dict(routing)}
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
             return ChatOpenRouter(**kwargs)

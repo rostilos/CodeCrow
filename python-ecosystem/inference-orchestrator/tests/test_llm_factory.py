@@ -186,6 +186,16 @@ class TestCreateLlm:
         )
         assert llm is not None
 
+    @pytest.mark.parametrize("order", [["azure"], ["azure", "openai"]])
+    def test_native_openrouter_passes_saved_provider_routing(self, order):
+        routing = {"order": order, "allow_fallbacks": False}
+        with patch("llm.llm_factory.ChatOpenRouter") as constructor:
+            LLMFactory.create_llm("openai/gpt-4o", "OPENROUTER", "test-key",
+                ai_custom_parameters={"extra_body": {"provider": routing}})
+        constructor.assert_called_once()
+        assert constructor.call_args.kwargs["extra_body"] == {"provider": routing}
+        assert constructor.call_args.kwargs["max_retries"] == 0
+
     def test_openrouter_omits_completion_cap_when_caller_does_not_request_one(self):
         with patch("llm.llm_factory.ChatOpenRouter") as constructor:
             llm = LLMFactory.create_llm(

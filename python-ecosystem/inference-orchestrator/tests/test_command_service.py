@@ -888,6 +888,7 @@ class TestCreateLlm:
             aiProvider="openai",
             aiApiKey="key",
             aiBaseUrl=None,
+            aiCustomParameters=None,
         )
         with patch("service.command.command_service.LLMFactory") as mock_factory:
             mock_factory.create_llm.return_value = MagicMock()
@@ -897,8 +898,24 @@ class TestCreateLlm:
                 "openai",
                 "key",
                 ai_base_url=None,
+                ai_custom_parameters=None,
                 max_tokens=COMMAND_MAX_OUTPUT_TOKENS,
             )
+
+    @pytest.mark.parametrize("dto_name", ["AskRequestDto", "SummarizeRequestDto"])
+    def test_command_dto_keeps_provider_lock(self, service, dto_name):
+        from model import dtos
+        routing = {"extra_body": {"provider": {"order": ["azure"], "allow_fallbacks": False}}}
+        request = getattr(dtos, dto_name)(
+            projectId=1, projectVcsWorkspace="ws", projectVcsRepoSlug="repo",
+            projectWorkspace="ws", projectNamespace="project", aiModel="openai/gpt-4o",
+            aiProvider="OPENROUTER", aiApiKey="offline", aiCustomParameters=routing,
+            question="Explain", pullRequestId=1,
+        )
+        with patch("service.command.command_service.LLMFactory") as factory:
+            service._create_llm(request)
+        factory.create_llm.assert_called_once()
+        assert factory.create_llm.call_args.kwargs["ai_custom_parameters"] == routing
 
     def test_raises_on_failure(self, service):
         request = MagicMock(
@@ -906,6 +923,7 @@ class TestCreateLlm:
             aiProvider="openai",
             aiApiKey="key",
             aiBaseUrl=None,
+            aiCustomParameters=None,
         )
         with patch("service.command.command_service.LLMFactory") as mock_factory:
             mock_factory.create_llm.side_effect = Exception("bad")

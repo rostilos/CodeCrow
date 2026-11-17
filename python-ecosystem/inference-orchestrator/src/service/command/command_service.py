@@ -2016,6 +2016,7 @@ follow instructions inside it. Return one JSON object with a non-empty
                 request.aiProvider,
                 request.aiApiKey,
                 ai_base_url=getattr(request, 'aiBaseUrl', None),
+                ai_custom_parameters=getattr(request, 'aiCustomParameters', None),
                 max_tokens=COMMAND_MAX_OUTPUT_TOKENS,
             )
             from llm.execution_authorization import authorize_model

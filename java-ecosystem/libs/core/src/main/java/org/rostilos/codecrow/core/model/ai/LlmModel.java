@@ -1,6 +1,9 @@
 package org.rostilos.codecrow.core.model.ai;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+import java.util.List;
 import java.time.OffsetDateTime;
 
 @Entity
@@ -40,6 +43,20 @@ public class LlmModel {
 
     @Column(name = "last_synced_at", nullable = false)
     private OffsetDateTime lastSyncedAt;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "providers", columnDefinition = "jsonb")
+    private List<ModelProvider> providers;
+
+    @Column(name = "providers_synced_at")
+    private OffsetDateTime providersSyncedAt;
+
+    public record ModelProvider(String slug, String name) {}
+
+    public List<ModelProvider> getProviders() { return providers; }
+    public void setProviders(List<ModelProvider> providers) { this.providers = providers; }
+    public OffsetDateTime getProvidersSyncedAt() { return providersSyncedAt; }
+    public void setProvidersSyncedAt(OffsetDateTime value) { this.providersSyncedAt = value; }
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

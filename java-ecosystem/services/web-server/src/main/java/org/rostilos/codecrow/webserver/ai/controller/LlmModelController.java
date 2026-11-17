@@ -58,6 +58,12 @@ public class LlmModelController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping("/openrouter-providers")
+    @PreAuthorize("isAuthenticated()")
+    public LlmModelService.ModelProviders getOpenRouterProviders(@RequestParam String modelId) {
+        return llmModelService.getOpenRouterProviders(modelId);
+    }
+
     /**
      * Check if models are available in the database.
      */

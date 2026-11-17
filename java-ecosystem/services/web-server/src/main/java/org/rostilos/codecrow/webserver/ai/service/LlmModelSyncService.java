@@ -70,7 +70,7 @@ public class LlmModelSyncService {
         }
 
         // Clean up stale models (not seen in current sync)
-        int cleanedUp = cleanupStaleModels(syncStartTime);
+        int cleanedUp = cleanupStaleModels(syncStartTime, syncedCounts);
         
         logger.info("LLM model sync completed. Synced: {}, Cleaned up: {}, Errors: {}", 
                 syncedCounts, cleanedUp, errors.size());
@@ -116,6 +116,10 @@ public class LlmModelSyncService {
                 existingModel.setInputPricePerMillion(model.getInputPricePerMillion());
                 existingModel.setOutputPricePerMillion(model.getOutputPricePerMillion());
                 existingModel.setLastSyncedAt(model.getLastSyncedAt());
+                if (model.getProvidersSyncedAt() != null) {
+                    existingModel.setProviders(model.getProviders());
+                    existingModel.setProvidersSyncedAt(model.getProvidersSyncedAt());
+                }
                 llmModelRepository.save(existingModel);
             } else {
                 // Insert new
@@ -127,13 +131,12 @@ public class LlmModelSyncService {
         return count;
     }
 
-    private int cleanupStaleModels(OffsetDateTime threshold) {
+    private int cleanupStaleModels(OffsetDateTime threshold, Map<AIProviderKey, Integer> syncedCounts) {
         int totalCleaned = 0;
         
-        for (AIProviderKey provider : AIProviderKey.values()) {
-            // Only clean up if we have any models for this provider synced after threshold
-            // This prevents deleting all models if a provider sync completely fails
-            if (llmModelRepository.existsByProviderKey(provider)) {
+        for (AIProviderKey provider : syncedCounts.keySet()) {
+            // Empty or failed fetches must not erase the last reliable catalogue.
+            if (syncedCounts.get(provider) > 0) {
                 int cleaned = llmModelRepository.deleteStaleModels(provider, threshold);
                 totalCleaned += cleaned;
                 if (cleaned > 0) {

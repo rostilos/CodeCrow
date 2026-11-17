@@ -335,6 +335,7 @@ class SummarizeRequestDto(BaseModel):
     aiModel: str
     aiApiKey: str
     aiBaseUrl: Optional[str] = None
+    aiCustomParameters: Optional[Dict[str, Any]] = None
     pullRequestId: int
     sourceBranch: Optional[str] = None
     targetBranch: Optional[str] = None
@@ -368,6 +369,7 @@ class AskRequestDto(BaseModel):
     aiModel: str
     aiApiKey: str
     aiBaseUrl: Optional[str] = None
+    aiCustomParameters: Optional[Dict[str, Any]] = None
     question: str
     pullRequestId: Optional[int] = None
     repositoryRevision: Optional[str] = Field(
