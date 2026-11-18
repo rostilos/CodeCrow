@@ -67,7 +67,7 @@ def compact_change_context(context: dict) -> str:
     if values:
         compact = dict(
             encoding=f'Every {{{reference_key}:N}} means the exact JSON value values[N]; expand nested references too. '
-                     'Expand path references when calling tools. No descriptions or relationships are omitted.',
+                     'Expand path references when calling tools. References preserve the supplied records exactly.',
             referenceKey=reference_key, values=values, context=encoded,
         )
     rendered = _json(compact)

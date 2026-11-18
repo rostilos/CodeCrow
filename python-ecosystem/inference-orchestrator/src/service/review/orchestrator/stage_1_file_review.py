@@ -20,7 +20,9 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import FileReviewBatchOutput, FileReviewOutput, ReviewPlan
 from utils.prompts.prompt_builder import PromptBuilder
-from service.review.change_summary import change_summary_context, change_summary_minimum_tokens, group_review_items_by_scan, prepare_change_summary_context
+from service.review.change_summary import render_change_summary_context, group_review_items_by_scan, prepare_change_summary_context
+from service.review.change_context_records import change_context_records, focused_change_context
+from service.review.change_graph import graph_symbol_context
 from utils.diff_processor import (
     DiffChangeType,
     ProcessedDiff,
@@ -1333,11 +1335,19 @@ def _render_stage1_prompt(
     prepared = material.prepared_context
     if prepared.change_context is None:
         prepared.change_context = prepare_change_summary_context(summary)
-        prepared.change_context_minimum_tokens = change_summary_minimum_tokens(
-            summary, prepared_context=prepared.change_context,
-        )
-    prompt += change_summary_context(summary, material.batch_file_paths,
-                                     prepared_context=prepared.change_context)
+        try:
+            prepared.change_records = tuple(change_context_records(prepared.change_context))
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            logger.warning('Optional PR change context malformed; source review continues')
+            prepared.change_context = {}
+    symbols = None
+    if 'entities' in prepared.change_context.get('graph', {}):
+        try:
+            symbols = graph_symbol_context(summary['graph'], material.batch_file_paths)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            logger.warning('Optional focused symbol context unavailable; retaining file descriptions')
+    prompt += render_change_summary_context(focused_change_context(
+        prepared.change_context, material.batch_file_paths, prepared.change_records, symbols))
     return prompt, plugin_context_text
 
 
@@ -1390,21 +1400,20 @@ def chunk_files(
     return batches
 
 
-def _stage1_batch_token_limit(request: ReviewRequestDto, summary_minimum_tokens: Optional[int] = None) -> int:
+def _stage1_batch_token_limit(request: ReviewRequestDto) -> int:
     model_context_tokens = _positive_int_or_default(
         getattr(request, "maxAllowedTokens", None),
         200000,
     )
     return min(
         max(10_000, model_context_tokens - 20_000),
-        STAGE1_BATCH_TOKEN_BUDGET + (change_summary_minimum_tokens(getattr(request, 'prChangeSummary', None))
-                                   if summary_minimum_tokens is None else summary_minimum_tokens),
+        STAGE1_BATCH_TOKEN_BUDGET,
     )
 
 
-def _stage1_packing_token_limit(request: ReviewRequestDto, summary_minimum_tokens: Optional[int] = None) -> int:
+def _stage1_packing_token_limit(request: ReviewRequestDto) -> int:
     """Reserve prompt space for the deterministic relation briefing."""
-    full_limit = _stage1_batch_token_limit(request, summary_minimum_tokens)
+    full_limit = _stage1_batch_token_limit(request)
     if not (
         getattr(request, "ragEnabled", True)
         and _has_exact_proposed_tree_binding(request)
@@ -1507,9 +1516,7 @@ async def create_smart_batches_wrapper(
             200000,
         )
         model_safe_limit = max(10_000, model_context_tokens - 20_000)
-        batch_token_limit = _stage1_packing_token_limit(
-            request, prepared_context.change_context_minimum_tokens if prepared_context else None,
-        )
+        batch_token_limit = _stage1_packing_token_limit(request)
         graph_content_limit = max(
             1_000,
             batch_token_limit - shared_prompt_tokens,
@@ -2655,7 +2662,7 @@ async def execute_stage_1_file_reviews(
         STAGE1_MAX_CURRENT_FILE_CHARS * max(1, len(items))
     )
     batches = group_review_items_by_scan(items, getattr(request, "prChangeSummary", None))
-    stage1_token_budget = _stage1_packing_token_limit(request, prepared_context.change_context_minimum_tokens)
+    stage1_token_budget = _stage1_packing_token_limit(request)
     batches = await asyncio.to_thread(
         _repack_stage1_batches_by_rendered_input,
         batches,

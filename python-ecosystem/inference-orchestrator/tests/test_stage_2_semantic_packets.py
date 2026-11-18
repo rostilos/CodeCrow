@@ -113,13 +113,14 @@ def test_stage_2_example_does_not_invent_optional_provenance():
     assert "PRF001 or DELTA001 from the PR evidence ledger" not in prompt
 
 
-def test_every_semantic_packet_retains_complete_pr_change_context():
-    context = 'PR-WIDE CHANGE CONTEXT: feature A changes B; changed.py -> consumer.py'
+def test_every_semantic_packet_retains_shared_overview():
+    overview = 'Feature A changes B; changed.py -> consumer.py'
+    context = dict(summary=overview, files=[])
     findings = [{'file': f'file{i}.py', 'description': f'Finding {i}: ' + 'evidence ' * 500}
                 for i in range(30)]
     packet_input = replace(_packet_input(), stage_1_findings_json=json.dumps(findings),
         pr_change_context=context, token_budget=8000)
     prompts = build_stage_2_prompts(packet_input)
     assert len(prompts) > 1
-    assert all(context in prompt for prompt in prompts)
+    assert all(overview in prompt for prompt in prompts)
     assert all(stage_2_semantic_packets._estimated_prompt_tokens(prompt) <= 8000 for prompt in prompts)

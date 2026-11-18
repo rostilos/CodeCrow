@@ -9,7 +9,7 @@ def test_real_graph_tool_schema_bounds():
     project = Path(__file__).resolve().parents[1]
     result = subprocess.run(
         [sys.executable, '-c', PROBE], cwd=project,
-        env={**os.environ, 'PYTHONPATH': str(project / 'src'), 'MCP_USE_ANONYMIZED_TELEMETRY': 'false'},
+        env={**os.environ, 'PYTHONPATH': os.pathsep.join((str(project / 'src'), str(project.parents[1] / 'analysis-plugins/contracts/python'))), 'MCP_USE_ANONYMIZED_TELEMETRY': 'false'},
         capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

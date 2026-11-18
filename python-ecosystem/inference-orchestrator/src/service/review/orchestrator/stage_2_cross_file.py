@@ -2,6 +2,7 @@
 from llm.provider_errors import raise_if_outcome_unknown
 from service.review.execution_scheduler import invoke_review_model
 from service.review.inference_usage import record_compute_decision
+import asyncio
 import json
 import hashlib
 import logging
@@ -9,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from model.dtos import ReviewRequestDto
-from service.review.change_summary import change_summary_context
+from service.review.change_summary import prepare_change_summary_context
 from model.output_schemas import CodeReviewIssue
 from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
@@ -73,7 +74,7 @@ def _build_stage_2_prompts(
     task_context: str,
     task_history_context: str,
     evidence_ledger: PrEvidenceLedger,
-    pr_change_context: str = "",
+    pr_change_context: Optional[Mapping[str, Any]] = None,
     token_budget: int = STAGE2_INPUT_TOKEN_TARGET,
 ) -> List[str]:
     """Compatibility facade over the typed semantic-packet boundary."""
@@ -89,7 +90,7 @@ def _build_stage_2_prompts(
         task_context=task_context,
         task_history_context=task_history_context,
         evidence_ledger=evidence_ledger,
-        pr_change_context=pr_change_context,
+        pr_change_context=pr_change_context or {},
         token_budget=token_budget,
     ))
 
@@ -145,13 +146,13 @@ async def execute_stage_2_cross_file(
         ),
     )
     input_token_budget = _stage_2_input_token_budget(request)
-    prompts = _build_stage_2_prompts(
+    prompts = await asyncio.to_thread(_build_stage_2_prompts,
         repo_slug=request.projectVcsRepoSlug,
         pr_title=request.prTitle or "",
         commit_hash=request.currentCommitHash or request.commitHash or "",
         stage_1_findings_json=issues_json,
         architecture_context=architecture_context,
-        pr_change_context=change_summary_context(getattr(request, "prChangeSummary", None)),
+        pr_change_context=prepare_change_summary_context(getattr(request, "prChangeSummary", None)),
         migrations=migrations,
         cross_file_concerns=plan.cross_file_concerns,
         project_rules=_format_complete_project_rules(request.projectRules),
@@ -171,6 +172,9 @@ async def execute_stage_2_cross_file(
             )
 
     prompt_digests = [_prompt_digest(prompt) for prompt in prompts]
+    record_compute_decision("stage_2_plan", packets=len(prompts),
+        totalPromptChars=sum(len(prompt) for prompt in prompts),
+        maxPromptChars=max((len(prompt) for prompt in prompts), default=0))
     if prompt_provenance is not None:
         prompt_provenance.clear()
         prompt_provenance["generationPromptDigests"] = json.dumps(
@@ -178,6 +182,7 @@ async def execute_stage_2_cross_file(
             separators=(",", ":"),
         )
         prompt_provenance["generationPromptCount"] = str(len(prompts))
+        prompt_provenance["generationPromptChars"] = str(sum(len(prompt) for prompt in prompts))
         prompt_provenance["omittedPacketCount"] = str(max(
             (getattr(prompt, "omitted_packet_count", 0) for prompt in prompts),
             default=0,

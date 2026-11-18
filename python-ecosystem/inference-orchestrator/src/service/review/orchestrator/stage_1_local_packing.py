@@ -53,7 +53,7 @@ class Stage1PreparedContext:
     task_context: str = "No task context available."
     current_source_batch_char_budget: Optional[int] = None
     change_context: Optional[Dict[str, Any]] = None
-    change_context_minimum_tokens: Optional[int] = None
+    change_records: tuple = ()
 
 
 Stage1Batch = List[Dict[str, Any]]

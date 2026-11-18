@@ -288,7 +288,7 @@ class TestExecuteStage2CrossFile:
 
         assert build.call_args.kwargs["token_budget"] == 30_000
         assert build.call_args.kwargs["architecture_context"] == "No architecture context available (enrichment data not provided)."
-        assert "Summary marker" in build.call_args.kwargs["pr_change_context"]
+        assert build.call_args.kwargs["pr_change_context"]["files"][0]["summary"] == "Summary marker"
 
 
 def _stage_2_ledger(evidence):
@@ -338,7 +338,7 @@ class TestStage2SemanticPacking:
         prompts = _build_stage_2_prompts(
             repo_slug="owner/repo", pr_title="Summary and graph", commit_hash="abc",
             stage_1_findings_json="[]", architecture_context=architecture,
-            pr_change_context="PR-WIDE CHANGE CONTEXT\nSEMANTIC_CHANGE_MARKER",
+            pr_change_context={"summary": "SEMANTIC_CHANGE_MARKER", "files": []},
             migrations="", cross_file_concerns=[], project_rules="", task_context="",
             task_history_context="", evidence_ledger=_stage_2_ledger(evidence),
             token_budget=budget,
@@ -1041,6 +1041,8 @@ class TestMergeStage2SemanticResults:
                     prompt_provenance=provenance,
                 )
 
-        decision.assert_called_once_with("stage_2_result", completed=0, failed=1, optionalFailures=0)
+        decision.assert_any_call("stage_2_plan", packets=1, totalPromptChars=8, maxPromptChars=8)
+        decision.assert_any_call("stage_2_result", completed=0, failed=1, optionalFailures=0)
+        assert decision.call_count == 2
         assert provenance["coreSemanticShardFailures"] == "1"
         assert provenance["completePrEvidenceVisible"] == "false"

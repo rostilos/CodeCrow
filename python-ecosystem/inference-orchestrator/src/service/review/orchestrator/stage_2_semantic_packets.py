@@ -15,6 +15,9 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from model.dtos import ReviewRequestDto
 from model.multi_stage import CrossFileAnalysisResult
 from service.review.pr_evidence import PrEvidenceLedger
+from service.review.change_summary import render_change_summary_context
+from service.review.change_context_records import ChangeContextRecord, change_context_records, scoped_change_context
+from service.review.context_compaction import compact_change_context
 from utils.prompts.prompt_builder import PromptBuilder
 
 
@@ -38,8 +41,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Stage 2 shares the review input target with Stage 1. This is a rendered-prompt
-# target; the review profile also places a finite ceiling on concrete packets.
+# Stage 2 shares Stage 1's rendered-input packing target; all records are assigned across packets.
 STAGE2_INPUT_TOKEN_TARGET = max(
     10_000,
     _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000),
@@ -53,9 +55,8 @@ _STAGE2_CONTEXT_RESERVE_TOKENS = 20_000
 _STAGE2_ESTIMATOR_SAFETY_TOKENS = 256
 _STAGE2_OMISSION_NOTICE_RESERVE_TOKENS = 256
 _SEMANTIC_SHARD_NOTICE = (
-    "This is one bounded semantic shard of Stage 2 input. Invocation-coverage "
-    "diagnostics identify packets that could not be admitted under the review "
-    "profile. Absence from this shard is not evidence that code, a requirement, "
+    "This packet owns a portion of the PR evidence and change records. Other "
+    "records are assigned to other packets. Absence here is not evidence that code, a requirement, "
     "or a relationship is absent from the pull request."
 )
 
@@ -131,6 +132,7 @@ class _Stage2Unit:
     findings: tuple[Dict[str, Any], ...] = ()
     relationships: tuple[Dict[str, Any], ...] = ()
     metadata: tuple[Dict[str, Any], ...] = ()
+    change_records: tuple[ChangeContextRecord, ...] = ()
     full_pr_parts: tuple[str, ...] = ()
     delta_parts: tuple[str, ...] = ()
     task_parts: tuple[str, ...] = ()
@@ -151,6 +153,7 @@ class _Stage2Packet:
     findings: List[Dict[str, Any]] = field(default_factory=list)
     relationships: List[Dict[str, Any]] = field(default_factory=list)
     metadata: List[Dict[str, Any]] = field(default_factory=list)
+    change_records: List[ChangeContextRecord] = field(default_factory=list)
     full_pr_parts: List[str] = field(default_factory=list)
     delta_parts: List[str] = field(default_factory=list)
     task_parts: List[str] = field(default_factory=list)
@@ -165,6 +168,7 @@ class _Stage2Packet:
         self.findings.extend(unit.findings)
         self.relationships.extend(unit.relationships)
         self.metadata.extend(unit.metadata)
+        self.change_records.extend(unit.change_records)
         self.full_pr_parts.extend(unit.full_pr_parts)
         self.delta_parts.extend(unit.delta_parts)
         self.task_parts.extend(unit.task_parts)
@@ -202,7 +206,7 @@ class _Stage2PromptStatic:
     architecture_path_table: Mapping[str, str]
     full_pr_status: str
     delta_status: str
-    pr_change_context: str = ''
+    pr_change_context: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _stage_2_packet_priority(packet: _Stage2Packet) -> int:
@@ -212,6 +216,7 @@ def _stage_2_packet_priority(packet: _Stage2Packet) -> int:
         or packet.full_pr_parts
         or packet.delta_parts
         or packet.review_hunk_ids
+        or packet.change_records
     ):
         return 0
     if packet.relationships or packet.metadata or packet.dependency_anchors:
@@ -225,6 +230,7 @@ def _stage_2_unit_priority(unit: _Stage2Unit) -> int:
         or unit.full_pr_parts
         or unit.delta_parts
         or unit.review_hunk_ids
+        or unit.change_records
     ):
         return 0
     if unit.relationships or unit.metadata or unit.dependency_anchors:
@@ -257,9 +263,7 @@ def _stage_2_input_token_budget(request: ReviewRequestDto) -> int:
         # Keep half available for generation and let the semantic packer report
         # any indivisible input unit that cannot fit the remaining half intact.
         model_safe_input = max(1, model_context_tokens // 2)
-    from service.review.change_summary import change_summary_minimum_tokens
-    return min(STAGE2_INPUT_TOKEN_TARGET + change_summary_minimum_tokens(
-        getattr(request, 'prChangeSummary', None)), model_safe_input)
+    return min(STAGE2_INPUT_TOKEN_TARGET, model_safe_input)
 
 
 def _estimated_prompt_tokens(prompt: str) -> int:
@@ -289,7 +293,7 @@ class Stage2SemanticPacketInput:
     task_context: str
     task_history_context: str
     evidence_ledger: PrEvidenceLedger
-    pr_change_context: str = ""
+    pr_change_context: Mapping[str, Any] = field(default_factory=dict)
     token_budget: int = STAGE2_INPUT_TOKEN_TARGET
 
 
@@ -327,7 +331,7 @@ def _build_stage_2_prompts_impl(
     task_context: str,
     task_history_context: str,
     evidence_ledger: PrEvidenceLedger,
-    pr_change_context: str,
+    pr_change_context: Mapping[str, Any],
     token_budget: int,
 ) -> List[Stage2Prompt]:
     """Render one complete prompt or pack bounded semantic Stage 2 shards.
@@ -338,6 +342,12 @@ def _build_stage_2_prompts_impl(
     core PR evidence and exact architecture ordered before optional context.
     """
     findings = _parse_stage_1_findings(stage_1_findings_json)
+    try:
+        context_records = change_context_records(pr_change_context)
+        rendered_change_context = render_change_summary_context(scoped_change_context(pr_change_context, context_records))
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        logger.warning('Optional Stage 2 change context malformed; continuing with source evidence')
+        pr_change_context, context_records, rendered_change_context = {}, [], ''
     complete_prompt = PromptBuilder.build_stage_2_cross_file_prompt(
         repo_slug=repo_slug,
         pr_title=pr_title,
@@ -349,7 +359,7 @@ def _build_stage_2_prompts_impl(
         project_rules=project_rules,
         task_context=task_context,
         task_history_context=task_history_context,
-        pr_change_summary="\n\n".join(part for part in (pr_change_context, evidence_ledger.full_pr_context) if part),
+        pr_change_summary="\n\n".join(part for part in (rendered_change_context, evidence_ledger.full_pr_context) if part),
         incremental_delta_summary=evidence_ledger.incremental_delta_context,
     )
     if _estimated_prompt_tokens(complete_prompt) <= token_budget:
@@ -480,6 +490,7 @@ def _build_stage_2_prompts_impl(
         findings=findings,
         architecture_payload=architecture_payload,
         evidence_ledger=evidence_ledger,
+        change_records=context_records,
     )
     units = [*global_units, *header_units, *component_units]
     if not units:
@@ -714,7 +725,7 @@ def _semantic_navigation_anchor(value: str, label: str) -> str:
     rendered = "\n".join(selected)
     return (
         f"Additional {label} context is carried by bounded semantic shards "
-        "when admitted. Invocation-coverage diagnostics report omitted packets. "
+        "as assigned records. "
         "The exact navigation anchors below apply to every admitted shard; "
         f"absence from a local shard is not negative evidence.\n{rendered}"
     ).rstrip()
@@ -861,6 +872,7 @@ def _build_component_units(
     findings: Sequence[Dict[str, Any]],
     architecture_payload: Mapping[str, Any],
     evidence_ledger: PrEvidenceLedger,
+    change_records: Sequence[ChangeContextRecord] = (),
 ) -> List[_Stage2Unit]:
     relationships = [
         item
@@ -877,6 +889,11 @@ def _build_component_units(
         path_table = {}
 
     union_find = _UnionFind()
+    for record in change_records:
+        for path in record.paths:
+            union_find.add(path)
+        for path in record.paths[1:]:
+            union_find.union(record.paths[0], path)
     relationship_paths: Dict[int, tuple[str, ...]] = {}
     for index, relationship in enumerate(relationships):
         source = path_table.get(relationship.get("source"), relationship.get("source"))
@@ -977,6 +994,12 @@ def _build_component_units(
             )
         )
 
+    for record in change_records:
+        bucket_for(record.paths, record.key).add(_Stage2Unit(
+            key=record.key, paths=record.paths, change_records=(record,),
+            optional_enrichment_only=record.field in {'graph', 'graph_edges', 'symbol_nodes', 'symbol_edges'},
+        ))
+
     component_units: List[_Stage2Unit] = []
     # Dict insertion order follows provider/source record order. Lexical sorting
     # would put component_10 before component_2 and distort admission priority.
@@ -988,6 +1011,7 @@ def _build_component_units(
             findings=tuple(packet.findings),
             relationships=tuple(packet.relationships),
             metadata=tuple(packet.metadata),
+            change_records=tuple(packet.change_records),
             full_pr_parts=tuple(packet.full_pr_parts),
             delta_parts=tuple(packet.delta_parts),
             children=tuple(packet.units),
@@ -999,6 +1023,17 @@ def _build_component_units(
 
 def _unit_dependency_anchors(unit: _Stage2Unit) -> List[_DependencyAnchor]:
     anchors: List[_DependencyAnchor] = []
+    for record in unit.change_records:
+        relationship = record.field in {'relationships', 'graph_edges', 'symbol_edges'}
+        payload = {'kind': 'relationship' if relationship else 'change_context',
+                   'contextRecord': record.key}
+        if relationship:
+            payload['paths'] = record.paths
+        elif record.field == 'files':
+            payload['path'] = record.value.get('path')
+        elif record.field == 'changeAreas':
+            payload['title'] = record.value.get('title')
+        anchors.append(_DependencyAnchor(paths=record.paths, payload=payload))
     for relationship in unit.relationships:
         anchors.append(_DependencyAnchor(
             paths=unit.paths,
@@ -1035,7 +1070,7 @@ def _unit_dependency_anchors(unit: _Stage2Unit) -> List[_DependencyAnchor]:
 
 def _dependency_anchors_for_child(
     child: _Stage2Unit,
-    siblings: Sequence[_Stage2Unit],
+    anchors_by_path: Mapping[str, Sequence[_DependencyAnchor]],
 ) -> tuple[_DependencyAnchor, ...]:
     child_anchor_keys = {
         json.dumps(
@@ -1048,15 +1083,13 @@ def _dependency_anchors_for_child(
     }
     child_paths = set(child.paths)
     bridge_paths = set(child_paths)
-    sibling_anchors: List[_DependencyAnchor] = []
-    for sibling in siblings:
-        anchors = _unit_dependency_anchors(sibling)
-        sibling_anchors.extend(anchors)
-        if sibling.relationships and child_paths.intersection(sibling.paths):
-            bridge_paths.update(sibling.paths)
+    for path in child_paths:
+        for anchor in anchors_by_path.get(path, ()):
+            if anchor.payload.get('kind') == 'relationship':
+                bridge_paths.update(anchor.paths)
 
     selected: Dict[str, _DependencyAnchor] = {}
-    for anchor in sibling_anchors:
+    for anchor in (anchor for path in sorted(bridge_paths) for anchor in anchors_by_path.get(path, ())):
         key = json.dumps(
             anchor.payload,
             ensure_ascii=False,
@@ -1065,7 +1098,9 @@ def _dependency_anchors_for_child(
         )
         if key in child_anchor_keys:
             continue
-        if bridge_paths and not bridge_paths.intersection(anchor.paths):
+        # A neighboring hub does not make every edge of that hub relevant to this child.
+        relevant_paths = child_paths if anchor.payload.get('kind') == 'relationship' else bridge_paths
+        if relevant_paths and not relevant_paths.intersection(anchor.paths):
             continue
         selected.setdefault(key, anchor)
     return tuple(selected[key] for key in sorted(selected))
@@ -1074,18 +1109,27 @@ def _dependency_anchors_for_child(
 def _explode_unit(unit: _Stage2Unit) -> List[_Stage2Unit]:
     """Break a component into records that retain compact dependency anchors."""
     if unit.children:
+        anchors_by_path: Dict[str, List[_DependencyAnchor]] = {}
+        for child in unit.children:
+            for anchor in _unit_dependency_anchors(child):
+                for path in anchor.paths:
+                    anchors_by_path.setdefault(path, []).append(anchor)
         return [
             replace(
                 child,
                 dependency_anchors=_dependency_anchors_for_child(
                     child,
-                    unit.children,
+                    anchors_by_path,
                 ),
-            )
+            ) if (child.findings or child.full_pr_parts or child.delta_parts
+                  or any(record.field == 'files' and not record.value.get('binary') for record in child.change_records)) else child
             for child in unit.children
         ]
 
     result: List[_Stage2Unit] = []
+    for record in unit.change_records:
+        result.append(_Stage2Unit(key=record.key, change_records=(record,), paths=record.paths,
+            dependency_anchors=unit.dependency_anchors, optional_enrichment_only=unit.optional_enrichment_only))
     for index, relationship in enumerate(unit.relationships):
         result.append(_Stage2Unit(
             key=f"{unit.key}:relationship:{index:06d}",
@@ -1405,11 +1449,7 @@ def _render_stage_2_packet(
             "\nDependency navigation anchors (repeated compact facts; these "
             "locate related full records in other shards and are not defect "
             "proof by themselves):\n"
-            + json.dumps(
-                dependency_anchors,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+            + compact_change_context({'anchors': dependency_anchors})
         )
 
     task_context = (
@@ -1432,7 +1472,7 @@ def _render_stage_2_packet(
         (
             _SEMANTIC_SHARD_NOTICE,
             static.full_pr_status,
-            static.pr_change_context,
+            render_change_summary_context(scoped_change_context(static.pr_change_context, packet.change_records)),
             *(packet.full_pr_parts or ["No full-PR evidence record is assigned to this shard."]),
         )
     )

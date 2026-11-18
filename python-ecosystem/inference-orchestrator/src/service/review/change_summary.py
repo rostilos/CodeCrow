@@ -194,8 +194,8 @@ def _resolve_described_path(requested_path, result, batch_paths, known_paths):
 
 
 def prepare_change_summary_context(summary: Any, focus_paths=()) -> dict:
-    from utils.image_files import omit_image_records
-    summary = omit_image_records(summary)
+    from codecrow_plugins.file_scope import filter_records
+    summary = filter_records(summary)
     if (not isinstance(summary, dict) or not isinstance(summary.get("files"), list)
             or not summary["files"] or any(not isinstance(item, dict)
                 or not isinstance(item.get("path"), str) for item in summary["files"])):
@@ -302,12 +302,9 @@ def _changed_ranges(hunks):
 
 
 def _scan_records(diff: ProcessedDiff | None, paths: list[str], chunk_chars: int):
-    from utils.image_files import is_image_file
     files = []
     records = []
     for item in diff.files if diff else []:
-        if is_image_file(item.path) or is_image_file(item.old_path):
-            continue
         files.append({
             "path": item.path, "oldPath": item.old_path,
             "changeType": item.change_type.value,
@@ -333,8 +330,6 @@ def _scan_records(diff: ProcessedDiff | None, paths: list[str], chunk_chars: int
                         "diff": piece} for i, piece in enumerate(pieces))
     seen = {item["path"] for item in files}
     for path in paths:
-        if is_image_file(path):
-            continue
         if path not in seen:
             files.append({"path": path, "changeType": "unknown", "ranges": [],
                           "summary": "Diff unavailable", "scanStatus": "unavailable"})
@@ -660,8 +655,8 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
     }
     logger.info("PR change scan completed: project=%s pr=%s files=%d batches=%d status=%s duration_ms=%d",
                 request.projectId, request.pullRequestId, len(files), len(batches), result["status"], result["durationMs"])
-    from utils.image_files import omit_image_records
-    return omit_image_records(result)
+    from codecrow_plugins.file_scope import filter_records
+    return filter_records(result)
 
 
 async def scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, event_callback=None, rag_client=None, *, review_parallelism=1) -> dict:
@@ -683,8 +678,8 @@ async def scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, e
 
 
 def compatible_change_summary(summary, project_id, pr_number, source_revision):
-    from utils.image_files import omit_image_records
-    summary = omit_image_records(summary)
+    from codecrow_plugins.file_scope import filter_records
+    summary = filter_records(summary)
     if summary is None:
         return None
     if (change_summary_context(summary)
