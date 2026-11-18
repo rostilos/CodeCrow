@@ -1,6 +1,6 @@
 package org.rostilos.codecrow.mcp;
 
-import org.rostilos.codecrow.plugins.ImageFiles;
+import org.rostilos.codecrow.plugins.RepositoryFileScope;
 
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
@@ -404,7 +404,7 @@ public class McpTools {
         try {
             String diff = getVcsClient().getPullRequestDiff(workspace, repoSlug, pullRequestId);
             // Filter large files from diff to reduce token usage
-            String filteredDiff = largeContentFilter.filterDiff(ImageFiles.filterDiff(diff));
+            String filteredDiff = largeContentFilter.filterDiff(RepositoryFileScope.filterDiff(diff));
             return Map.of("diff", filteredDiff);
         } catch (IOException e) {
             return Map.of("error", "Failed to get pull request diff: " + e.getMessage());
@@ -434,7 +434,7 @@ public class McpTools {
     ) {
         try {
             requireRequestRepository(workspace, repoSlug);
-            if (ImageFiles.isImage(filePath)) return Map.of("excluded", true, "reason", "image_file");
+            if (RepositoryFileScope.excludes(filePath)) return Map.of("excluded", true, "reason", "file_scope");
             String fileContent = getVcsClient(true).getBranchFileContent(workspace, repoSlug, branch, filePath);
             return formatFileContent(fileContent, filePath, startLine, endLine);
         } catch (IOException e) {
@@ -468,7 +468,7 @@ public class McpTools {
     ) {
         try {
             requireRequestRepository(workspace, repoSlug);
-            if (ImageFiles.isImage(filePath)) return Map.of("excluded", true, "reason", "image_file");
+            if (RepositoryFileScope.excludes(filePath)) return Map.of("excluded", true, "reason", "file_scope");
             if (startLine == null
                     && contextSuppliedPaths != null
                     && contextSuppliedPaths.stream().anyMatch(filePath::equals)) {
@@ -600,7 +600,7 @@ public class McpTools {
         try {
             requireRequestRepository(workspace, projectKey);
             String rootDirectory = getVcsClient(true).getRootDirectory(workspace, projectKey, branch);
-            return Map.of("rootDirectory", rootDirectory);
+            return Map.of("rootDirectory", scopeDirectoryListing(rootDirectory));
         } catch (IOException e) {
             return Map.of("error", "Failed to get branch root repository tree: " + e.getMessage());
         }
@@ -624,8 +624,8 @@ public class McpTools {
                 response.put("resolvedBaseRef", effectiveRef);
             }
             try {
-                response.put("directoryContent", client.getDirectoryByPath(
-                        workspace, projectKey, effectiveRef, dirPath));
+                response.put("directoryContent", scopeDirectoryListing(client.getDirectoryByPath(
+                        workspace, projectKey, effectiveRef, dirPath)));
             } catch (NoSuchFileException absentFromInventory) {
                 if (!reviewBound) {
                     throw absentFromInventory;
@@ -738,4 +738,15 @@ public class McpTools {
             return Map.of("error", "Failed to update project branching model settings: " + e.getMessage());
         }
     }
+    private static String scopeDirectoryListing(String listing) {
+        if (listing == null) return "";
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            return mapper.writeValueAsString(RepositoryFileScope.filterRecords(mapper.readValue(listing, Object.class)));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException notJson) {
+            return listing.lines().filter(line -> !RepositoryFileScope.excludes(line.strip()))
+                    .collect(java.util.stream.Collectors.joining("\n"));
+        }
+    }
+
 }

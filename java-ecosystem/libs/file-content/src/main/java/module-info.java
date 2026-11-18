@@ -1,4 +1,5 @@
 module org.rostilos.codecrow.filecontent {
+    requires org.rostilos.codecrow.plugins;
     requires jakarta.persistence;
     requires spring.data.jpa;
     requires spring.data.commons;

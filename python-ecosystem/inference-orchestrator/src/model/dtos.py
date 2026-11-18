@@ -1,5 +1,5 @@
 from typing import Literal, Optional, Any, List, Dict
-from pydantic import BaseModel, Field, AliasChoices, ValidationError, field_validator
+from pydantic import BaseModel, Field, AliasChoices, ValidationError, field_validator, model_validator
 import logging
 from datetime import datetime
 
@@ -67,6 +67,16 @@ class ReviewGenerationCandidateDto(BaseModel):
 
 
 class ReviewRequestDto(BaseModel):
+    @model_validator(mode='before')
+    @classmethod
+    def apply_file_scope(cls, data):
+        from codecrow_plugins.file_scope import filter_records
+        if isinstance(data, dict):
+            # Direct Python callers may supply an already constructed enrichment DTO.
+            data = {key: value.model_dump(by_alias=True) if isinstance(value, BaseModel) else value
+                    for key, value in data.items()}
+        return filter_records(data)
+
     vcsJobId: Optional[str] = Field(default=None, description="Host job identity for provider request accounting")
     vcsQuotaIdentity: Optional[str] = Field(default=None, description="Host-issued provider cooldown identity; contains no credentials")
     projectId: int

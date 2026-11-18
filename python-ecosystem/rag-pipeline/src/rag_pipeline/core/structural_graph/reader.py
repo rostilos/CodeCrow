@@ -247,7 +247,8 @@ class StructuralGraphReader:
 
     def get_unit(self, unit_id: str) -> dict[str, Any] | None:
         row = _unit_by_id(self.connection, unit_id)
-        if row is None:
+        from codecrow_plugins.file_scope import is_excluded
+        if row is None or is_excluded(row['path']):
             return None
         source_evidence = row["record_type"] in {"source_unit", "plugin_context"}
         if source_evidence:
@@ -317,7 +318,7 @@ class StructuralGraphReader:
         row = self.connection.execute(
             "SELECT * FROM relations WHERE relation_id = ?", (evidence_id,),
         ).fetchone()
-        return relations_to_manifests(self.connection, [row])[0] if row is not None else None
+        return next(iter(relations_to_manifests(self.connection, [row])), None) if row is not None else None
 
     def relations_among(
         self,
@@ -360,6 +361,18 @@ class StructuralGraphReader:
         }
 
     def query_graph(
+        self, pattern: str, target: str, *, max_results: int = 25, cursor: int = 0,
+    ) -> dict[str, Any]:
+        from codecrow_plugins.file_scope import is_excluded, filter_records
+        if is_excluded(target):
+            return {'status': 'excluded', 'reason': 'file_scope', 'results': []}
+        result = self._query_graph(pattern, target, max_results=max_results, cursor=cursor)
+        filtered = filter_records(result)
+        if isinstance(result.get('results'), list) and len(result['results']) != len(filtered.get('results', [])):
+            filtered['excludedFiles'] = len(result['results']) - len(filtered.get('results', []))
+        return filtered
+
+    def _query_graph(
         self,
         pattern: str,
         target: str,
@@ -701,7 +714,8 @@ class StructuralGraphReader:
                 "ORDER BY path, start_line, unit_id LIMIT ? OFFSET ?",
                 (token, token, token, max_results, offset),
             ).fetchall()
-        return [unit_to_manifest(row) for row in rows]
+        from codecrow_plugins.file_scope import is_excluded
+        return [unit_to_manifest(row) for row in rows if not is_excluded(row['path'])]
 
     def _resolve_units(self, target: str) -> list[sqlite3.Row]:
         rows, _ = self._resolve_units_with_count(target)

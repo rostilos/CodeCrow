@@ -21,7 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.rostilos.codecrow.plugins.ImageFiles;
+import org.rostilos.codecrow.plugins.RepositoryFileScope;
 
 /**
  * Service for persisting analyzed file contents with content-addressed deduplication.
@@ -65,13 +65,9 @@ public class FileSnapshotService {
         }
 
         int created = 0;
-        for (Map.Entry<String, String> entry : fileContents.entrySet()) {
+        for (Map.Entry<String, String> entry : storableContents(fileContents)) {
             String filePath = entry.getKey();
             String content = entry.getValue();
-
-            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
-                continue;
-            }
 
             try {
                 // Deduplicate content
@@ -132,13 +128,9 @@ public class FileSnapshotService {
         }
 
         int updated = 0;
-        for (Map.Entry<String, String> entry : fileContents.entrySet()) {
+        for (Map.Entry<String, String> entry : storableContents(fileContents)) {
             String filePath = entry.getKey();
             String content = entry.getValue();
-
-            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
-                continue;
-            }
 
             try {
                 // Deduplicate content
@@ -204,7 +196,7 @@ public class FileSnapshotService {
      * @return the raw file content, or empty if not found
      */
     public Optional<String> getFileContent(Long analysisId, String filePath) {
-        if (ImageFiles.isImage(filePath)) return Optional.empty();
+        if (RepositoryFileScope.excludes(filePath)) return Optional.empty();
         return snapshotRepository.findByAnalysisIdAndFilePathWithContent(analysisId, filePath)
                 .map(snapshot -> snapshot.getFileContent().getContent());
     }
@@ -256,13 +248,9 @@ public class FileSnapshotService {
         }
 
         int changed = 0;
-        for (Map.Entry<String, String> entry : fileContents.entrySet()) {
+        for (Map.Entry<String, String> entry : storableContents(fileContents)) {
             String filePath = entry.getKey();
             String content = entry.getValue();
-
-            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
-                continue;
-            }
 
             try {
                 // Content-addressed dedup
@@ -338,13 +326,9 @@ public class FileSnapshotService {
         }
 
         int changed = 0;
-        for (Map.Entry<String, String> entry : fileContents.entrySet()) {
+        for (Map.Entry<String, String> entry : storableContents(fileContents)) {
             String filePath = entry.getKey();
             String content = entry.getValue();
-
-            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
-                continue;
-            }
 
             try {
                 // Content-addressed dedup
@@ -417,7 +401,7 @@ public class FileSnapshotService {
      * Retrieve the raw file content for a specific file in a branch using the direct FK.
      */
     public Optional<String> getFileContentForBranchById(Long branchId, String filePath) {
-        if (ImageFiles.isImage(filePath)) return Optional.empty();
+        if (RepositoryFileScope.excludes(filePath)) return Optional.empty();
         return snapshotRepository.findByBranchIdAndFilePathWithContent(branchId, filePath)
                 .map(s -> s.getFileContent().getContent());
     }
@@ -447,7 +431,7 @@ public class FileSnapshotService {
      * Retrieve the raw file content for a specific file in a PR.
      */
     public Optional<String> getFileContentForPr(Long pullRequestId, String filePath) {
-        if (ImageFiles.isImage(filePath)) return Optional.empty();
+        if (RepositoryFileScope.excludes(filePath)) return Optional.empty();
         return snapshotRepository.findByPullRequestIdAndFilePathWithContent(pullRequestId, filePath)
                 .map(s -> s.getFileContent().getContent());
     }
@@ -513,7 +497,7 @@ public class FileSnapshotService {
      * first; falls back to the legacy DISTINCT ON approach.
      */
     public Optional<String> getFileContentForBranch(Long projectId, String branchName, String filePath) {
-        if (ImageFiles.isImage(filePath)) return Optional.empty();
+        if (RepositoryFileScope.excludes(filePath)) return Optional.empty();
         // Try direct FK first
         Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
         if (branchOpt.isPresent()) {
@@ -553,6 +537,12 @@ public class FileSnapshotService {
 
     // ── Internal helpers ─────────────────────────────────────────────────
 
+    private static List<Map.Entry<String, String>> storableContents(Map<String, String> contents) {
+        return contents.entrySet().stream().filter(entry -> entry.getValue() != null
+                && entry.getKey() != null && !entry.getKey().isBlank()
+                && !RepositoryFileScope.excludes(entry.getKey())).toList();
+    }
+
     private static String sha256(String input) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -576,7 +566,8 @@ public class FileSnapshotService {
         return lines;
     }
     private static List<AnalyzedFileSnapshot> includedSnapshots(List<AnalyzedFileSnapshot> snapshots) {
-        return snapshots.stream().filter(snapshot -> !ImageFiles.isImage(snapshot.getFilePath()))
+        if (snapshots.stream().noneMatch(snapshot -> RepositoryFileScope.excludes(snapshot.getFilePath()))) return snapshots;
+        return snapshots.stream().filter(snapshot -> !RepositoryFileScope.excludes(snapshot.getFilePath()))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
     }
 

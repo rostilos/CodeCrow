@@ -109,6 +109,11 @@ class GenerationBuilder:
                 collection_target, pending.directory.name,
             )
             writer = StructuralGraphWriter(connection, track_mutations=True)
+            from codecrow_plugins.file_scope import is_excluded
+            image_paths = [row[0] for row in connection.execute("SELECT DISTINCT path FROM units")
+                           if is_excluded(row[0])]
+            if image_paths:
+                writer.remove_paths(image_paths, cancellation_check=lambda: self._raise_if_cancelled(cancellation_event))
             with _timed_graph_phase(connection, "refresh_counts", target=collection_target):
                 writer.refresh_counts()
             skipped_paths: set[str] = set()

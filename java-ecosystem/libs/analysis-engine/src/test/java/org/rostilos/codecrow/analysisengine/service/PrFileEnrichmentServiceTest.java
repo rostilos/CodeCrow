@@ -95,7 +95,7 @@ class PrFileEnrichmentServiceTest {
             assertThat(result.stats().skipReasons()).containsKey("binary_or_non_text");
         }
 
-        @Test void keepsAllTextFiles() throws Exception {
+        @Test void keepsSourceTextAndOmitsTextualImages() throws Exception {
             List<String> files = List.of("Main.java", "app.py", "index.ts", "README.md",
                     "deploy.sh", "notes.txt", "config.yml", "data.json",
                     "logo.svg", "bundle.min.js", "styles.min.css", "bundle.js.map");
@@ -123,8 +123,9 @@ class PrFileEnrichmentServiceTest {
 
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, files);
             assertThat(result.stats().totalFilesRequested()).isEqualTo(12);
-            assertThat(result.stats().filesEnriched()).isEqualTo(12);
-            assertThat(result.stats().skipReasons()).doesNotContainKey("binary_or_non_text");
+            assertThat(result.stats().filesEnriched()).isEqualTo(11);
+            assertThat(result.stats().skipReasons()).containsEntry("binary_or_non_text", 1);
+            verify(vcsClient).readFiles(argThat(paths -> !paths.contains("logo.svg")), anyInt(), anyLong());
         }
     }
 

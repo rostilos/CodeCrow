@@ -70,7 +70,7 @@ class RagPipelineClientTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("generationManifestSha256");
 
-        server.enqueue(json("{\"status\":\"deleted\"}"));
+        server.enqueue(json("{\"status\":\"success\"}"));
         assertThat(client.deleteBranch(
                 "ws", "repo", "feature/x", "generation", "revision", "manifest"))
                 .isTrue();
@@ -83,6 +83,17 @@ class RagPipelineClientTest {
         assertThat(request.getRequestUrl().queryParameter("generation_manifest_sha256"))
                 .isEqualTo("manifest");
         assertThat(request.getPath()).contains("feature%2Fx");
+    }
+
+    @Test
+    void generationDeletionRequiresExplicitAbsenceConfirmation() {
+        server.enqueue(json("{\"status\":\"not_found\"}"));
+        server.enqueue(json("{\"status\":\"already_absent\"}"));
+
+        assertThat(client.deleteBranchWithOutcome(
+                "ws", "repo", "main", "generation", "revision", "manifest").successful()).isFalse();
+        assertThat(client.deleteBranchWithOutcome(
+                "ws", "repo", "main", "generation", "revision", "manifest").successful()).isTrue();
     }
 
     private static MockResponse json(String body) {

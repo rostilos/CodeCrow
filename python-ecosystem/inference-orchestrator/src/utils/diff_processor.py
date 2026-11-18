@@ -232,6 +232,8 @@ class DiffProcessor:
         if not raw_diff:
             return ProcessedDiff(files=[], original_size_bytes=0)
 
+        from codecrow_plugins.file_scope import filter_diff
+        raw_diff = filter_diff(raw_diff)
         original_size = len(raw_diff.encode('utf-8'))
 
         # Parse diff into files
@@ -322,8 +324,6 @@ class DiffProcessor:
 
     def _parse_diff(self, raw_diff: str) -> List[DiffFile]:
         """Parse unified diff into list of DiffFile objects."""
-        from codecrow_plugins.image_files import filter_image_diff
-        raw_diff = filter_image_diff(raw_diff)
         files = []
         current_file = None
         current_content = []

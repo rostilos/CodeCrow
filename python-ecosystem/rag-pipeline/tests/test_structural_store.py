@@ -10,6 +10,7 @@ import rag_pipeline.core.structural_store as structural_store_module
 from rag_pipeline.core.documents import TextNode
 from rag_pipeline.core.coordination import ProjectMutationCoordinator
 from rag_pipeline.core.exact_index import ExactIndexPreconditionError
+from rag_pipeline.core.generation_cleanup import orphan_candidates
 from rag_pipeline.core.index_manager.manager import RAGIndexManager
 from rag_pipeline.core.structural_store import (
     STRUCTURAL_STORE_SCHEMA,
@@ -1403,11 +1404,34 @@ def test_exact_generation_deletion_retains_an_active_reader(tmp_path):
         revision="revision",
         manifest_sha256=receipt["generation_manifest_sha256"],
     ):
-        assert store.delete(paths.target, **delete_arguments) is False
+        with pytest.raises(BlockingIOError):
+            store.delete(paths.target, **delete_arguments)
         assert paths.directory.is_dir()
 
     assert store.delete(paths.target, **delete_arguments) is True
     assert not paths.directory.exists()
+
+
+def test_orphan_inventory_lists_only_old_java_owned_branch_generations(tmp_path):
+    store = StructuralGenerationStore(tmp_path / "structural")
+    branch_hash = hashlib.sha256(b"main").hexdigest()[:12]
+    revision_hash = hashlib.sha256(b"revision").hexdigest()[:12]
+    target_prefix = f"cc_w1_p42_b{branch_hash}_r{revision_hash}_g"
+    candidates = (
+        (target_prefix + "a" * 12, "target_head", True),
+        (target_prefix + "b" * 12, "target_head", False),
+        (target_prefix + "c" * 12, "proposed_tree", True),
+        ("standalone-generation", "target_head", True),
+    )
+    for target, snapshot_kind, old in candidates:
+        paths, _ = _publish_generation(store, target, snapshot_kind=snapshot_kind)
+        if old:
+            os.utime(paths.directory, (1, 1))
+
+    inventory = orphan_candidates(store)
+    assert [(candidate["projectId"], candidate["collectionTarget"]) for candidate in inventory] == [
+        (42, candidates[0][0]),
+    ]
 
 
 def test_file_hierarchy_and_path_scoped_resolution_keep_cross_file_calls_ambiguous(

@@ -40,7 +40,7 @@
         <resources>
             <resource>
                 <directory>../python/codecrow_plugins</directory>
-                <includes><include>image_extensions.txt</include></includes>
+                <includes><include>excluded_file_extensions.txt</include></includes>
                 <targetPath>codecrow</targetPath>
             </resource>
         </resources>

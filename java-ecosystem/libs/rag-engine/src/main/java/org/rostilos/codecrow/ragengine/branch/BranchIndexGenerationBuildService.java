@@ -3,6 +3,7 @@ package org.rostilos.codecrow.ragengine.branch;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
 import org.rostilos.codecrow.core.model.rag.RagIndexOperationStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -347,6 +348,11 @@ public class BranchIndexGenerationBuildService {
         }
         boolean succeeded = registration.existingOperation()
                 && registration.operation().getStatus() == RagIndexOperationStatus.SUCCEEDED;
+        var generationStatus = registration.generation().getStatus();
+        if (succeeded && (generationStatus == RagBranchIndexGenerationStatus.RETIRING
+                || generationStatus == RagBranchIndexGenerationStatus.RETIRED)) {
+            throw new IllegalStateException("The previous generation was retired; request a fresh rebuild");
+        }
         return new PreparedBuild(
                 registration.operation().getId(),
                 registration.generation().getCollectionName(),

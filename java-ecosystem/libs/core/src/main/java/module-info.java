@@ -1,4 +1,5 @@
 module org.rostilos.codecrow.core {
+    requires org.rostilos.codecrow.plugins;
     requires jakarta.persistence;
     requires jakarta.validation;
     requires spring.data.jpa;

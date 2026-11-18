@@ -136,7 +136,7 @@ class TestShouldExcludeFile:
             patterns,
         ) is False
         assert should_exclude_file(
-            "packages/app-store/vital/staticish/icon.svg",
+            "packages/app-store/vital/staticish/icon.ts",
             patterns,
         ) is False
 

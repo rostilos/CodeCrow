@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Any
 import httpx
 
 from service.runtime_capacity import review_concurrency
+from codecrow_plugins.file_scope import is_excluded, filter_records
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,8 @@ class RagTransport:
         """Run an optional structural query without failing the core review."""
         if not self.enabled:
             return dict(empty_result)
+        if is_excluded(payload.get("target")):
+            return {**empty_result, "status": "excluded", "reason": "file_scope"}
 
         try:
             client = await self._get_client(mutation=endpoint == "/query/review-generation")
@@ -157,7 +160,7 @@ class RagTransport:
             result = response.json()
             if not isinstance(result, dict):
                 raise ValueError("RAG query returned a non-object response")
-            return result
+            return filter_records(result) or dict(empty_result)
         except httpx.HTTPError as error:
             status_code, detail = _http_error_detail(error)
             if status_code == 404 and (endpoint, detail) in {

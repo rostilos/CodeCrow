@@ -19,6 +19,11 @@ import org.rostilos.codecrow.core.model.job.*;
 import org.rostilos.codecrow.core.model.codeanalysis.*;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndex;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
+import org.rostilos.codecrow.core.model.rag.RagBranchIndexKind;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexGenerationRepository;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
@@ -38,7 +43,7 @@ import static org.assertj.core.api.Assertions.*;
 class RepositoryBoundaryIT {
     @SpringBootConfiguration @EnableAutoConfiguration
     @EntityScan("org.rostilos.codecrow.core.model")
-    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class, ReviewCheckResultRepository.class})
+    @EnableJpaRepositories(basePackageClasses={JobRepository.class, VcsRepoBindingRepository.class, CodeAnalysisIssueRepository.class, ReconcileTaskRepository.class, ReviewCheckResultRepository.class, RagBranchIndexGenerationRepository.class})
     static class Config {
         @org.springframework.context.annotation.Bean
         org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer inspectSql() {
@@ -57,6 +62,50 @@ class RepositoryBoundaryIT {
     @Autowired ReconcileTaskRepository reconcileTasks;
     @Autowired ReviewCheckResultRepository checkResults;
     @Autowired ReviewCheckFindingRepository checkFindings;
+
+    @Autowired RagBranchIndexGenerationRepository generations;
+
+    @Test @Transactional
+    void retirementPreservesActiveAndRecentGenerationsAndStopsExactSeedSelection() {
+        var project = binding("retention", "repo", "owner", workspace()).getProject();
+        var branch = new RagBranchIndex(project, "main", RagBranchIndexKind.PRIMARY);
+        em.persist(branch);
+        var now = OffsetDateTime.now();
+        var old = generation(branch, "old");
+        old.supersede();
+        old.setSupersededAt(now.minusDays(2));
+        var recent = generation(branch, "recent");
+        recent.supersede();
+        var active = generation(branch, "active");
+        branch.activate(active);
+        em.flush();
+
+        var cutoff = now.minusDays(1);
+        assertThat(generations.findRetirementCandidates(cutoff))
+                .extracting(RagBranchIndexGenerationRepository.RetirementCandidate::getGenerationId)
+                .containsExactly(old.getId());
+        assertThat(generations.beginRetirement(active.getId(), cutoff)).isZero();
+        assertThat(generations.beginRetirement(recent.getId(), cutoff)).isZero();
+        assertThat(generations.beginRetirement(old.getId(), cutoff)).isOne();
+        assertThat(generations.beginRetirement(old.getId(), cutoff)).isZero();
+        assertThat(generations.findAvailableExactGeneration(project.getId(), "main", "old",
+                java.util.List.of(RagBranchIndexGenerationStatus.ACTIVE, RagBranchIndexGenerationStatus.SUPERSEDED)))
+                .isEmpty();
+        assertThat(generations.finishRetirement(old.getId())).isOne();
+        assertThat(generations.findRetirementCandidates(cutoff)).isEmpty();
+        em.clear();
+        assertThat(generations.findById(old.getId()).orElseThrow().getStatus())
+                .isEqualTo(RagBranchIndexGenerationStatus.RETIRED);
+        assertThat(generations.findById(active.getId()).orElseThrow().getStatus())
+                .isEqualTo(RagBranchIndexGenerationStatus.ACTIVE);
+    }
+
+    private RagBranchIndexGeneration generation(RagBranchIndex branch, String revision) {
+        var generation = new RagBranchIndexGeneration(branch, revision, revision, null, null, null);
+        generation.activate("a".repeat(64), 1, 1);
+        em.persist(generation);
+        return generation;
+    }
 
     @Test @Transactional
     void reviewChecksHaveIndependentPersistenceAndScopedHistory() {

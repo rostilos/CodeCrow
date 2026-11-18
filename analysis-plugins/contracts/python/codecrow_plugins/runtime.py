@@ -102,8 +102,8 @@ class PluginRuntime:
         capabilities: ProjectCapabilities,
     ) -> FileDisposition:
         """Compose framework file policies without exposing implementations to hosts."""
-        from .image_files import is_image_file
-        if is_image_file(path):
+        from .file_scope import is_excluded
+        if is_excluded(path):
             return FileDisposition.EXCLUDED
         disposition = FileDisposition.FULL
         for plugin_id in capabilities.repository_plugins:

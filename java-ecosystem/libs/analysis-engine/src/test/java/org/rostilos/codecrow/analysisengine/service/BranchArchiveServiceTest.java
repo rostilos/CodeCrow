@@ -176,6 +176,28 @@ class BranchArchiveServiceTest {
         }
 
         @Test
+        void imageExtensionsNeverEnterArchiveSnapshots(@TempDir Path tempDir) throws Exception {
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+            byte[] zipBytes = createZip(Map.of("root/logo.SVG", "<svg/>",
+                    "root/photo.PNG", "text-looking image", "root/source.py", "image = 'photo.PNG'"));
+            when(vcsClient.downloadRepositoryArchiveToFile(anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+            Set<String> requested = Set.of("logo.SVG", "photo.PNG", "source.py");
+            var memory = service.downloadAndExtractFiles(conn, "ws", "repo", "main", requested);
+            assertThat(memory).containsOnlyKeys("source.py");
+            var disk = service.downloadAndExtractSnapshotToDirectory(
+                    conn, "ws", "repo", "main", requested, tempDir.resolve("repository"));
+            assertThat(disk.presentFiles()).containsExactly("source.py");
+            assertThat(disk.extractedFiles()).containsExactly("source.py");
+            assertThat(tempDir.resolve("repository/logo.SVG")).doesNotExist();
+            assertThat(tempDir.resolve("repository/photo.PNG")).doesNotExist();
+        }
+
+        @Test
         void shouldExtractRequestedFilesDirectlyToIsolatedDirectory(@TempDir Path tempDir) throws Exception {
             VcsConnection conn = new VcsConnection();
             when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);

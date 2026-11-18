@@ -27,6 +27,33 @@ import static org.mockito.Mockito.when;
 
 class McpToolsLocalRepoTest {
 
+    @Test void imageReadsDoNotConstructAProviderClient() throws Exception {
+        System.setProperty(McpTools.WORKSPACE_PROPERTY, "team");
+        System.setProperty(McpTools.REPO_SLUG_PROPERTY, "repo");
+        VcsMcpClientFactory factory = mock(VcsMcpClientFactory.class);
+        McpTools tools = new McpTools(factory);
+        for (String path : List.of("photo.PNG", "drawing.svg", "camera.CR3", "picture.avif")) {
+            assertThat(tools.getBranchFileContent("team", "repo", "main", path)).containsEntry("excluded", true);
+            assertThat(tools.getReviewFileContent("team", "repo", path, null, null)).containsEntry("excluded", true);
+        }
+        verify(factory, never()).createClient();
+    }
+
+    @Test void directoryResultsApplyFileScopeForProviderAndLocalFormats() throws Exception {
+        System.setProperty(McpTools.WORKSPACE_PROPERTY, "team");
+        System.setProperty(McpTools.REPO_SLUG_PROPERTY, "repo");
+        VcsMcpClientFactory factory = mock(VcsMcpClientFactory.class);
+        VcsMcpClient client = mock(VcsMcpClient.class);
+        when(factory.createClient()).thenReturn(client);
+        McpTools tools = new McpTools(factory);
+        for (String listing : List.of("source.py\nlogo.SVG\nphoto.png",
+                "[{\"path\":\"source.py\"},{\"path\":\"logo.SVG\"}]")) {
+            when(client.getRootDirectory("team", "repo", "main")).thenReturn(listing);
+            String result = (String) tools.getRootDirectory("team", "repo", "main").get("rootDirectory");
+            assertThat(result).contains("source.py").doesNotContain("logo.SVG", "photo.png");
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"5beb0ddc334deb862ba90cedbf03f052b58e4974",
             "5beb0ddc334deb862b90cedbf03f052b58e4974", "feature", ""})

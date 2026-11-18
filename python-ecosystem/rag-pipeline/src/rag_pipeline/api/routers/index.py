@@ -22,6 +22,7 @@ from ..models import (
     RevisionPreflightResponse,
 )
 from ...core.exact_index import ExactIndexPreconditionError
+from ...core.generation_cleanup import orphan_candidates
 from ...core.source_tree import RepositorySourceTreeError
 from ...core.coordination import (
     MutationCoordinationUnavailable,
@@ -642,6 +643,15 @@ def get_revision_preflight(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/index/maintenance/orphan-candidates")
+def list_orphan_candidates():
+    """Return old Java-owned targets for the application registry to verify."""
+    if not os.environ.get("SERVICE_SECRET"):
+        raise HTTPException(status_code=503, detail="A service secret is required for storage inventory")
+    _, index_manager = _get_singletons()
+    return orphan_candidates(index_manager.store)
+
+
 @router.delete("/index/{workspace}/{project}/branch/{branch:path}")
 def delete_branch(
     workspace: str,
@@ -671,9 +681,11 @@ def delete_branch(
             }
         else:
             return {
-                "status": "not_found",
-                "message": f"Generation for branch '{branch}' was not found"
+                "status": "already_absent",
+                "message": f"Generation for branch '{branch}' was already absent"
             }
+    except BlockingIOError:
+        raise HTTPException(status_code=423, detail="Structural generation is in use")
     except ExactIndexPreconditionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except MutationLeaseUnavailable as e:

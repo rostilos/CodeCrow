@@ -270,17 +270,33 @@ class StructuralGenerationStore:
     ) -> bool:
         paths = self.paths_for_target(target)
         try:
+            if not stat.S_ISDIR(paths.directory.lstat().st_mode):
+                raise ExactIndexPreconditionError("structural generation path is not a directory")
             access = self._acquire_sealed_access(
-                paths,
-                exclusive=True,
-                nonblocking=True,
+                paths, exclusive=True, nonblocking=True,
             )
-        except (BlockingIOError, FileNotFoundError):
+        except FileNotFoundError:
+            if paths.directory.exists():
+                raise ExactIndexPreconditionError(
+                    "structural generation directory has no receipt"
+                )
             return False
         try:
-            receipt = self.read_receipt(target)
-            if receipt is None:
+            # The registry binds the exact seal even if its storage schema is
+            # too old for this reader to open the database.
+            try:
+                if not os.path.samestat(os.fstat(access.fileno()), paths.receipt.stat()):
+                    raise BlockingIOError("structural generation receipt was replaced")
+            except FileNotFoundError:
+                if paths.directory.exists():
+                    raise BlockingIOError("structural generation receipt changed during deletion")
                 return False
+            try:
+                receipt = json.load(access)
+            except ValueError as exception:
+                raise ExactIndexPreconditionError(
+                    "structural generation receipt is unreadable"
+                ) from exception
             expected = {
                 "workspace": workspace,
                 "project": project,
@@ -288,18 +304,19 @@ class StructuralGenerationStore:
                 "repository_revision": revision,
                 "generation_manifest_sha256": manifest_sha256,
                 "collection_target": target,
+                "store_schema": STRUCTURAL_STORE_SCHEMA,
             }
-            if any(
-                receipt.get(key) != value
-                for key, value in expected.items()
+            if not isinstance(receipt, dict) or any(
+                receipt.get(key) != value for key, value in expected.items()
             ):
                 raise ExactIndexPreconditionError(
                     "structural generation does not match its registry receipt"
                 )
+            trash = self.pending_paths(target)
             with self._local_lock:
-                if not paths.directory.exists():
-                    return False
-                shutil.rmtree(paths.directory)
+                os.replace(paths.directory, trash.directory)
+            # If interrupted, the pending janitor can finish removing the tree.
+            self.remove_pending(trash)
             return True
         finally:
             self.release_pending_ownership(access)

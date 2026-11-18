@@ -1,11 +1,13 @@
-# Repository image formats. Shared by the Python and Java hosts.
-# Includes raster, vector, camera RAW, layered artwork, textures and scientific images.
+# Repository-wide exclusions, shared by Java and Python. One extension per line.
+# Images: raster, vector, camera RAW, layered artwork, textures and scientific formats.
 3fr
 afdesign
 afphoto
 ai
+ani
 apng
 ari
+art
 arw
 ase
 aseprite
@@ -14,6 +16,7 @@ avcs
 avif
 avifs
 avis
+blp
 bmp
 bpg
 btf
@@ -36,6 +39,7 @@ dpx
 drf
 eip
 emf
+emz
 eps
 eps2
 eps3
@@ -43,19 +47,24 @@ epsf
 epsi
 erf
 exr
+farbfeld
+ff
 fff
 fig
 fit
 fits
 flc
 fli
+flif
 fpx
+ftc
+ftex
 fts
 g3
 g4
 gif
-hdr
 hdp
+hdr
 heic
 heics
 heif
@@ -71,11 +80,11 @@ int
 inta
 j2c
 j2k
-jbig
 jb2
 jbg
-jfif
+jbig
 jfi
+jfif
 jif
 jng
 jp2
@@ -85,8 +94,9 @@ jpeg
 jpf
 jpg
 jpm
-jpx
+jps
 jpt
+jpx
 jxl
 jxr
 k25
@@ -106,14 +116,15 @@ mos
 mpo
 mrw
 nef
-nrw
 nii
 nrrd
+nrw
 ora
 orf
 pam
 pbm
 pcd
+pct
 pcx
 pdd
 pef
@@ -121,14 +132,16 @@ pfm
 pgm
 pic
 pict
-pct
 png
 pnm
+pns
 ppm
 procreate
 ps
 psb
 psd
+psp
+pspimage
 ptx
 pxn
 pxr
@@ -165,6 +178,7 @@ wbmp
 wdp
 webp
 wmf
+wmz
 wpg
 xbm
 xcf

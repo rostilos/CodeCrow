@@ -115,8 +115,9 @@ def relations_to_manifests(
             "relatedPaths": paths.get(row["relation_id"], []),
             "attributes": json.loads(row["attributes_json"] or "{}"),
         })
-    return result
+    from codecrow_plugins.file_scope import filter_records
+    return filter_records(result)
 
 
-def relation_to_manifest(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
-    return relations_to_manifests(connection, [row])[0]
+def relation_to_manifest(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any] | None:
+    return next(iter(relations_to_manifests(connection, [row])), None)

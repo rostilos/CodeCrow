@@ -39,8 +39,8 @@ class UnitWriter:
         if metadata_override:
             metadata.update(metadata_override)
         path = _normalize_path(str(metadata.get("path") or ""))
-        from codecrow_plugins.image_files import is_image_file
-        if is_image_file(path):
+        from codecrow_plugins.file_scope import is_excluded
+        if is_excluded(path):
             return ""
         content = str(node.text or "")
         start_line = max(1, int(metadata.get("start_line") or 1))
@@ -228,7 +228,8 @@ class UnitWriter:
             ),
             record_type="structural_file",
         )
-        self.state.file_unit_ids[path] = file_unit_id
+        if file_unit_id:
+            self.state.file_unit_ids[path] = file_unit_id
         return file_unit_id
 
     def add_symbol(

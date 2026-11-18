@@ -3,7 +3,7 @@ package org.rostilos.codecrow.analysisengine.util;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Set;
-import org.rostilos.codecrow.plugins.ImageFiles;
+import org.rostilos.codecrow.plugins.RepositoryFileScope;
 
 /**
  * Shared host-level classification for files that cannot provide text context.
@@ -39,7 +39,7 @@ public final class TextFileEligibility {
     }
 
     public static boolean isTextCandidate(String path) {
-        if (path == null || path.isBlank() || ImageFiles.isImage(path)) {
+        if (path == null || path.isBlank() || RepositoryFileScope.excludes(path)) {
             return false;
         }
         String normalized = path.toLowerCase(Locale.ROOT);

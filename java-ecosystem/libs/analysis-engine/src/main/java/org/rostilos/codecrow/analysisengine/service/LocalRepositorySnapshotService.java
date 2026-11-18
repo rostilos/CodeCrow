@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import org.rostilos.codecrow.plugins.ImageFiles;
+import org.rostilos.codecrow.plugins.RepositoryFileScope;
 
 import java.io.IOException;
 import java.nio.file.InvalidPathException;
@@ -271,7 +271,7 @@ public class LocalRepositorySnapshotService {
             Map<String, String> normalizedContents = new LinkedHashMap<>();
             if (proposedFileContents != null) {
                 for (Map.Entry<String, String> entry : proposedFileContents.entrySet()) {
-                    if (ImageFiles.isImage(entry.getKey())) continue;
+                    if (RepositoryFileScope.excludes(entry.getKey())) continue;
                     Optional<String> normalized = normalizeRepositoryPath(entry.getKey());
                     if (normalized.isEmpty()) {
                         log.warn("Skipping unsafe proposed-tree file path: {}", entry.getKey());
@@ -317,7 +317,7 @@ public class LocalRepositorySnapshotService {
             return normalized;
         }
         for (String path : paths) {
-            if (ImageFiles.isImage(path)) continue;
+            if (RepositoryFileScope.excludes(path)) continue;
             Optional<String> safePath = normalizeRepositoryPath(path);
             if (safePath.isPresent()) {
                 normalized.add(safePath.get());

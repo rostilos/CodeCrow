@@ -194,6 +194,8 @@ def _resolve_described_path(requested_path, result, batch_paths, known_paths):
 
 
 def prepare_change_summary_context(summary: Any, focus_paths=()) -> dict:
+    from utils.image_files import omit_image_records
+    summary = omit_image_records(summary)
     if (not isinstance(summary, dict) or not isinstance(summary.get("files"), list)
             or not summary["files"] or any(not isinstance(item, dict)
                 or not isinstance(item.get("path"), str) for item in summary["files"])):
@@ -247,9 +249,8 @@ _CHANGE_CONTEXT_PREFIX = (
 )
 
 
-def change_summary_minimum_tokens(summary: Any, *, prepared_context: dict | None = None) -> int:
-    rendered = change_summary_context(summary, prepared_context=prepared_context)
-    return (len(rendered.encode('utf-8')) + 1) // 2 if rendered else 0
+def render_change_summary_context(context: dict) -> str:
+    return _CHANGE_CONTEXT_PREFIX + compact_change_context(context) if context else ''
 
 
 def change_summary_context(summary: Any, focus_paths=(), *, prepared_context: dict | None = None) -> str:
@@ -263,7 +264,7 @@ def change_summary_context(summary: Any, focus_paths=(), *, prepared_context: di
                 context['graph'] = {**graph, 'symbolDetail': graph_symbol_context(summary['graph'], focus_paths)}
         if not context:
             return ''
-        return _CHANGE_CONTEXT_PREFIX + compact_change_context(context)
+        return render_change_summary_context(context)
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         logger.warning('PR prompt context status=degraded: malformed saved context; source review continues')
         return ''
@@ -301,9 +302,12 @@ def _changed_ranges(hunks):
 
 
 def _scan_records(diff: ProcessedDiff | None, paths: list[str], chunk_chars: int):
+    from utils.image_files import is_image_file
     files = []
     records = []
     for item in diff.files if diff else []:
+        if is_image_file(item.path) or is_image_file(item.old_path):
+            continue
         files.append({
             "path": item.path, "oldPath": item.old_path,
             "changeType": item.change_type.value,
@@ -314,6 +318,13 @@ def _scan_records(diff: ProcessedDiff | None, paths: list[str], chunk_chars: int
             "changedRanges": _changed_ranges(item.hunks),
             "summary": "", "scanStatus": "pending",
         })
+        if item.is_binary:
+            # Binary bytes provide no source behavior for a text model to summarize.
+            files[-1].update(summary="Binary content changed; no textual source was supplied.",
+                changes=[line for line in item.content.splitlines() if line.startswith((
+                    'new file mode ', 'deleted file mode ', 'rename from ', 'rename to ', 'old mode ', 'new mode '))],
+                scanStatus='scanned', descriptionSource='deterministic_metadata')
+            continue
         text = item.content or "(No textual diff available.)"
         # Split exceptionally long source lines too, retaining exact bytes and
         # offsets. Every piece is scanned; there is no batch-count cutoff.
@@ -322,6 +333,8 @@ def _scan_records(diff: ProcessedDiff | None, paths: list[str], chunk_chars: int
                         "diff": piece} for i, piece in enumerate(pieces))
     seen = {item["path"] for item in files}
     for path in paths:
+        if is_image_file(path):
+            continue
         if path not in seen:
             files.append({"path": path, "changeType": "unknown", "ranges": [],
                           "summary": "Diff unavailable", "scanStatus": "unavailable"})
@@ -358,6 +371,8 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
     scan_deadline = asyncio.get_running_loop().time() + scan_allowance
     logger.info("PR change scan allocation: batches=%d parallel_review_capacity=%d scan_seconds=%.1f reserved_review_seconds=%.1f",
                 len(batches), parallelism, scan_allowance, available - scan_allowance)
+    logger.info("PR change scan inputs: files=%d binary_metadata_only=%d model_batches=%d", len(files),
+                sum(file.get('descriptionSource') == 'deterministic_metadata' for file in files), len(batches))
     by_path = {item["path"]: item for item in files}
     state = CumulativeChanges(summary="")
     graph = ChangeGraph(request, files, rag_client)
@@ -630,7 +645,9 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
         "projectId": request.projectId, "pullRequestId": request.pullRequestId,
         "sourceRevision": request.currentCommitHash or request.commitHash,
         "baseRevision": request.baseCommitHash or request.get_target_head_commit_hash(),
-        "summary": description or "Changes recorded from the acquired PR diff; semantic scan unavailable.",
+        "summary": description or ("Binary file changes recorded from Git metadata; no textual source was supplied."
+            if files and all(file.get('binary') for file in files)
+            else "Changes recorded from the acquired PR diff; semantic scan unavailable."),
         "overview": state.summary, "changeAreas": [area.model_dump() for area in state.changeAreas],
         "files": files, "relationships": [{**edge.model_dump(), 'provenance': 'model_inferred',
             **({'targetReference': module_references[(edge.source, edge.target)]}
@@ -643,7 +660,8 @@ async def _scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, 
     }
     logger.info("PR change scan completed: project=%s pr=%s files=%d batches=%d status=%s duration_ms=%d",
                 request.projectId, request.pullRequestId, len(files), len(batches), result["status"], result["durationMs"])
-    return result
+    from utils.image_files import omit_image_records
+    return omit_image_records(result)
 
 
 async def scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, event_callback=None, rag_client=None, *, review_parallelism=1) -> dict:
@@ -665,6 +683,8 @@ async def scan_pr_changes(llm, request: ReviewRequestDto, processed_diff=None, e
 
 
 def compatible_change_summary(summary, project_id, pr_number, source_revision):
+    from utils.image_files import omit_image_records
+    summary = omit_image_records(summary)
     if summary is None:
         return None
     if (change_summary_context(summary)

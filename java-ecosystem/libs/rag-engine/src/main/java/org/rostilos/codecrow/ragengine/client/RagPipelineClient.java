@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.ragengine.client;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.slf4j.Logger;
@@ -313,10 +314,9 @@ public class RagPipelineClient {
                     targetLabel, BranchDeletionFailure.TARGET, null, "RAG disabled");
         }
         
-        // URL-encode branch name to handle slashes (e.g., feature/xyz -> feature%2Fxyz)
-        String encodedBranch = java.net.URLEncoder.encode(branch, java.nio.charset.StandardCharsets.UTF_8);
-        HttpUrl.Builder urlBuilder = HttpUrl.get(String.format(
-                "%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch)).newBuilder();
+        HttpUrl.Builder urlBuilder = HttpUrl.get(ragApiUrl).newBuilder()
+                .addPathSegment("index").addPathSegment(workspace).addPathSegment(project)
+                .addPathSegment("branch").addPathSegment(branch);
         urlBuilder.addQueryParameter("collection_target", targetLabel);
         urlBuilder.addQueryParameter("generation_revision", exactRevision);
         urlBuilder.addQueryParameter("generation_manifest_sha256", exactManifest);
@@ -329,9 +329,18 @@ public class RagPipelineClient {
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
-                log.info("Deleted branch data for {}/{}/{} target={}",
-                        workspace, project, branch, targetLabel);
-                return BranchDeletionOutcome.success(targetLabel);
+                if (response.body() == null) {
+                    throw new IOException("RAG deletion response had no confirmation");
+                }
+                var result = objectMapper.readTree(response.body().byteStream());
+                String status = result == null ? "" : result.path("status").asText();
+                if ("success".equals(status) || "already_absent".equals(status)) {
+                    log.debug("Reconciled branch generation deletion for {}/{}/{} target={}, status={}",
+                            workspace, project, branch, targetLabel, status);
+                    return BranchDeletionOutcome.success(targetLabel);
+                }
+                return BranchDeletionOutcome.failure(targetLabel, BranchDeletionFailure.TARGET,
+                        response.code(), "RAG did not confirm deletion: " + status);
             } else {
                 int statusCode = response.code();
                 String detail = response.body() != null
@@ -358,6 +367,30 @@ public class RagPipelineClient {
                     null,
                     transportFailure.getMessage());
         }
+    }
+
+    public record OrphanCandidate(
+            long projectId, String workspace, String project, String branch,
+            String collectionTarget, String revision, String manifestDigest) {
+    }
+
+    public List<OrphanCandidate> listOrphanCandidates() throws IOException {
+        if (!ragEnabled || serviceSecret.isBlank()) {
+            return List.of();
+        }
+        Request.Builder request = new Request.Builder()
+                .url(ragApiUrl + "/index/maintenance/orphan-candidates");
+        addAuthHeader(request);
+        try (Response response = httpClient.newCall(request.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("Could not list orphaned RAG candidates: HTTP " + response.code());
+            }
+            return objectMapper.readValue(response.body().byteStream(), new TypeReference<>() {});
+        }
+    }
+
+    public boolean isEnabled() {
+        return ragEnabled;
     }
 
     public enum BranchDeletionFailure {

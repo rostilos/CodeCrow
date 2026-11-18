@@ -14,7 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.zip.ZipEntry;
-import org.rostilos.codecrow.plugins.ImageFiles;
+import org.rostilos.codecrow.plugins.RepositoryFileScope;
 import java.util.zip.ZipInputStream;
 
 /**
@@ -348,15 +348,10 @@ public class BranchArchiveService {
 
                 String relativePath = stripArchiveRoot(entry.getName());
                 ArchiveEntryBudget entryBudget = budget.beginEntry(relativePath, entry.getSize());
-                if (ImageFiles.isImage(relativePath)) {
-                    drainEntry(zis, entryBudget);
-                    zis.closeEntry();
-                    continue;
-                }
 
                 // Skip files we don't need
-                if (neededFiles != null && !neededFiles.isEmpty()
-                        && !neededFiles.contains(relativePath)) {
+                if (RepositoryFileScope.excludes(relativePath) || (neededFiles != null && !neededFiles.isEmpty()
+                        && !neededFiles.contains(relativePath))) {
                     skippedNotNeeded++;
                     drainEntry(zis, entryBudget);
                     zis.closeEntry();
@@ -437,13 +432,8 @@ public class BranchArchiveService {
 
                 String relativePath = stripArchiveRoot(entry.getName());
                 ArchiveEntryBudget entryBudget = budget.beginEntry(relativePath, entry.getSize());
-                if (ImageFiles.isImage(relativePath)) {
-                    drainEntry(zis, entryBudget);
-                    zis.closeEntry();
-                    continue;
-                }
-                if (neededFiles != null && !neededFiles.isEmpty()
-                        && !neededFiles.contains(relativePath)) {
+                if (RepositoryFileScope.excludes(relativePath) || (neededFiles != null && !neededFiles.isEmpty()
+                        && !neededFiles.contains(relativePath))) {
                     skippedNotNeeded++;
                     drainEntry(zis, entryBudget);
                     zis.closeEntry();

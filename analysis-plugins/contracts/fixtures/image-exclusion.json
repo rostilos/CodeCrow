@@ -1,0 +1,18 @@
+{
+  "input": {
+    "files": [{"path": "source.py", "summary": "Source behavior", "content": "image = 'photo.png'"}, {"path": "photo.png", "summary": "Image description"}],
+    "changeAreas": [{"paths": ["source.py", "photo.png"], "title": "Mixed"}, {"paths": ["photo.png"], "title": "Images"}],
+    "relationships": [{"source": "source.py", "target": "photo.png"}, {"source": "source.py", "target": "other.py"}],
+    "graph": {"nodes": [{"id": "a", "path": "source.py"}, {"id": "b", "path": "photo.png"}, {"path": "other.svg"}], "edges": [{"source": "a", "target": "b"}, {"source": null, "target": "a"}], "coverage": {"queriedPaths": ["source.py", "photo.png"]}},
+    "scanBatches": [["source.py", "photo.png"]],
+    "toolContext": {"reviewSource": {"changedFiles": ["source.py", "photo.png"], "fileContents": {"source.py": "image = 'photo.png'", "photo.png": "IMAGE_BYTES"}}}
+  },
+  "expected": {
+    "files": [{"path": "source.py", "summary": "Source behavior", "content": "image = 'photo.png'"}],
+    "changeAreas": [{"paths": ["source.py"], "title": "Mixed"}],
+    "relationships": [{"source": "source.py", "target": "other.py"}],
+    "graph": {"nodes": [{"id": "a", "path": "source.py"}], "edges": [{"source": null, "target": "a"}], "coverage": {"queriedPaths": ["source.py"]}},
+    "scanBatches": [["source.py"]],
+    "toolContext": {"reviewSource": {"changedFiles": ["source.py"], "fileContents": {"source.py": "image = 'photo.png'"}}}
+  }
+}

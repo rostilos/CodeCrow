@@ -209,8 +209,8 @@ class RelationWriter:
         target_unit_id: str | None = None,
         identity_discriminator: str | None = None,
     ) -> str:
-        from codecrow_plugins.image_files import is_image_file
-        if any(is_image_file(value) for value in (path, source, target, *related_paths)):
+        from codecrow_plugins.file_scope import is_excluded
+        if any(is_excluded(value) for value in (path, source, target, *related_paths)):
             return ""
         normalized_path = self._normalize_path(path)
         normalized_related = tuple(sorted({

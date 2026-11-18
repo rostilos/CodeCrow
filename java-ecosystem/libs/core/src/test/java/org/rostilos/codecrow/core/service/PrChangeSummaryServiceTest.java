@@ -16,6 +16,21 @@ class PrChangeSummaryServiceTest {
     final ObjectMapper mapper = new ObjectMapper();
     final PrChangeSummaryService service = new PrChangeSummaryService(repository, mapper);
 
+    @Test void imagesAreRemovedOnSaveReuseAndCopy() throws Exception {
+        var raw = new java.util.HashMap<String,Object>(payload(7L, "abc"));
+        raw.put("files", List.of(Map.of("path", "a.py"), Map.of("path", "image.svg", "summary", "IMAGE_RECORD")));
+        raw.put("relationships", List.of(Map.of("source", "a.py", "target", "image.svg")));
+        var source = analysis(7L, "abc", "same");
+        service.attach(source, raw);
+        assertThat(source.getPrChangeSummaryPayload()).doesNotContain("image.svg", "IMAGE_RECORD");
+        source.setPrChangeSummaryPayload(mapper.writeValueAsString(raw));
+        when(repository.findByProjectIdAndCommitHashAndPrNumber(7L, "abc", 9L)).thenReturn(Optional.of(source));
+        assertThat(mapper.writeValueAsString(service.find(7L, 9L, "abc", null))).doesNotContain("image.svg");
+        var target = analysis(7L, "abc", "same");
+        service.copyForAnalysis(source, target);
+        assertThat(target.getPrChangeSummaryPayload()).doesNotContain("image.svg");
+    }
+
     CodeAnalysis analysis(long projectId, String revision, String identity) {
         Project project = mock(Project.class); when(project.getId()).thenReturn(projectId);
         var analysis = new CodeAnalysis(); analysis.setProject(project);

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Callable, Generator, List, Mapping, Optional
 import logging
 import re
-from codecrow_plugins.image_files import is_image_file
 
 from .documents import Document
 from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file
@@ -251,7 +250,7 @@ class DocumentLoader:
         documents = []
 
         for relative_path in file_paths:
-            if is_image_file(str(relative_path)):
+            if should_exclude_file(str(relative_path), []):
                 continue
             full_path = repo_base / relative_path
             relative_path_str = str(relative_path)

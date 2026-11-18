@@ -391,6 +391,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                         .findByBranchIndexIdOrderByCreatedAtDesc(tracked.get().getId())
                     : List.of();
             generations = generations.stream()
+                    .filter(generation -> generation.getStatus() != RagBranchIndexGenerationStatus.RETIRED)
+                    .filter(generation -> generation.getManifestDigest() != null)
                     .sorted(Comparator.comparing(generation ->
                             generation.getStatus()
                                     == RagBranchIndexGenerationStatus.ACTIVE))

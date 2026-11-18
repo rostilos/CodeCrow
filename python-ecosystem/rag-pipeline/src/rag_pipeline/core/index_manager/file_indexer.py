@@ -84,9 +84,6 @@ class FileIndexer:
         document_indexed = 0
         check_cancelled()
         path = str(document.metadata["path"])
-        from codecrow_plugins.image_files import is_image_file
-        if is_image_file(path):
-            return 0
         file_unit_id = writer.add_file(document)
         architecture_only = str(
             getattr(dispositions.get(path), "value", "")

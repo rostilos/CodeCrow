@@ -466,7 +466,10 @@ class ChangeGraph:
         return all(isinstance(binding.get(key), str) and binding[key] for key in required)
 
     async def _query_page(self, target, snapshot, pattern, cursor, *, path=None):
+        from utils.image_files import is_image_file, omit_image_records
         focus = path or target
+        if is_image_file(focus):
+            return dict(status='excluded', results=[])
         if (not focus or focus in {'.', '..'} or focus.startswith(('/', '../'))
                 or '\\' in focus or posixpath.normpath(focus) != focus):
             # Model relationships can name routes or symbols rather than files.
@@ -483,6 +486,7 @@ class ChangeGraph:
         else:
             response = await self.client.query_review_graph(**arguments,
                 focus_paths=[path or target], include_source=False, detail_level='standard', token_budget=16000)
+        response = omit_image_records(response)
         self.queries.append(dict(path=path or target, snapshot=snapshot, pattern=pattern, cursor=cursor,
             status=response.get('status', 'ready'), returned=len(response.get('results') or []),
             nextCursor=response.get('nextCursor'), coverage=response.get('coverage', {}),

@@ -44,8 +44,8 @@ class RepositoryAnalysisHandle:
         *,
         progress_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
-        from .image_files import is_image_file
-        artifacts = tuple(artifact for artifact in artifacts if not is_image_file(artifact.path))
+        from .file_scope import is_excluded
+        artifacts = tuple(artifact for artifact in artifacts if not is_excluded(artifact.path))
         if self._finished:
             raise RuntimeError("repository analysis is already finished")
         if any(

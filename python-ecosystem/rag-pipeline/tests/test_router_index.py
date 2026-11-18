@@ -503,3 +503,22 @@ def test_exact_generation_delete_maps_receipt_mismatch_to_conflict():
         )
 
     assert exception.value.status_code == 409
+
+
+def test_exact_generation_delete_reports_active_reader():
+    manager = MagicMock()
+    manager.delete_branch.side_effect = BlockingIOError()
+    with patch(
+        "rag_pipeline.api.routers.index._get_singletons",
+        return_value=(MagicMock(), manager),
+    ), pytest.raises(HTTPException) as exception:
+        delete_branch(
+            "ws",
+            "project",
+            "feature/test",
+            collection_target="generation-target",
+            generation_revision="commit",
+            generation_manifest_sha256="b" * 64,
+        )
+
+    assert exception.value.status_code == 423

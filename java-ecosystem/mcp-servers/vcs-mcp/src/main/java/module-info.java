@@ -1,4 +1,5 @@
 module org.rostilos.codecrow.mcpservers {
+    requires org.rostilos.codecrow.plugins;
     requires org.apache.tomcat.embed.core;
     requires io.github.cdimascio.dotenv.java;
     requires io.modelcontextprotocol.sdk.mcp;
