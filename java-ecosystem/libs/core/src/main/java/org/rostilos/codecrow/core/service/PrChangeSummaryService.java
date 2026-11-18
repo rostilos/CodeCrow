@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.util.Map;
 import java.util.List;
 import java.util.Objects;
+import org.rostilos.codecrow.plugins.ImageFiles;
 
 /** Optional context stored in the owning analysis transaction; malformed context falls back to source. */
 @Service
@@ -36,7 +37,7 @@ public class PrChangeSummaryService {
                 log.warn("PR change summary identity mismatch for analysis {}; enrichment skipped", analysis.getId());
                 return;
             }
-            analysis.setPrChangeSummaryPayload(mapper.writeValueAsString(raw));
+            analysis.setPrChangeSummaryPayload(mapper.writeValueAsString(ImageFiles.omitRecords(raw)));
             log.info("PR change summary attached to analysis {} project {} PR {}", analysis.getId(),
                     analysis.getProject().getId(), analysis.getPrNumber());
         } catch (Exception exception) {
@@ -55,6 +56,7 @@ public class PrChangeSummaryService {
                     || !sourceRevision.equals(found.get().getCommitHash())
                     || found.get().getPrChangeSummaryPayload() == null) return null;
             Map<String, Object> payload = mapper.readValue(found.get().getPrChangeSummaryPayload(), new TypeReference<>() {});
+            payload = mapper.convertValue(ImageFiles.omitRecords(payload), new TypeReference<>() {});
             if (!Objects.equals(String.valueOf(projectId), String.valueOf(payload.get("projectId")))
                     || !Objects.equals(String.valueOf(prNumber), String.valueOf(payload.get("pullRequestId")))
                     || !sourceRevision.equals(payload.get("sourceRevision"))
@@ -83,7 +85,8 @@ public class PrChangeSummaryService {
                     || root.path("projectId").asLong(-1) != analysis.getProject().getId()
                     || root.path("pullRequestId").asLong(-1) != analysis.getPrNumber()) return Map.of();
             var source = root.path("toolContext").path("reviewSource");
-            return source.isObject() ? mapper.convertValue(source, new TypeReference<>() {}) : Map.of();
+            return source.isObject() ? mapper.convertValue(ImageFiles.omitRecords(
+                    mapper.convertValue(source, new TypeReference<Map<String, Object>>() {})), new TypeReference<>() {}) : Map.of();
         } catch (Exception unavailable) {
             log.warn("Saved review source unavailable for analysis {}; using pinned provider fallback", analysis.getId());
             return Map.of();
@@ -97,6 +100,10 @@ public class PrChangeSummaryService {
                 || !Objects.equals(source.getCommitHash(), target.getCommitHash())
                 || source.getDiffFingerprint() == null
                 || !source.getDiffFingerprint().equals(target.getDiffFingerprint())) return;
-        target.setPrChangeSummaryPayload(source.getPrChangeSummaryPayload());
+        try {
+            attach(target, mapper.readValue(source.getPrChangeSummaryPayload(), new TypeReference<Map<String, Object>>() {}));
+        } catch (Exception unavailable) {
+            log.warn("Saved PR change summary unavailable for copy; source review remains available");
+        }
     }
 }

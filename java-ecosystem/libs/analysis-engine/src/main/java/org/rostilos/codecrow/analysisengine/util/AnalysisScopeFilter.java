@@ -7,6 +7,7 @@ import java.util.Set;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.plugins.ImageFiles;
 
 /**
  * Applies the effective analysis file scope to unified diffs and file sets.
@@ -55,6 +56,7 @@ public final class AnalysisScopeFilter {
 
     public static String filterDiff(String rawDiff, Project project) {
         if (rawDiff == null || rawDiff.isBlank()) return rawDiff;
+        rawDiff = ImageFiles.filterDiff(rawDiff);
         AnalysisScopeConfig scope = scope(project);
 
         StringBuilder result = new StringBuilder();

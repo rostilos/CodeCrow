@@ -52,6 +52,7 @@ public final class PluginRuntime {
     public FileDisposition fileDisposition(
             String path,
             ProjectCapabilities capabilities) {
+        if (ImageFiles.isImage(path)) return FileDisposition.EXCLUDED;
         if (capabilities == null) {
             throw new IllegalArgumentException("project capabilities are required");
         }

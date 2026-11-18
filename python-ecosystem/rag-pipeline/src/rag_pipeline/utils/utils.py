@@ -3,6 +3,7 @@ from typing import Dict
 import codecs
 import functools
 from fnmatch import fnmatchcase
+from codecrow_plugins.image_files import is_image_file
 import re
 
 
@@ -165,7 +166,7 @@ def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:
     Note: Also handles paths with archive root prefix (e.g., 'repo-commit123/lib/file.php' 
     will match pattern 'lib/**')
     """
-    return any(
+    return is_image_file(path) or any(
         _repository_glob_matches(candidate, pattern)
         for candidate in _repository_paths_to_check(path)
         for pattern in excluded_patterns

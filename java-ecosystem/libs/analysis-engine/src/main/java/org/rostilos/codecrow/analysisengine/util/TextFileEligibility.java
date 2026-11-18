@@ -3,6 +3,7 @@ package org.rostilos.codecrow.analysisengine.util;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Set;
+import org.rostilos.codecrow.plugins.ImageFiles;
 
 /**
  * Shared host-level classification for files that cannot provide text context.
@@ -17,8 +18,6 @@ public final class TextFileEligibility {
     public static final long MAX_TEXT_CONTENT_BYTES = 10L * 1024L * 1024L;
 
     private static final Set<String> EXCLUDED_EXTENSIONS = Set.of(
-            // Raster images. SVG is XML source and remains eligible.
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".tif",
             // Fonts
             ".woff", ".woff2", ".ttf", ".otf", ".eot",
             // Compiled / bytecode
@@ -40,7 +39,7 @@ public final class TextFileEligibility {
     }
 
     public static boolean isTextCandidate(String path) {
-        if (path == null || path.isBlank()) {
+        if (path == null || path.isBlank() || ImageFiles.isImage(path)) {
             return false;
         }
         String normalized = path.toLowerCase(Locale.ROOT);

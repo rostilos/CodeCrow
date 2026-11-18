@@ -37,6 +37,13 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>../python/codecrow_plugins</directory>
+                <includes><include>image_extensions.txt</include></includes>
+                <targetPath>codecrow</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

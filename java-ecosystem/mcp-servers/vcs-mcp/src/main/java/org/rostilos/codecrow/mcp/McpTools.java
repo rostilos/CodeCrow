@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.mcp;
 
+import org.rostilos.codecrow.plugins.ImageFiles;
+
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
 import java.util.LinkedHashMap;
@@ -402,7 +404,7 @@ public class McpTools {
         try {
             String diff = getVcsClient().getPullRequestDiff(workspace, repoSlug, pullRequestId);
             // Filter large files from diff to reduce token usage
-            String filteredDiff = largeContentFilter.filterDiff(diff);
+            String filteredDiff = largeContentFilter.filterDiff(ImageFiles.filterDiff(diff));
             return Map.of("diff", filteredDiff);
         } catch (IOException e) {
             return Map.of("error", "Failed to get pull request diff: " + e.getMessage());
@@ -432,6 +434,7 @@ public class McpTools {
     ) {
         try {
             requireRequestRepository(workspace, repoSlug);
+            if (ImageFiles.isImage(filePath)) return Map.of("excluded", true, "reason", "image_file");
             String fileContent = getVcsClient(true).getBranchFileContent(workspace, repoSlug, branch, filePath);
             return formatFileContent(fileContent, filePath, startLine, endLine);
         } catch (IOException e) {
@@ -465,6 +468,7 @@ public class McpTools {
     ) {
         try {
             requireRequestRepository(workspace, repoSlug);
+            if (ImageFiles.isImage(filePath)) return Map.of("excluded", true, "reason", "image_file");
             if (startLine == null
                     && contextSuppliedPaths != null
                     && contextSuppliedPaths.stream().anyMatch(filePath::equals)) {

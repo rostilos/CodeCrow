@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.rostilos.codecrow.plugins.ImageFiles;
 
 /**
  * Service for persisting analyzed file contents with content-addressed deduplication.
@@ -68,7 +69,7 @@ public class FileSnapshotService {
             String filePath = entry.getKey();
             String content = entry.getValue();
 
-            if (content == null || filePath == null || filePath.isBlank()) {
+            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
                 continue;
             }
 
@@ -135,7 +136,7 @@ public class FileSnapshotService {
             String filePath = entry.getKey();
             String content = entry.getValue();
 
-            if (content == null || filePath == null || filePath.isBlank()) {
+            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
                 continue;
             }
 
@@ -194,7 +195,7 @@ public class FileSnapshotService {
      * Retrieve all file snapshots for an analysis with content eagerly loaded.
      */
     public List<AnalyzedFileSnapshot> getSnapshotsWithContent(Long analysisId) {
-        return snapshotRepository.findByAnalysisIdWithContent(analysisId);
+        return includedSnapshots(snapshotRepository.findByAnalysisIdWithContent(analysisId));
     }
 
     /**
@@ -203,6 +204,7 @@ public class FileSnapshotService {
      * @return the raw file content, or empty if not found
      */
     public Optional<String> getFileContent(Long analysisId, String filePath) {
+        if (ImageFiles.isImage(filePath)) return Optional.empty();
         return snapshotRepository.findByAnalysisIdAndFilePathWithContent(analysisId, filePath)
                 .map(snapshot -> snapshot.getFileContent().getContent());
     }
@@ -212,7 +214,7 @@ public class FileSnapshotService {
      * Useful for re-computing line hashes during tracking.
      */
     public Map<String, String> getFileContentsMap(Long analysisId) {
-        List<AnalyzedFileSnapshot> snapshots = snapshotRepository.findByAnalysisIdWithContent(analysisId);
+        List<AnalyzedFileSnapshot> snapshots = includedSnapshots(snapshotRepository.findByAnalysisIdWithContent(analysisId));
         Map<String, String> map = new java.util.HashMap<>();
         for (AnalyzedFileSnapshot s : snapshots) {
             map.put(s.getFilePath(), s.getFileContent().getContent());
@@ -224,7 +226,7 @@ public class FileSnapshotService {
      * Get snapshot metadata (without content) for an analysis.
      */
     public List<AnalyzedFileSnapshot> getSnapshots(Long analysisId) {
-        return snapshotRepository.findByAnalysisId(analysisId);
+        return includedSnapshots(snapshotRepository.findByAnalysisId(analysisId));
     }
 
     // ── PR-level persistence ─────────────────────────────────────────────
@@ -258,7 +260,7 @@ public class FileSnapshotService {
             String filePath = entry.getKey();
             String content = entry.getValue();
 
-            if (content == null || filePath == null || filePath.isBlank()) {
+            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
                 continue;
             }
 
@@ -340,7 +342,7 @@ public class FileSnapshotService {
             String filePath = entry.getKey();
             String content = entry.getValue();
 
-            if (content == null || filePath == null || filePath.isBlank()) {
+            if (content == null || filePath == null || filePath.isBlank() || ImageFiles.isImage(filePath)) {
                 continue;
             }
 
@@ -401,20 +403,21 @@ public class FileSnapshotService {
      * Returns metadata only.
      */
     public List<AnalyzedFileSnapshot> getSnapshotsForBranchById(Long branchId) {
-        return snapshotRepository.findByBranchId(branchId);
+        return includedSnapshots(snapshotRepository.findByBranchId(branchId));
     }
 
     /**
      * Retrieve all file snapshots for a branch with content eagerly loaded.
      */
     public List<AnalyzedFileSnapshot> getSnapshotsWithContentForBranch(Long branchId) {
-        return snapshotRepository.findByBranchIdWithContent(branchId);
+        return includedSnapshots(snapshotRepository.findByBranchIdWithContent(branchId));
     }
 
     /**
      * Retrieve the raw file content for a specific file in a branch using the direct FK.
      */
     public Optional<String> getFileContentForBranchById(Long branchId, String filePath) {
+        if (ImageFiles.isImage(filePath)) return Optional.empty();
         return snapshotRepository.findByBranchIdAndFilePathWithContent(branchId, filePath)
                 .map(s -> s.getFileContent().getContent());
     }
@@ -423,7 +426,7 @@ public class FileSnapshotService {
      * Build a filePath → content map from stored branch-level snapshots.
      */
     public Map<String, String> getFileContentsMapForBranch(Long branchId) {
-        List<AnalyzedFileSnapshot> snapshots = snapshotRepository.findByBranchIdWithContent(branchId);
+        List<AnalyzedFileSnapshot> snapshots = includedSnapshots(snapshotRepository.findByBranchIdWithContent(branchId));
         Map<String, String> map = new java.util.HashMap<>();
         for (AnalyzedFileSnapshot s : snapshots) {
             map.put(s.getFilePath(), s.getFileContent().getContent());
@@ -437,13 +440,14 @@ public class FileSnapshotService {
      * Retrieve all file snapshots accumulated for a PR with content eagerly loaded.
      */
     public List<AnalyzedFileSnapshot> getSnapshotsWithContentForPr(Long pullRequestId) {
-        return snapshotRepository.findByPullRequestIdWithContent(pullRequestId);
+        return includedSnapshots(snapshotRepository.findByPullRequestIdWithContent(pullRequestId));
     }
 
     /**
      * Retrieve the raw file content for a specific file in a PR.
      */
     public Optional<String> getFileContentForPr(Long pullRequestId, String filePath) {
+        if (ImageFiles.isImage(filePath)) return Optional.empty();
         return snapshotRepository.findByPullRequestIdAndFilePathWithContent(pullRequestId, filePath)
                 .map(s -> s.getFileContent().getContent());
     }
@@ -452,7 +456,7 @@ public class FileSnapshotService {
      * Build a filePath → content map from stored PR-level snapshots.
      */
     public Map<String, String> getFileContentsMapForPr(Long pullRequestId) {
-        List<AnalyzedFileSnapshot> snapshots = snapshotRepository.findByPullRequestIdWithContent(pullRequestId);
+        List<AnalyzedFileSnapshot> snapshots = includedSnapshots(snapshotRepository.findByPullRequestIdWithContent(pullRequestId));
         Map<String, String> map = new java.util.HashMap<>();
         for (AnalyzedFileSnapshot s : snapshots) {
             map.put(s.getFilePath(), s.getFileContent().getContent());
@@ -464,7 +468,7 @@ public class FileSnapshotService {
      * Get snapshot metadata (without content) for a PR.
      */
     public List<AnalyzedFileSnapshot> getSnapshotsForPr(Long pullRequestId) {
-        return snapshotRepository.findByPullRequestId(pullRequestId);
+        return includedSnapshots(snapshotRepository.findByPullRequestId(pullRequestId));
     }
 
     // ── Branch-level aggregated retrieval ────────────────────────────────
@@ -489,14 +493,14 @@ public class FileSnapshotService {
         // 1. Branch-level snapshots (highest priority — latest content)
         Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
         if (branchOpt.isPresent()) {
-            List<AnalyzedFileSnapshot> direct = snapshotRepository.findByBranchId(branchOpt.get().getId());
+            List<AnalyzedFileSnapshot> direct = includedSnapshots(snapshotRepository.findByBranchId(branchOpt.get().getId()));
             for (AnalyzedFileSnapshot s : direct) {
                 snapshotsByPath.put(s.getFilePath(), s);
             }
         }
 
         // 2. Legacy analysis-level snapshots (fill gaps for files not yet in branch FK)
-        List<AnalyzedFileSnapshot> legacy = snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName);
+        List<AnalyzedFileSnapshot> legacy = includedSnapshots(snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName));
         for (AnalyzedFileSnapshot s : legacy) {
             snapshotsByPath.putIfAbsent(s.getFilePath(), s);
         }
@@ -509,6 +513,7 @@ public class FileSnapshotService {
      * first; falls back to the legacy DISTINCT ON approach.
      */
     public Optional<String> getFileContentForBranch(Long projectId, String branchName, String filePath) {
+        if (ImageFiles.isImage(filePath)) return Optional.empty();
         // Try direct FK first
         Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
         if (branchOpt.isPresent()) {
@@ -570,4 +575,9 @@ public class FileSnapshotService {
         }
         return lines;
     }
+    private static List<AnalyzedFileSnapshot> includedSnapshots(List<AnalyzedFileSnapshot> snapshots) {
+        return snapshots.stream().filter(snapshot -> !ImageFiles.isImage(snapshot.getFilePath()))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    }
+
 }

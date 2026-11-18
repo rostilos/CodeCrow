@@ -39,6 +39,9 @@ class UnitWriter:
         if metadata_override:
             metadata.update(metadata_override)
         path = _normalize_path(str(metadata.get("path") or ""))
+        from codecrow_plugins.image_files import is_image_file
+        if is_image_file(path):
+            return ""
         content = str(node.text or "")
         start_line = max(1, int(metadata.get("start_line") or 1))
         end_line = max(start_line, int(metadata.get("end_line") or start_line))

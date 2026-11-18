@@ -7,6 +7,7 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.rostilos.codecrow.plugins.ImageFiles;
 
 /** File-path scope used by PR and branch analysis. Exclusions win over inclusions. */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -37,7 +38,7 @@ public record AnalysisScopeConfig(
     }
 
     public boolean includes(String repositoryPath) {
-        if (repositoryPath == null || repositoryPath.isBlank()) return false;
+        if (repositoryPath == null || repositoryPath.isBlank() || ImageFiles.isImage(repositoryPath)) return false;
         String path = normalizePath(repositoryPath);
         boolean included = includePatterns.isEmpty()
                 || includePatterns.stream().anyMatch(pattern -> matches(path, pattern));
@@ -45,6 +46,7 @@ public record AnalysisScopeConfig(
     }
 
     public boolean includesChange(String oldPath, String newPath) {
+        if (ImageFiles.isImage(oldPath) || ImageFiles.isImage(newPath)) return false;
         // Destination paths define additions, modifications and renames. A deletion
         // has no destination, so its former path determines whether it is in scope.
         return newPath != null ? includes(newPath) : includes(oldPath);

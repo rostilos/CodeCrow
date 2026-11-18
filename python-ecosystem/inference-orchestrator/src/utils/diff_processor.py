@@ -322,6 +322,8 @@ class DiffProcessor:
 
     def _parse_diff(self, raw_diff: str) -> List[DiffFile]:
         """Parse unified diff into list of DiffFile objects."""
+        from codecrow_plugins.image_files import filter_image_diff
+        raw_diff = filter_image_diff(raw_diff)
         files = []
         current_file = None
         current_content = []
@@ -372,7 +374,7 @@ class DiffProcessor:
                     current_file.change_type = DiffChangeType.DELETED
                 elif line.startswith('rename from'):
                     current_file.change_type = DiffChangeType.RENAMED
-                elif line.startswith('Binary files'):
+                elif line.startswith(('Binary files', 'GIT binary patch')):
                     current_file.change_type = DiffChangeType.BINARY
                     current_file.is_binary = True
                 elif line.startswith('new mode '):
