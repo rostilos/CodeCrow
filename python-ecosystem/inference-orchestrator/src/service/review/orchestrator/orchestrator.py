@@ -1142,12 +1142,13 @@ class MultiStageReviewOrchestrator:
                 state = "verification_degraded" if verification["incomplete"] else "verification_completed"
                 if self.event_callback:
                     self.event_callback({"type": "status", "state": state,
-                        "message": (f"Evidence assessment: {verification['completed']}/{verification['candidates']} completed; "
+                        "message": (f"Evidence assessment before server ingestion: {verification['completed']}/{verification['candidates']} completed; "
                                     f"{verification['supported']} supported, {verification['unknown']} unknown"),
                         "verificationSummary": verification})
                 if verification["unknown"]:
                     final_report += (f"\n\nIndependent evidence verification remains unresolved for "
-                                     f"{verification['unknown']} of {verification['candidates']} findings.")
+                                     f"{verification['unknown']} of {verification['candidates']} active review candidates "
+                                     "before server ingestion.")
             _emit_review_evidence_completed(
                 self.event_callback,
                 hunk_coverage,

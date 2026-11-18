@@ -150,6 +150,21 @@ def test_consolidated_provenance_and_verification_coverage_remain_separate():
     ledger.assert_terminal()
 
 
+def test_published_resolutions_do_not_count_as_unverified_active_candidates():
+    ledger = CandidateEvidenceLedger()
+    active, resolved = _issue(), _issue()
+    for index, issue in enumerate((active, resolved)):
+        ledger.register(issue, stage="stage_1", source_key=str(index), review_unit_ids=["unit"],
+                        prompt_hunk_ids=["hunk"], generation_prompt="prompt")
+    resolved.isResolved = True
+    ledger.publish([active, resolved])
+    ledger.assert_terminal()
+
+    assert ledger.record_for(resolved).terminal_state == "published"
+    assert ledger.verification_summary()["candidates"] == 1
+    assert ledger.verification_summary()["unknown"] == 1
+
+
 def test_candidate_provenance_binds_anchor_to_owning_review_unit():
     processed = DiffProcessor().process(RAW_DIFF)
     hunk_id = processed.files[0].hunks[0].id

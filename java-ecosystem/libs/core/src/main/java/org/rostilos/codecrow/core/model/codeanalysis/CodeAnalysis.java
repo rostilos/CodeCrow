@@ -152,7 +152,9 @@ public class CodeAnalysis {
     public String getTaskSummary() { return taskSummary; }
     public void setTaskSummary(String taskSummary) { this.taskSummary = taskSummary; }
 
-    public String getComment() { return comment; }
+    public String getComment() {
+        return analysisType == AnalysisType.PR_REVIEW ? ReviewReportComment.forDisplay(comment, totalIssues) : comment;
+    }
     public void setComment(String comment) { this.comment = comment; }
 
     public AnalysisStatus getStatus() { return status; }

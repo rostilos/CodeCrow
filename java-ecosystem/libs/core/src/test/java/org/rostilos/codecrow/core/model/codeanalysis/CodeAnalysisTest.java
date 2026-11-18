@@ -162,6 +162,30 @@ class CodeAnalysisTest {
             
             assertThat(analysis.getComment()).isEqualTo("This is a test comment");
         }
+
+        @Test
+        void displaysMarkdownFromSavedReportAndExplainsTheCandidateCount() {
+            analysis.setAnalysisType(AnalysisType.PR_REVIEW);
+            analysis.setComment("**Review incomplete.** Verification was unavailable.\n\n"
+                    + "{\"report\":\"# Pull Request Review\\n\\nReview details.\",\"assessments\":[{"
+                    + "\n\nIndependent evidence verification remains unresolved for 7 of 7 findings.");
+
+            assertThat(analysis.getComment())
+                    .startsWith("**Review incomplete.** Verification was unavailable.\n\n"
+                            + "# Pull Request Review\n\nReview details.")
+                    .contains("7 of 7 active review candidates before server ingestion.")
+                    .contains("**Saved open findings: 0.**")
+                    .doesNotContain("\"assessments\"");
+        }
+
+        @Test
+        void replacesAnUnterminatedReportWithAnExplicitMarkdownNotice() {
+            analysis.setAnalysisType(AnalysisType.PR_REVIEW);
+            analysis.setComment("{\"report\":\"# Unfinished\\n\\n");
+
+            assertThat(analysis.getComment()).startsWith("**Review summary unavailable.**")
+                    .doesNotContain("{\"report\"");
+        }
     }
 
     @Nested

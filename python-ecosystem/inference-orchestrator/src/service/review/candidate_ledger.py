@@ -88,6 +88,7 @@ class CandidateRecord:
     assessments: list[dict[str, Any]] = field(default_factory=list)
     anchor_hunk_ids: tuple[str, ...] = ()
     terminal_state: Optional[str] = None
+    published_active: bool = False
     rejection: Optional[CandidateRejection] = None
     object_ids: set[int] = field(default_factory=set, repr=False)
     consolidated_candidate_ids: set[str] = field(default_factory=set)
@@ -271,8 +272,8 @@ class CandidateEvidenceLedger:
                 "reasonCode": "consolidated_evidence", "attempted": False, "completed": False})
 
     def verification_summary(self) -> dict[str, Any]:
-        """Report published-candidate evidence coverage, separately from transport."""
-        records = [record for record in self._records.values() if record.terminal_state == "published"]
+        """Report verification coverage for active candidates sent to the host."""
+        records = [record for record in self._records.values() if record.published_active]
         counts = {"candidates": len(records), "attempted": 0, "completed": 0,
                   "supported": 0, "disproven": 0, "unknown": 0, "incomplete": 0}
         reasons: dict[str, int] = {}
@@ -347,6 +348,7 @@ class CandidateEvidenceLedger:
                     f"rejected candidate {record.candidate_id} reached publication"
                 )
             record.terminal_state = "published"
+            record.published_active = not issue.isResolved
 
     def assert_terminal(self) -> None:
         incomplete = sorted(

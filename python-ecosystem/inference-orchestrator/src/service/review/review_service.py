@@ -170,7 +170,10 @@ class ReviewService:
                                    if decision.get("kind") == "verification_result"), None)
         if final_verification is not None and final_verification.get("incomplete", 0):
             incomplete_stages.append("verification")
-            limitations.append(f"Independent verification remains incomplete for {final_verification['incomplete']} finding(s).")
+            limitations.append(
+                f"Independent verification remains incomplete for {final_verification['incomplete']} "
+                "active review candidate(s) before server ingestion."
+            )
         elif final_verification is None and failed_verification:
             incomplete_stages.append("verification")
             limitations.append(f"{len(failed_verification)} verification batch(es) did not complete; unresolved findings remain labelled.")

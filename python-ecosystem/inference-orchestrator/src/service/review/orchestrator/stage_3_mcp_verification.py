@@ -338,6 +338,44 @@ def validated_mcp_dismissals(
     return validated
 
 
+_REPORT_MEMBER = re.compile(r'^\{\s*"report"\s*:\s*')
+_REPORT_UNAVAILABLE = (
+    "**Review summary unavailable.** The generated report was incomplete. "
+    "See the saved findings for this review."
+)
+
+
+def _decode_report_envelope(content: str) -> tuple[str, Any] | None:
+    """Recover complete Markdown independently of the assessment payload."""
+    outer = re.sub(r"^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$", "", content.strip())
+    if not outer.startswith("{"):
+        return None
+    try:
+        _, payload = load_json_with_local_repairs(content)
+    except (ValueError, TypeError):
+        match = _REPORT_MEMBER.match(outer)
+        if not match:
+            return None
+        logger.warning("[Stage 3] Incomplete report envelope; assessments remain unavailable")
+        try:
+            report, _ = json.JSONDecoder().raw_decode(outer, match.end())
+        except ValueError:
+            report = None
+        return (report if isinstance(report, str) and report.strip() else _REPORT_UNAVAILABLE), None
+    if not isinstance(payload, dict) or not {"report", "assessments"}.intersection(payload):
+        return None
+    report = payload.get("report")
+    return (
+        report if isinstance(report, str) and report.strip() else _REPORT_UNAVAILABLE,
+        payload.get("assessments", []),
+    )
+
+
+def markdown_report(content: str) -> str:
+    envelope = _decode_report_envelope(content)
+    return envelope[0] if envelope is not None else content
+
+
 def extract_verification_assessments(content: str, executor: McpToolExecutor,
                                     issues: Dict[str, CodeReviewIssue]) -> tuple[str, Dict[str, dict]]:
     pattern = r'<!--\s*VERIFICATION_ASSESSMENTS:\s*(\[.*?\])\s*-->'
@@ -345,24 +383,16 @@ def extract_verification_assessments(content: str, executor: McpToolExecutor,
     assessments = {}
     items = []
     missing_reason = "assessment_missing"
-    try:
-        outer = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-        if not outer.startswith("{"):
-            raise ValueError("Legacy prose verification response")
-        _, payload = load_json_with_local_repairs(content)
-        if isinstance(payload, dict):
-            items = payload.get("assessments", [])
-            content = str(payload.get("report") or "")
-    except (ValueError, TypeError):
-        missing_reason = "assessment_malformed"
-        # Keep usable prose from a malformed response; older model responses
-        # may place the same assessment records in an HTML comment.
-        if match:
-            try:
-                _, items = load_json_with_local_repairs(match.group(1))
-            except (ValueError, TypeError):
-                missing_reason = "assessment_malformed"
-            content = re.sub(pattern, "", content, flags=re.DOTALL).strip()
+    envelope = _decode_report_envelope(content)
+    if envelope is not None:
+        content, items = envelope
+    elif match:
+        # Older responses may include assessment records in an HTML comment.
+        try:
+            _, items = load_json_with_local_repairs(match.group(1))
+        except (ValueError, TypeError):
+            missing_reason = "assessment_malformed"
+        content = re.sub(pattern, "", content, flags=re.DOTALL).strip()
     if not isinstance(items, list):
         items = []
         missing_reason = "assessment_malformed"

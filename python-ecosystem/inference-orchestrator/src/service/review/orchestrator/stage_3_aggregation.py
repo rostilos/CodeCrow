@@ -24,6 +24,7 @@ from service.review.orchestrator.stage_3_mcp_verification import (
     _location_line,
     execute_stage_3_mcp_verification,
     extract_dismissed_issues as _extract_dismissed_issues,
+    markdown_report,
     issue_reason_brief as _stage_3_reason_brief,
     location_file_path as _location_file_path,
     mcp_read_covers_location as _mcp_read_covers_location,
@@ -331,6 +332,7 @@ async def execute_stage_3_aggregation(
             )
             result["verification_assessments"] = unknown_verification_assessments(
                 shard_issues, "verification_source_unavailable")
+        result["report"] = markdown_report(result.get("report") or "")
         results.append(result)
 
     try:
@@ -345,6 +347,7 @@ async def execute_stage_3_aggregation(
     except Exception as exc:
         logger.warning("Stage 3 synthesis unavailable; preserving complete child reports: %s", exc)
         merged = _merge_stage_3_results(results)
+    merged["report"] = markdown_report(merged.get("report") or "")
     receipts = merged.setdefault("verification_assessments", [])
     recorded = {receipt.get("candidateObjectId") for receipt in receipts}
     admitted_ids = {key for shard in shards for key in shard.verification_ids}

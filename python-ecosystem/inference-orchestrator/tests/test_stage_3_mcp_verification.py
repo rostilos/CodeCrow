@@ -362,6 +362,26 @@ def test_structured_assessments_preserve_valid_records_and_mark_missing_or_inval
                for key in ("issue_1", "issue_2"))
 
 
+@pytest.mark.parametrize("report_complete", [False, True])
+def test_truncated_envelope_preserves_only_complete_markdown(report_complete):
+    markdown = "# Review\n\nDetails with a quoted \"value\"."
+    content = '{"report":' + json.dumps(markdown)
+    content = content + ',"assessments":[{' if report_complete else content[:-1]
+    issue = CodeReviewIssue(file="a.py", line=1, severity="HIGH", category="BUG_RISK",
+                            reason="Potential crash", suggestedFixDescription="Guard it")
+    report, assessments = stage_3_mcp_verification.extract_verification_assessments(
+        content, SimpleNamespace(verification_source={}), {"issue_0": issue},
+    )
+    if report_complete:
+        assert report == markdown
+    else:
+        assert report.startswith("**Review summary unavailable.**")
+    assert stage_3_mcp_verification.markdown_report(content) == report
+    assert assessments["issue_0"]["verdict"] == "unknown"
+    assert assessments["issue_0"]["reasonCode"] == "assessment_malformed"
+    assert assessments["issue_0"]["completed"] is False
+
+
 @pytest.mark.asyncio
 async def test_summary_only_first_answer_gets_explicit_terminal_assessment():
     issue = CodeReviewIssue(file="a.py", line=1, severity="HIGH", category="BUG_RISK",
