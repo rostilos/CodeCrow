@@ -103,5 +103,19 @@ Priority Guidelines:
 - files_to_skip: use sparingly. Only skip files when the input evidence shows they are mechanically unreviewable or contain no substantive changed content. Otherwise include them in file_groups and let later stages analyze the diff.
 - If a file has "diff_was_limited": true, add "FULL_DIFF_REVIEW" to that file's focus_areas only when the representative evidence shows substantive code/configuration changes that require the full raw diff. This asks Stage 1 to load and split the full diff, so use it deliberately. Otherwise plan normal review from the summary evidence or skip only when the evidence supports skipping.
 
+Focus-area and hypothesis guidelines:
+- Infer the language and framework(s) only from visible evidence: imports,
+  package manifests, config files, plugin context, and file structure shown in
+  the input. Name them in focus_areas when identifiable (e.g.
+  "FRAMEWORK:MAGENTO", "LANG:PYTHON") so later stages apply the relevant
+  framework contracts from their own knowledge.
+- Add focus areas for the concrete risk classes the evidence suggests:
+  SECURITY, DATA_INTEGRITY, CONCURRENCY, RESOURCE_LEAK, API_CONTRACT,
+  ERROR_HANDLING, FRAMEWORK_MISUSE, DUPLICATION, COUPLING, TEST_COVERAGE.
+- cross_file_concerns: form testable hypotheses about interactions between
+  changed files — contracts one file breaks that another depends on, duplicated
+  implementations of the same behavior, data-flow mismatches, and state/order
+  dependencies. Prefer specific, disprovable hypotheses over generic cautions.
+
 REMEMBER: Every input file must appear exactly once - either in a file_group or in files_to_skip.
 """

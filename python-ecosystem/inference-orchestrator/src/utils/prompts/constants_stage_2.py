@@ -7,6 +7,11 @@ from utils.prompts.constants_shared import CAUSAL_ANCHOR_INSTRUCTIONS
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a staff architect reviewing this PR for concrete systemic defects.
 Focus on data flow, authorization patterns, consistency, and service boundaries.
+Evaluate as an architect: layering and dependency direction the changed files
+actually establish, coupling/cohesion shifts, DRY violations the visible change
+demonstrates (same behavior implemented twice), SOLID violations with concrete
+post-change impact, framework contracts the visible stack imposes (lifecycle,
+DI, persistence, routing), and coherence of the PR's design as a whole.
 Return structured JSON.
 
 USER PROMPT:
@@ -75,40 +80,31 @@ Migration Files in This PR
 {migrations}
 
 ⚠️ CRITICAL: TASK-COVERAGE ANALYSIS MUST BE PR-WIDE
-If task context is available, compare the task summary/description/acceptance
-criteria against the complete PR-wide change summary, prior task history,
-architecture reference, and all Stage 1 findings.
-
-- Do NOT claim a task requirement is missing because one Stage 1 batch did not
-  contain it.
-- Do NOT claim a task requirement is missing because a bounded PRF/DELTA
-  excerpt did not contain it. Missing context is not evidence of absence.
-- Do NOT claim a task requirement is missing from the task if prior task
-  history shows it was already covered by a merged prior PR for the same task.
-- If prior task history shows coverage only in an open, declined, or unknown
-  prior PR, treat it as a dependency/release-risk note in pr_recommendation
-  unless current PR evidence directly contradicts the expected behavior.
-- Set `findingScope` to `TASK_COVERAGE_GAP` for every assertion that the PR,
-  task, requirement, requested feature, or acceptance criterion is missing,
-  omitted, incomplete, or not implemented. Copy all supporting PRF###/DELTA###
+With task context, compare the task's requirements/acceptance criteria against
+the complete PR-wide change summary, prior task history, architecture
+reference, and all Stage 1 findings:
+- Never claim a requirement is missing because one Stage 1 batch or a bounded
+  PRF/DELTA excerpt lacked it; missing context is not evidence of absence, and
+  prior task history showing it was already covered by a merged prior PR
+  disproves the gap.
+- Set `findingScope` to `TASK_COVERAGE_GAP` for each assertion that a
+  requirement is missing/incomplete, copying all supporting PRF###/DELTA###
   references into `coverageEvidenceRefs`.
-- In incremental mode, a new task-coverage gap is permitted only for a regression
-  visibly introduced by the current delta. Set `coverageRegression=true` and
-  cite a DELTA### excerpt containing the removed implementation. Otherwise omit
-  the candidate; the host publication gate will reject it.
-- In full mode, a task-coverage gap requires a COMPLETE changed-line evidence
-  status and at least one valid PRF### reference. Bounded evidence cannot prove
-  omission.
-- If the task suggests a possible gap but the code evidence is insufficient,
-  do not create an issue and do not repeat the unsupported gap as a recommendation.
+- Incremental mode: a new coverage gap requires a regression visibly introduced
+  by the current delta — set `coverageRegression=true` and cite a DELTA###
+  excerpt with the removed implementation; otherwise omit (the host gate rejects it).
+- Full mode: a coverage gap requires COMPLETE changed-line evidence status plus
+  at least one valid PRF### reference; bounded evidence cannot prove omission.
+- If the code evidence is insufficient, create no issue and do not repeat the
+  unsupported gap as a recommendation.
 
 ⚠️ CRITICAL: CROSS-FILE INTERACTION ANALYSIS
 Use only the changed source, exact architecture/enrichment facts, Stage 1
-findings, task context, and plugin-provided groups visible above. Check for
-proven conflicts between changed files: incompatible contracts, duplicate
-registrations, ordering hazards, mismatched data flow, and authorization gaps.
-Do not infer repository-wide duplication or an existing implementation that is
-not present in this exact evidence.
+findings, task context, and plugin-provided groups visible above. Evaluate the
+whole PR: incompatible contracts, duplicate registrations, ordering hazards,
+mismatched data flow, authorization gaps, and architectural regressions. A PR
+can be unit-clean yet systemically broken — say so as one finding. Do not infer
+repository-wide duplication absent from this evidence.
 
 Output Format
 Return ONLY valid JSON:
@@ -119,7 +115,7 @@ Return ONLY valid JSON:
     {{
       "id": "CROSS_001",
       "severity": "HIGH",
-      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|ERROR_HANDLING|ARCHITECTURE",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|ERROR_HANDLING|ARCHITECTURE|TESTING|DOCUMENTATION|BEST_PRACTICES",
       "title": "Issue affecting multiple files",
       "primary_file": "path/to/most/relevant/file",
       "line": 42,
@@ -171,8 +167,7 @@ SEVERITY CALIBRATION for cross-file issues:
 - MEDIUM: Concrete post-change inconsistency that causes incorrect behavior, a
   broken contract, unsafe state, or material operational cost. Different styles or
   valid strategies alone do not qualify.
-- LOW/INFO: Do not create a cross_file_issue for a design observation, optional
-  standardization, defensive improvement, or potential future risk; omit it.
-- Architecture observations without concrete post-change impact must be omitted,
-  not severity-downgraded into the issue list.
+- LOW: Real architectural/systemic finding with a concrete post-change
+  consequence — report it as category ARCHITECTURE, even if no single line
+  crashes. Style preferences and speculative risk remain non-findings.
 """

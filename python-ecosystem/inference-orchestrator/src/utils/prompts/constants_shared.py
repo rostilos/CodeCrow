@@ -4,16 +4,16 @@ Shared prompt fragments reused across multiple stages.
 
 ISSUE_CATEGORIES = """
 Available issue categories (use EXACTLY one of these values):
-- SECURITY: Security vulnerabilities, injection risks, authentication issues
-- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks
-- CODE_QUALITY: Code smells, maintainability issues, complexity problems
-- BUG_RISK: Potential bugs, edge cases, null pointer risks
-- STYLE: Code style, formatting, naming conventions
-- DOCUMENTATION: Missing or inadequate documentation
-- BEST_PRACTICES: Violations of language, framework, or domain best practices
-- ERROR_HANDLING: Improper exception handling, missing error checks
-- TESTING: Test coverage issues, untestable code
-- ARCHITECTURE: Design issues, coupling problems, SOLID violations
+- SECURITY: vulnerabilities, injection, broken auth/authorization, unsafe data handling
+- PERFORMANCE: measurable waste — redundant I/O, N+1 queries, unbounded work, resource leaks
+- CODE_QUALITY: code smells, complexity, dead code, confusing structure with real cost
+- BUG_RISK: logic errors, edge cases, null/unsafe dereferences, broken invariants
+- STYLE: naming and readability defects that measurably impair comprehension
+- DOCUMENTATION: comments/docs the code contradicts, or missing docs for changed public contracts
+- BEST_PRACTICES: framework/language misuse demonstrated by the changed code
+- ERROR_HANDLING: swallowed failures, wrong recovery, missing error paths on fallible operations
+- TESTING: broken tests, missing coverage of changed behavior, untestable designs
+- ARCHITECTURE: cross-file design defects, coupling violations, SOLID breaches, DRY violations, layering violations
 """
 
 CAUSAL_ANCHOR_INSTRUCTIONS = """
