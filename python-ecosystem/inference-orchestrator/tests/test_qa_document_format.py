@@ -93,3 +93,80 @@ async def test_multiple_explicit_test_sections_merge_without_losing_either_area(
     assert orchestrator._has_complete_shareable_sections(result)
     assert "Verify receipt." in result and "Verify profile." in result
     assert result.count("<!-- codecrow-test-cases:start -->") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence", [False, True])
+async def test_truncated_sections_payload_is_repaired_and_rendered_locally(fence):
+    # Reproduces a max-token cutoff: the response is cut inside the last
+    # complete section object, exactly like a real truncated QA generation.
+    prefix = json.dumps({"sections": [
+        {"kind": "overview", "heading": "# Короткий опис змін", "content": "PR змінює обробку сповіщень."},
+        {"kind": "test_cases", "heading": "# Тестові сценарії",
+         "content": "**Login** (HIGH)\nConfirm the code works."},
+        {"kind": "environment", "heading": "# Підготовка",
+         "content": "Use a QA account and a test phone number."},
+        {"kind": "overview", "heading": "# Ризики", "content": "unreachable after the cut"},
+    ]}, ensure_ascii=False)
+    cut = prefix.index('"Use a QA account and a test phone number.')
+    truncated = prefix[:cut + len('"Use a QA account and a test phone nu')]
+    if fence:
+        truncated = "```json\n" + truncated
+
+    events = []
+    orchestrator = QaDocOrchestrator(
+        MagicMock(ainvoke=AsyncMock(side_effect=AssertionError("unexpected paid call"))),
+        event_callback=events.append,
+    )
+    result = await orchestrator._ensure_shareable_sections(truncated, {})
+
+    assert '"sections"' not in result
+    assert "PR змінює обробку сповіщень." in result
+    assert "**Login** (HIGH)\nConfirm the code works." in result
+    # The cut landed mid-string in the environment section: its delivered
+    # content is salvaged, so the preview stays available.
+    assert "Use a QA account and a test phone nu" in result
+    assert "unreachable after the cut" not in result
+    assert orchestrator._has_complete_shareable_sections(result)
+    assert not any(event.get("stage") == "qa_preview_unavailable" for event in events)
+    assert result.startswith("# Короткий опис змін")
+    orchestrator.llm.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_truncated_test_cases_content_is_salvaged_when_environment_never_arrived():
+    # Real-world shape: the provider cut the response inside the test_cases
+    # string, so no environment section was ever delivered.
+    truncated = json.dumps({"sections": [
+        {"kind": "overview", "heading": "# Guide", "content": "Keep this."},
+        {"kind": "test_cases", "heading": "## Tests",
+         "content": "**Checkout** (HIGH)\nConfirm the order appears."},
+        {"kind": "environment", "heading": "Setup", "content": "Use a QA account."},
+    ]}, ensure_ascii=False)
+    cut = truncated.index('"Use a QA account.')
+    truncated = truncated[:cut + len('"Use a QA ac')]
+
+    orchestrator = QaDocOrchestrator(MagicMock(ainvoke=AsyncMock()))
+    result = await orchestrator._ensure_shareable_sections(truncated, {})
+
+    assert '"sections"' not in result
+    assert "Keep this." in result
+    # The delivered test-case content is salvaged, not dropped.
+    assert "**Checkout** (HIGH)\nConfirm the order appears." in result
+    assert "codecrow-test-cases:start" in result
+    assert "Use a QA ac" in result
+    assert orchestrator._has_complete_shareable_sections(result)
+
+
+@pytest.mark.asyncio
+async def test_truncated_payload_without_complete_section_is_preserved_unchanged():
+    truncated = '{"sections": [{"kind": "overview", "heading": "# Guide", "conten'
+    orchestrator = QaDocOrchestrator(MagicMock(ainvoke=AsyncMock()))
+    assert await orchestrator._ensure_shareable_sections(truncated, {}) == truncated
+
+
+@pytest.mark.asyncio
+async def test_prose_with_braces_is_never_treated_as_a_sections_payload():
+    response = "# Guide\nSteps { use the QA account } and confirm."
+    orchestrator = QaDocOrchestrator(MagicMock(ainvoke=AsyncMock()))
+    assert await orchestrator._ensure_shareable_sections(response, {}) == response

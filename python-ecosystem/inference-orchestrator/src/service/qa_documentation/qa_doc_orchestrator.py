@@ -1423,7 +1423,24 @@ class QaDocOrchestrator(BaseOrchestrator):
         from service.review.inference_usage import record_model_response
         response = await self.llm.ainvoke(messages)
         record_model_response(response)
+        self._log_truncation(response)
         return response
+
+    @staticmethod
+    def _log_truncation(response) -> None:
+        """Make provider output truncation observable without altering the flow."""
+        metadata = getattr(response, "response_metadata", None) or {}
+        stop_reason = (
+            metadata.get("finish_reason")
+            or metadata.get("stop_reason")
+            or (metadata.get("token_usage") or {}).get("finish_reason")
+        )
+        if isinstance(stop_reason, str) and stop_reason.lower() in {"length", "max_tokens", "content_filter"}:
+            logger.warning(
+                "QA document generation stopped early (finish_reason=%s); "
+                "output may be truncated",
+                stop_reason,
+            )
 
     async def _run_single_pass(
         self,
@@ -1550,14 +1567,7 @@ class QaDocOrchestrator(BaseOrchestrator):
     ) -> str:
         """Render explicit sections and normalize formatting without another model call."""
         original = documentation
-        candidate = documentation.strip()
-        fence = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", candidate, re.DOTALL | re.IGNORECASE)
-        if fence:
-            candidate = fence[1]
-        try:
-            structured = json.loads(candidate, strict=False)
-        except (ValueError, TypeError):
-            structured = None
+        structured = self._parse_sections_payload(documentation)
         if isinstance(structured, dict) and isinstance(structured.get("sections"), list):
             documentation = self._render_document_sections(structured["sections"]) or documentation
         documentation = self._normalize_section_markers(documentation)
@@ -1572,6 +1582,83 @@ class QaDocOrchestrator(BaseOrchestrator):
         elif documentation != original:
             emit_status(self.event_callback, "qa_format_normalized", "QA sections formatted locally for preview.")
         return documentation
+
+    @classmethod
+    def _parse_sections_payload(cls, documentation: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Recover the sections JSON contract without another model call.
+
+        Model responses get truncated at output limits, wrapped in fences, or
+        prefixed with stray prose. A strict full-text json.loads would store the
+        raw JSON as the visible guide, so reuse the tolerant stages parser first
+        and fall back to repairing truncated output. No parsed content is ever
+        fabricated: a truncated sections array is closed from its last complete
+        section, and unrepairable payloads return None so the original response
+        is preserved unchanged.
+        """
+        if not documentation:
+            return None
+        candidate = documentation.strip()
+        fence = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", candidate, re.DOTALL | re.IGNORECASE)
+        if fence:
+            candidate = fence[1].strip()
+        else:
+            # A truncated fenced payload has no closing fence to fullmatch.
+            opening_fence = re.match(r"```(?:json)?\s*\n", candidate, re.IGNORECASE)
+            if opening_fence:
+                candidate = candidate[opening_fence.end():].strip()
+        # A payload is the response contract only when it is the whole response;
+        # a JSON example embedded in prose must not replace the actual guide.
+        if not candidate.startswith("{"):
+            return None
+        parsed = cls._parse_json_from_response(candidate)
+        if isinstance(parsed, dict) and isinstance(parsed.get("sections"), list):
+            return parsed
+        return cls._repair_truncated_sections_payload(candidate)
+
+    @staticmethod
+    def _repair_truncated_sections_payload(candidate: str) -> Optional[Dict[str, Any]]:
+        """Close a max-token-truncated ``{"sections": [...]}`` payload locally.
+
+        Only the explicit sections contract is repaired: the text must start with
+        the object opening and an unterminated array. Delivered content is never
+        fabricated — a partially received section object keeps the text the model
+        actually emitted (closing only the unterminated JSON string and braces).
+        Malformed text is left untouched.
+        """
+        opening_fence = re.match(r"```(?:json)?\s*\n", candidate, re.IGNORECASE)
+        if opening_fence:
+            candidate = candidate[opening_fence.end():]
+        prefix = re.match(r'\{\s*"sections"\s*:\s*\[', candidate)
+        if not prefix:
+            return None
+        if candidate.endswith("]"):
+            # Array complete, outer object truncated: close and parse it whole.
+            try:
+                parsed = json.loads(candidate + "}", strict=False)
+            except (ValueError, TypeError):
+                return None
+            return parsed if isinstance(parsed, dict) and isinstance(parsed.get("sections"), list) else None
+        tail = candidate[prefix.end():]
+        last_close = tail.rfind("}")
+        # Keep every complete object plus the delivered part of a partially
+        # received object — closing its unterminated string so the text the
+        # model actually emitted is preserved instead of dropped.
+        kept = tail[:last_close + 1] if last_close >= 0 else tail
+        cut = tail[len(kept):].rstrip()
+        if cut.endswith(","):
+            cut = cut[:-1].rstrip()
+        kept += cut
+        if not kept.strip():
+            return None
+        for closing in ("", '"}', "}"):
+            repaired = '{"sections": [' + kept + closing + "]}"
+            try:
+                parsed = json.loads(repaired, strict=False)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(parsed, dict) and isinstance(parsed.get("sections"), list):
+                return parsed
+        return None
 
     @staticmethod
     def _render_document_sections(sections: list) -> Optional[str]:
