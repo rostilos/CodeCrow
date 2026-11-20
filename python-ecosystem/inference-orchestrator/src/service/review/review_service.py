@@ -177,6 +177,11 @@ class ReviewService:
         elif final_verification is None and failed_verification:
             incomplete_stages.append("verification")
             limitations.append(f"{len(failed_verification)} verification batch(es) did not complete; unresolved findings remain labelled.")
+        if final_verification and final_verification.get("previouslyAssessed"):
+            limitations.append(
+                f"Final verification skipped {final_verification['previouslyAssessed']} already-assessed "
+                "candidate(s). Their earlier assessments were retained."
+            )
         result["analysisCompletion"] = {
             "status": "partial" if incomplete_stages else "complete",
             "incompleteStages": incomplete_stages,

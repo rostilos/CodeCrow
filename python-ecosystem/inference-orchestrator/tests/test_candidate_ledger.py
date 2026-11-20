@@ -150,6 +150,40 @@ def test_consolidated_provenance_and_verification_coverage_remain_separate():
     ledger.assert_terminal()
 
 
+@pytest.mark.parametrize("reason", ["verification_budget_exhausted", "verification_source_unavailable"])
+def test_skipped_final_check_preserves_only_an_assessment_of_the_current_candidate(reason):
+    from service.review.review_service import ReviewService
+
+    ledger = CandidateEvidenceLedger()
+    issue, duplicate = _issue(), _issue()
+    for index, item in enumerate([issue, duplicate]):
+        ledger.register(item, stage="stage_1", source_key=str(index), review_unit_ids=["unit"],
+                        prompt_hunk_ids=["hunk"], generation_prompt="prompt")
+    ledger.publish([issue])
+    skipped = {"stage": "stage_3_verification", "verdict": "unknown", "reasonCode": reason,
+               "attempted": False, "completed": False}
+    ledger.assess(issue, {"verdict": "supported", "attempted": True, "completed": True})
+    ledger.assess(issue, skipped)
+
+    def review():
+        summary = ledger.verification_summary()
+        response = {"result": {"issues": [{"title": issue.title}]}, "inferenceUsage": {
+            "decisions": [{"kind": "verification_result", **summary}]}}
+        ReviewService._include_coverage_notice(SimpleNamespace(), response)
+        return summary, response["result"]
+
+    summary, result = review()
+    assert summary["supported"] == summary["completed"] == 1
+    assert result["analysisCompletion"]["status"] == "complete"
+    assert "already-assessed" in result["comment"]
+
+    ledger.consolidate(issue, [duplicate])
+    ledger.assess(issue, skipped)
+    summary, result = review()
+    assert summary["attempted"] == summary["completed"] == 0
+    assert result["analysisCompletion"]["incompleteStages"] == ["verification"]
+
+
 def test_published_resolutions_do_not_count_as_unverified_active_candidates():
     ledger = CandidateEvidenceLedger()
     active, resolved = _issue(), _issue()

@@ -8,6 +8,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -53,6 +54,7 @@ public class QaDocGenerationService {
 
     private final String inferenceOrchestratorUrl;
     private final String serviceSecret;
+    private final Duration requestTimeout;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final TokenEncryptionService tokenEncryptionService;
@@ -62,9 +64,12 @@ public class QaDocGenerationService {
     public QaDocGenerationService(
             @Value("${codecrow.inference-orchestrator.url:http://inference-orchestrator:8000}") String inferenceOrchestratorUrl,
             @Value("${codecrow.inference-orchestrator.service-secret:${codecrow.internal.api.secret:}}") String serviceSecret,
+            @Value("${QA_DOC_REQUEST_TIMEOUT_SECONDS:1800}") long requestTimeoutSeconds,
             TokenEncryptionService tokenEncryptionService,
             LocalRepositorySnapshotService snapshots,
             VcsClientProvider vcsClients) {
+        if (requestTimeoutSeconds < 1) throw new IllegalArgumentException("QA_DOC_REQUEST_TIMEOUT_SECONDS must be positive");
+        this.requestTimeout = Duration.ofSeconds(requestTimeoutSeconds);
         this.snapshots = snapshots;
         this.vcsClients = vcsClients;
         this.inferenceOrchestratorUrl = inferenceOrchestratorUrl;
@@ -212,7 +217,7 @@ public class QaDocGenerationService {
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
-                .timeout(Duration.ofSeconds(300));
+                .timeout(requestTimeout);
         if (serviceSecret.isBlank()) {
             log.warn("QA doc generation service secret is not configured; inference orchestrator may reject the request");
         } else {
@@ -226,6 +231,9 @@ public class QaDocGenerationService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("QA doc generation interrupted; not automatically retried", e);
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new IOException("QA doc generation timed out (" + e.getMessage() + ", request deadline "
+                    + requestTimeout.toSeconds() + "s); not automatically retried", e);
         } catch (IOException e) {
             throw new IOException("QA doc generation response unavailable; not automatically retried: " + e.getMessage(), e);
         }
@@ -387,7 +395,11 @@ public class QaDocGenerationService {
                 : new LinkedHashMap<>();
         prMeta.put("maxAllowedTokens", project.getEffectiveConfig().maxAnalysisTokenLimit());
         if (ctx.analysis() != null) {
-            prMeta.put("analysisSummary", buildAnalysisSummary(ctx.analysis()));
+            String summary = buildAnalysisSummary(ctx.analysis());
+            if (ctx.analysis().getStatus() == AnalysisStatus.PARTIAL) {
+                summary = "Partial PR review. These are the saved findings. Use the available PR changes to plan testing.\n\n" + summary;
+            }
+            prMeta.put("analysisSummary", summary);
         }
         if (!prMeta.isEmpty()) {
             payload.put("pr_metadata", prMeta);

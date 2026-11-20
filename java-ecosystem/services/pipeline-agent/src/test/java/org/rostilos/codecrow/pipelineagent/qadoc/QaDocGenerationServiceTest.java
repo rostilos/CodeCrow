@@ -61,7 +61,7 @@ class QaDocGenerationServiceTest {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
 
-        service = new QaDocGenerationService(baseUrl, TEST_SERVICE_SECRET, createTestEncryptionService(),
+        service = new QaDocGenerationService(baseUrl, TEST_SERVICE_SECRET, 647, createTestEncryptionService(),
                 org.mockito.Mockito.mock(org.rostilos.codecrow.analysisengine.service.LocalRepositorySnapshotService.class),
                 org.mockito.Mockito.mock(org.rostilos.codecrow.vcsclient.VcsClientProvider.class));
 
@@ -368,8 +368,9 @@ class QaDocGenerationServiceTest {
             assertThatThrownBy(() -> service.generateQaDocumentation(
                     project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)))
                     .isInstanceOf(IOException.class).hasMessageContaining("not automatically retried");
-            org.mockito.Mockito.verify(client, org.mockito.Mockito.times(1))
-                    .send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            var request = org.mockito.ArgumentCaptor.forClass(java.net.http.HttpRequest.class);
+            org.mockito.Mockito.verify(client).send(request.capture(), org.mockito.ArgumentMatchers.any());
+            assertThat(request.getValue().timeout()).contains(java.time.Duration.ofSeconds(647));
         }
 
         @Test
@@ -534,8 +535,8 @@ class QaDocGenerationServiceTest {
         @Test
         @DisplayName("should include analysisSummary in payload when CodeAnalysis is provided")
         void shouldIncludeAnalysisSummaryInPayload() throws Exception {
-            // Setup analysis with a single issue
             CodeAnalysis analysis = new CodeAnalysis();
+            analysis.setStatus(org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.PARTIAL);
             CodeAnalysisIssue issue = new CodeAnalysisIssue();
             issue.setSeverity(IssueSeverity.HIGH);
             issue.setFilePath("App.java");
@@ -568,7 +569,7 @@ class QaDocGenerationServiceTest {
             assertThat(prMeta).isNotNull();
             assertThat(prMeta.has("analysisSummary")).isTrue();
             String summary = prMeta.get("analysisSummary").asText();
-            assertThat(summary).contains("Critical bug");
+            assertThat(summary).contains("Partial PR review", "Critical bug");
             assertThat(summary).contains("App.java");
             assertThat(summary).contains("[HIGH]");
             assertThat(summary).contains("Null dereference");

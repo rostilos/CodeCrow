@@ -63,7 +63,7 @@ class QaDocSourceSnapshotIT {
                 }
             });
             server.start();
-            var service = new QaDocGenerationService(server.url("").toString().replaceAll("/$", ""), "secret",
+            var service = new QaDocGenerationService(server.url("").toString().replaceAll("/$", ""), "secret", 300,
                     mock(TokenEncryptionService.class), snapshots, clients);
             var savedBinding = Map.<String,Object>of("localRepoPath", "/deleted/review", "localReviewOverlayPath", "/deleted/overlay",
                     "localRepoRevision", "target-head", "localRepoTargetBranch", "main");

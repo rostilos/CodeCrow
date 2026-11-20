@@ -26,11 +26,14 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class QaAutoDocListenerTest {
 
-    @Test void completionEnqueuesTheExactReviewAndFailureDoesNotBlockTheReview() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = AnalysisCompletedEvent.CompletionStatus.class,
+            names = {"SUCCESS", "PARTIAL_SUCCESS"})
+    void completionEnqueuesTheExactReviewAndFailureDoesNotBlockTheReview(AnalysisCompletedEvent.CompletionStatus status) {
         var queue=org.mockito.Mockito.mock(QaDocQueueService.class);
         var listener=new QaAutoDocListener(queue);
         var event=new AnalysisCompletedEvent(this,"review",402L,null,
-                AnalysisCompletedEvent.CompletionStatus.SUCCESS,Duration.ZERO,0,0,null,
+                status,Duration.ZERO,0,0,null,
                 Map.of("analysisId",99L),"workspace","repository",17L);
         org.mockito.Mockito.doThrow(new IllegalStateException("database unavailable")).when(queue).enqueue(402L,99L);
         listener.onAnalysisCompleted(event);

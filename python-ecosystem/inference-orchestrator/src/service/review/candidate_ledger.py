@@ -278,12 +278,21 @@ class CandidateEvidenceLedger:
                   "supported": 0, "disproven": 0, "unknown": 0, "incomplete": 0}
         reasons: dict[str, int] = {}
         for record in records:
-            assessments = record.assessments
-            for index, assessment in enumerate(assessments):
-                if assessment.get("reasonCode") == "consolidated_evidence":
-                    assessments = record.assessments[index:]
-            counts["attempted"] += any(a.get("attempted") is True for a in assessments)
-            last = assessments[-1] if assessments else {}
+            last = {}
+            attempted = False
+            for assessment in record.assessments:
+                reason = assessment.get("reasonCode")
+                if reason == "consolidated_evidence":
+                    attempted = False
+                if (last.get("completed") is True and assessment.get("attempted") is False
+                        and reason in {"verification_budget_exhausted", "verification_source_unavailable"}):
+                    # Skipping another check on the same evidence does not revoke its assessment.
+                    continue
+                attempted |= assessment.get("attempted") is True
+                last = assessment
+            counts["attempted"] += attempted
+            if record.assessments and last is not record.assessments[-1]:
+                counts["previouslyAssessed"] = counts.get("previouslyAssessed", 0) + 1
             counts["completed"] += last.get("completed") is True
             counts["incomplete"] += last.get("completed") is not True
             verdict = last.get("verdict", "unknown")
