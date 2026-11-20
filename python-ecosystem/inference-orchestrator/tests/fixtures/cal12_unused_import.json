@@ -1,0 +1,30 @@
+{
+  "capture": "reports/qodo-benchmark/codex-proxy-gpt-5.6-luna-20261007-reliability20/captures/project-108065-review-12-b5a7fbeafb38444884b2891f05790a0a.json",
+  "head": "1926c8e06668c4a13deffb3460eaf54cf013ae0f",
+  "candidate_id": "sha256:cacaa9830d8e2052a643ec58d502cfc7bbd6f39c7f5f5fe80ea0e8b9fedd3b8c",
+  "original_issue": {
+    "anchorSide": "HEAD",
+    "category": "CODE_QUALITY",
+    "claimKind": "",
+    "codeSnippet": "import { useQuery } from \"@tanstack/react-query\";",
+    "evidenceGaps": [],
+    "evidenceRefs": [],
+    "file": "apps/web/modules/event-types/hooks/useTeamMembersWithSegment.tsx",
+    "hypothesis": "",
+    "id": null,
+    "isResolved": false,
+    "line": 1,
+    "reason": "The hook uses the tRPC query directly and never references `useQuery`. With unused-import linting enabled, this causes a lint failure and adds dead code.",
+    "relatedLocations": [],
+    "resolutionExplanation": null,
+    "resolutionReason": null,
+    "resolvedInCommit": null,
+    "scope": "LINE",
+    "severity": "LOW",
+    "suggestedFixDescription": "Remove the unused `useQuery` import.",
+    "suggestedFixDiff": null,
+    "title": "Remove unused useQuery import",
+    "visibility": null
+  },
+  "exact_source": "import { useQuery } from \"@tanstack/react-query\";\nimport type { AttributesQueryValue } from \"@calcom/lib/raqb/types\";\nimport { trpc } from \"@calcom/trpc/react\";\nimport { type UseTeamMembersWithSegmentProps, useProcessTeamMembersData } from \"@calcom/atoms/event-types/hooks/useTeamMembersWithSegmentPlatform\";\n\nexport const useTeamMembersWithSegment = ({\n  initialTeamMembers,\n  assignRRMembersUsingSegment,\n  teamId,\n  queryValue,\n  value,\n}: UseTeamMembersWithSegmentProps) => {\n  const { data: matchingTeamMembersWithResult, isPending } =\n    trpc.viewer.attributes.findTeamMembersMatchingAttributeLogic.useQuery(\n      {\n        teamId: teamId || 0,\n        attributesQueryValue: queryValue as AttributesQueryValue,\n        _enablePerf: true,\n      },\n      {\n        enabled: assignRRMembersUsingSegment && !!queryValue && !!teamId,\n      }\n    );\n\n  const { teamMembers, localWeightsInitialValues } = useProcessTeamMembersData({\n    initialTeamMembers,\n    assignRRMembersUsingSegment,\n    matchingTeamMembersWithResult: matchingTeamMembersWithResult?.result ? { result: matchingTeamMembersWithResult.result } : matchingTeamMembersWithResult,\n    value,\n  });\n\n  return {\n    teamMembers,\n    localWeightsInitialValues,\n    isPending,\n  };\n};\n"
+}

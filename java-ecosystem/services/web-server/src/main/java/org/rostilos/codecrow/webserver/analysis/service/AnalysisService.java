@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.webserver.analysis.service;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
@@ -42,7 +43,8 @@ public class AnalysisService {
             BranchIssueRepository branchIssueRepository,
             BranchRepository branchRepository,
             CodeAnalysisRepository codeAnalysisRepository,
-            QualityGateRepository qualityGateRepository
+            QualityGateRepository qualityGateRepository,
+            QualityGateEvaluator qualityGateEvaluator
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.issueRepository = issueRepository;
@@ -50,7 +52,11 @@ public class AnalysisService {
         this.branchRepository = branchRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.qualityGateRepository = qualityGateRepository;
-        this.qualityGateEvaluator = new QualityGateEvaluator(qualityGateRepository);
+        this.qualityGateEvaluator = qualityGateEvaluator;
+    }
+
+    public List<CodeAnalysis> getPrAnalyses(Long projectId, Long prNumber) {
+        return codeAnalysisRepository.findByProjectIdAndPrNumberOrderByPrVersionDescIdDesc(projectId, prNumber);
     }
 
     /**
@@ -89,6 +95,8 @@ public class AnalysisService {
 
         // collect issues from selected analyses
         List<CodeAnalysisIssue> issues = analyses.stream()
+                .filter(a -> (pullRequestId != null && !pullRequestId.isBlank())
+                        || a.getStatus() != AnalysisStatus.PARTIAL)
                 .flatMap(a -> a.getIssues().stream())
                 .toList();
 
@@ -160,6 +168,10 @@ public class AnalysisService {
         java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
         
         issue.setResolved(isResolved);
+        if (actor == null || "manual".equals(actor)) {
+            issue.setManualStatusResolved(isResolved);
+            issue.setManualStatusUpdatedAt(now);
+        }
 
         if (isResolved) {
             // Populate resolution fields when marking as resolved

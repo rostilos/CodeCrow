@@ -442,20 +442,26 @@ class RawDiffParserTest {
     @Nested
     @DisplayName("execute() - Binary Files")
     class BinaryFiles {
+        @Test void excludesImageDiffsBeforeContentAcquisition() {
+            for (String path : List.of("photo.PNG", "drawing.svg", "cursor.ani")) {
+                assertThat(parser.execute("diff --git a/" + path + " b/" + path + "\n+image content\n")).isEmpty();
+            }
+        }
+
 
         @Test
         @DisplayName("should handle binary file additions")
         void shouldHandleBinaryFileAdditions() {
             String rawDiff = """
-                    diff --git a/src/image.png b/src/image.png
+                    diff --git a/src/data.bin b/src/data.bin
                     new file mode 100644
-                    Binary files /dev/null and b/src/image.png differ
+                    Binary files /dev/null and b/src/data.bin differ
                     """;
 
             List<FileDiff> result = parser.execute(rawDiff);
 
             assertThat(result).hasSize(1);
-            assertThat(result.get(0).getFilePath()).isEqualTo("src/image.png");
+            assertThat(result.get(0).getFilePath()).isEqualTo("src/data.bin");
             assertThat(result.get(0).getDiffType()).isEqualTo(FileDiff.DiffType.ADDED);
         }
     }

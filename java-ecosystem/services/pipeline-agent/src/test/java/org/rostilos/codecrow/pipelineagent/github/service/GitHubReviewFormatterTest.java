@@ -16,6 +16,19 @@ class GitHubReviewFormatterTest {
     private final GitHubReviewFormatter formatter = new GitHubReviewFormatter();
 
     @Test
+    void composerManifestOnlyChangeProducesInlineCommentInsteadOfOutOfDiffLockfileFinding() {
+        var finding = new AnalysisSummary.IssueSummary(IssueSeverity.HIGH, "SECURITY", "composer.json", 3,
+                "phpmailer/phpmailer: TEST-001", "Known dependency vulnerability", "Update", null,
+                null, 1L, "    \"phpmailer/phpmailer\": \"6.4.1\",");
+        var plan = formatter.planComments(List.of(finding), MARKER, List.of(patch("composer.json",
+                "@@ -3 +3 @@\n-    \"phpmailer/phpmailer\": \"^6.10\",\n+    \"phpmailer/phpmailer\": \"6.4.1\",")));
+
+        assertThat(plan.nonInlineFindings()).isEmpty();
+        assertThat(plan.inlineComments()).singleElement().satisfies(comment -> assertThat(comment)
+                .containsEntry("path", "composer.json").containsEntry("line", 3).containsEntry("side", "RIGHT"));
+    }
+
+    @Test
     void formatsAnchoredIssuesAsGitHubReviewComments() {
         AnalysisSummary.IssueSummary issue = issue(
                 "/src/App.java",
@@ -178,4 +191,16 @@ class GitHubReviewFormatterTest {
     private PullRequestFilePatch patch(String path, String patch) {
         return new PullRequestFilePatch(path, "", "modified", patch);
     }
+
+    @Test void deletedFileRetainsBaseAnchorAndCannotBecomeRightSideComment() {
+        var base=new AnalysisSummary.IssueSummary(IssueSeverity.HIGH,"LOGIC","deleted.java",3,
+                "Deletion breaks caller","Removal regression",null,null,null,1L,"guard();",
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        var plan=formatter.planComments(List.of(base),MARKER,List.of(new PullRequestFilePatch(
+                "deleted.java","","removed","@@ -1,3 +0,0 @@\n-class A {\n-void guard() {}\n-guard();")));
+        assertThat(plan.inlineComments()).hasSize(1);
+        assertThat(plan.inlineComments().get(0)).containsEntry("side","LEFT").containsEntry("line",3);
+        assertThat(plan.nonInlineFindings()).isEmpty();
+    }
+
 }

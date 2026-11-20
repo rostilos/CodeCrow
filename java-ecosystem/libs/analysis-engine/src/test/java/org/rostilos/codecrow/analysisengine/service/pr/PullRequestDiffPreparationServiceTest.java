@@ -43,6 +43,10 @@ class PullRequestDiffPreparationServiceTest {
 
         assertThat(prepared.analysisMode()).isEqualTo(AnalysisMode.FULL);
         assertThat(prepared.changedFiles()).containsExactly("src/App.java");
+        assertThat(prepared.proposedTreeChangedFiles()).containsExactly(
+                "src/App.java",
+                "src/generated/Api.java",
+                "docs/readme.md");
         assertThat(prepared.fullDiff()).contains("src/App.java");
         assertThat(prepared.fullDiff()).doesNotContain("generated/Api.java", "docs/readme.md");
     }
@@ -50,7 +54,9 @@ class PullRequestDiffPreparationServiceTest {
     @Test
     void selectsAUsefulScopedIncrementalDiff() {
         Project project = project(new AnalysisScopeConfig(), AnalysisLimitsConfig.empty());
-        String fullDiff = section("src/App.java", "x".repeat(1800));
+        String fullDiff = section("src/App.java", "x".repeat(1800))
+                + section("src/Earlier.java", "z".repeat(1800))
+                + deletedSection("src/Removed.java");
         String deltaDiff = section("src/App.java", "y".repeat(600));
 
         var prepared = service.prepare(
@@ -58,6 +64,11 @@ class PullRequestDiffPreparationServiceTest {
 
         assertThat(prepared.analysisMode()).isEqualTo(AnalysisMode.INCREMENTAL);
         assertThat(prepared.selectedDiff()).isEqualTo(deltaDiff);
+        assertThat(prepared.changedFiles()).containsExactly("src/App.java");
+        assertThat(prepared.deletedFiles()).isEmpty();
+        assertThat(prepared.proposedTreeChangedFiles()).containsExactly(
+                "src/App.java", "src/Earlier.java");
+        assertThat(prepared.proposedTreeDeletedFiles()).containsExactly("src/Removed.java");
     }
 
     @Test
@@ -86,6 +97,22 @@ class PullRequestDiffPreparationServiceTest {
         assertThat(prepared.changedFiles()).containsExactly("src/App.java");
     }
 
+    @Test
+    void proposedTreeTreatsRenameAsNewBodyAndOldPathDeletion() {
+        Project project = project(new AnalysisScopeConfig(), AnalysisLimitsConfig.empty());
+        String diff = "diff --git a/src/Old.java b/src/New.java\n"
+                + "similarity index 95%\n"
+                + "rename from src/Old.java\n"
+                + "rename to src/New.java\n"
+                + "--- a/src/Old.java\n+++ b/src/New.java\n";
+
+        var prepared = service.prepare(
+                project, 42L, diff, null, "head", (base, head) -> null);
+
+        assertThat(prepared.proposedTreeChangedFiles()).containsExactly("src/New.java");
+        assertThat(prepared.proposedTreeDeletedFiles()).containsExactly("src/Old.java");
+    }
+
     private Project project(AnalysisScopeConfig scope, AnalysisLimitsConfig limits) {
         ProjectConfig config = new ProjectConfig();
         config.setAnalysisScope(scope);
@@ -99,5 +126,11 @@ class PullRequestDiffPreparationServiceTest {
         return "diff --git a/" + path + " b/" + path + "\n"
                 + "--- a/" + path + "\n+++ b/" + path + "\n@@ -1 +1 @@\n-old\n+"
                 + addedContent + "\n";
+    }
+
+    private String deletedSection(String path) {
+        return "diff --git a/" + path + " b/" + path + "\n"
+                + "deleted file mode 100644\n"
+                + "--- a/" + path + "\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
     }
 }

@@ -2,6 +2,7 @@ package org.rostilos.codecrow.plugins;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -67,13 +68,78 @@ class PluginRuntimeTest {
                 .hasMessageContaining("broken-policy");
     }
 
+    @Test
+    void framework_policy_receives_the_path_relative_to_its_deepest_matching_root() {
+        List<String> received = new ArrayList<>();
+        var framework = new TestPlugin("framework", PluginKind.FRAMEWORK, null) {
+            @Override
+            public PluginOutcome<FileDisposition> fileDisposition(String normalizedPath) {
+                received.add(normalizedPath);
+                return PluginOutcome.handled(
+                        normalizedPath.startsWith("generated/")
+                                ? FileDisposition.GENERATED
+                                : FileDisposition.EXCLUDED);
+            }
+        };
+        var runtime = new PluginRuntime(List.of(
+                new TestPlugin("language", PluginKind.LANGUAGE, null),
+                framework));
+        var capabilities = capabilities(
+                List.of("framework"),
+                Map.of(),
+                Map.of("framework", List.of("root:services", "root:services/shop")));
+
+        assertThat(runtime.fileDisposition(
+                "services/shop/generated/code/Thing.php", capabilities))
+                .isEqualTo(FileDisposition.GENERATED);
+        assertThat(runtime.fileDisposition("tools/Outside.php", capabilities))
+                .isEqualTo(FileDisposition.FULL);
+        assertThat(received).containsExactly("generated/code/Thing.php");
+    }
+
+    @Test
+    void framework_evidence_without_a_root_does_not_widen_policy_scope() {
+        var runtime = new PluginRuntime(List.of(
+                new TestPlugin("language", PluginKind.LANGUAGE, null),
+                new TestPlugin("framework", PluginKind.FRAMEWORK, FileDisposition.EXCLUDED)));
+        var capabilities = capabilities(
+                List.of("framework"),
+                Map.of(),
+                Map.of("framework", List.of("file:services/shop/composer.json")));
+
+        assertThat(runtime.fileDisposition("services/shop/src/Thing.php", capabilities))
+                .isEqualTo(FileDisposition.FULL);
+    }
+
+    @Test
+    void language_file_policy_only_applies_to_files_selected_for_that_language() {
+        var runtime = new PluginRuntime(List.of(
+                new TestPlugin("language", PluginKind.LANGUAGE, FileDisposition.EXCLUDED)));
+        var capabilities = capabilities(
+                List.of("language"),
+                Map.of("src/Selected.php", List.of("language")),
+                Map.of());
+
+        assertThat(runtime.fileDisposition("src/Selected.php", capabilities))
+                .isEqualTo(FileDisposition.EXCLUDED);
+        assertThat(runtime.fileDisposition("docs/Unrelated.txt", capabilities))
+                .isEqualTo(FileDisposition.FULL);
+    }
+
     private static TestPlugin plugin(String id, FileDisposition disposition) {
         return new TestPlugin(id, disposition);
     }
 
     private static ProjectCapabilities capabilities(String... ids) {
+        return capabilities(List.of(ids), Map.of(), Map.of());
+    }
+
+    private static ProjectCapabilities capabilities(
+            List<String> ids,
+            Map<String, List<String>> filePlugins,
+            Map<String, List<String>> evidence) {
         return new ProjectCapabilities(
-                List.of(ids), Map.of(), Map.of(), List.of(),
+                ids, filePlugins, evidence, List.of(),
                 ZERO_FINGERPRINT, ZERO_FINGERPRINT);
     }
 
@@ -82,11 +148,15 @@ class PluginRuntimeTest {
         private final FileDisposition disposition;
 
         private TestPlugin(String id, FileDisposition disposition) {
+            this(id, PluginKind.DOMAIN, disposition);
+        }
+
+        private TestPlugin(String id, PluginKind kind, FileDisposition disposition) {
             this.disposition = disposition;
             descriptor = new PluginDescriptor(
                     id,
-                    PluginKind.LANGUAGE,
-                    List.of(),
+                    kind,
+                    kind == PluginKind.FRAMEWORK ? List.of("language") : List.of(),
                     List.of(PluginCapability.FILE_POLICY),
                     new DetectionRules(List.of(".test"), List.of(), List.of(), List.of(), List.of()),
                     Map.of());

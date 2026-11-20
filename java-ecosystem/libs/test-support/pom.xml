@@ -16,7 +16,6 @@
     <description>Shared integration-test infrastructure: Testcontainers, WireMock, fixtures, assertions</description>
 
     <properties>
-        <testcontainers.version>1.19.7</testcontainers.version>
         <wiremock.version>3.4.2</wiremock.version>
         <rest-assured.version>5.4.0</rest-assured.version>
         <awaitility.version>4.2.0</awaitility.version>

@@ -97,51 +97,58 @@ class TestSplitIssuesIntoBatches:
 
 class TestBatchedBranchReconciliation:
     @pytest.mark.asyncio
-    async def test_failed_batch_rejects_partial_merged_result(self):
+    async def test_failed_batch_retains_affected_issues_as_unverified(self):
         orchestrator = MultiStageReviewOrchestrator.__new__(
             MultiStageReviewOrchestrator
         )
         orchestrator.llm = MagicMock()
         orchestrator.client = MagicMock()
         orchestrator.event_callback = MagicMock()
-        orchestrator._split_issues_into_batches = MagicMock(
-            return_value=[
-                [{"id": "old-1", "file": "a.py"}],
-                [{"id": "old-2", "file": "b.py"}],
-            ]
-        )
-
         request = MagicMock()
         request.reconciliationFileContents = {
-            "a.py": "first",
-            "b.py": "second",
+            "a.py": "first semantic line " * 2_000,
+            "b.py": "second semantic line " * 2_000,
         }
         request.rawDiff = None
+        request.maxAllowedTokens = 30_000
         metadata = {
             "previousCodeAnalysisIssues": [
                 {"id": "old-1", "file": "a.py"},
                 {"id": "old-2", "file": "b.py"},
             ]
         }
+        profile = MagicMock()
+        profile.invocation_cap.return_value = 4
 
-        with patch(
-            "service.review.orchestrator.orchestrator."
-            "execute_branch_reconciliation_direct",
-            new=AsyncMock(
-                side_effect=[
-                    {"issues": [{"id": "old-1"}], "comment": "first complete"},
-                    RuntimeError("provider failed"),
-                ]
+        with (
+            patch(
+                "service.review.orchestrator.orchestrator."
+                "build_review_inference_profile",
+                return_value=profile,
+            ),
+            patch(
+                "service.review.orchestrator.branch_reconciliation_packing."
+                "BRANCH_RECONCILIATION_INPUT_TOKEN_TARGET",
+                2_500,
+            ),
+            patch(
+                "service.review.orchestrator.orchestrator."
+                "execute_branch_reconciliation_direct",
+                new=AsyncMock(
+                    side_effect=[
+                        {
+                            "issues": [{"issueId": "old-1"}],
+                            "comment": "first complete",
+                        },
+                        RuntimeError("provider failed"),
+                    ]
+                ),
             ),
         ):
-            with pytest.raises(
-                RuntimeError,
-                match=r"failed atomically at Batch 2/2",
-            ):
-                await orchestrator.execute_batched_branch_analysis(
-                    request,
-                    metadata,
-                )
+            result = await orchestrator.execute_batched_branch_analysis(request, metadata)
+            assert result["reconciliationStatus"] == "degraded"
+            assert {item["issueId"] for item in result["issues"]} == {"old-1", "old-2"}
+            assert all(item["isResolved"] is None for item in result["issues"])
 
 
 # ── _filter_diff_for_files ────────────────────────────────────

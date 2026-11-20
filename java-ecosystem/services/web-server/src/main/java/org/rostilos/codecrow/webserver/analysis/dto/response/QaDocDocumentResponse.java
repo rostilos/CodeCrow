@@ -17,11 +17,12 @@ public record QaDocDocumentResponse(
         String overviewMarkdown,
         List<QaDocTestCaseResponse> testCases,
         String environmentMarkdown,
-        OffsetDateTime generatedAt
+        OffsetDateTime generatedAt,
+        String revision
 ) {
     public static QaDocDocumentResponse missing(Long prNumber) {
         return new QaDocDocumentResponse(
-                false, prNumber, null, null, null, null, null, List.of(), null, null);
+                false, prNumber, null, null, null, null, null, List.of(), null, null, null);
     }
 
     public static QaDocDocumentResponse fromDocument(QaDocDocument document) {
@@ -36,7 +37,8 @@ public record QaDocDocumentResponse(
                 content.overviewMarkdown(),
                 content.testCases().stream().map(QaDocTestCaseResponse::fromTestCase).toList(),
                 content.environmentMarkdown(),
-                document.getGeneratedAt()
+                document.getGeneratedAt(),
+                org.rostilos.codecrow.webserver.analysis.service.QaDocProgressService.revision(document)
         );
     }
 }

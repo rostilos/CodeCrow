@@ -13,10 +13,11 @@ class AnalysisLockTypeTest {
     void shouldHaveAllExpectedValues() {
         AnalysisLockType[] values = AnalysisLockType.values();
         
-        assertThat(values).hasSize(3);
+        assertThat(values).hasSize(4);
         assertThat(values).contains(
                 AnalysisLockType.PR_ANALYSIS,
                 AnalysisLockType.BRANCH_ANALYSIS,
+                AnalysisLockType.QA_DOCUMENTATION,
                 AnalysisLockType.RAG_INDEXING
         );
     }
@@ -26,6 +27,7 @@ class AnalysisLockTypeTest {
     void valueOfShouldReturnCorrectEnum() {
         assertThat(AnalysisLockType.valueOf("PR_ANALYSIS")).isEqualTo(AnalysisLockType.PR_ANALYSIS);
         assertThat(AnalysisLockType.valueOf("BRANCH_ANALYSIS")).isEqualTo(AnalysisLockType.BRANCH_ANALYSIS);
+        assertThat(AnalysisLockType.valueOf("QA_DOCUMENTATION")).isEqualTo(AnalysisLockType.QA_DOCUMENTATION);
         assertThat(AnalysisLockType.valueOf("RAG_INDEXING")).isEqualTo(AnalysisLockType.RAG_INDEXING);
     }
 
@@ -34,6 +36,7 @@ class AnalysisLockTypeTest {
     void ordinalValuesShouldBeInCorrectOrder() {
         assertThat(AnalysisLockType.PR_ANALYSIS.ordinal()).isEqualTo(0);
         assertThat(AnalysisLockType.BRANCH_ANALYSIS.ordinal()).isEqualTo(1);
-        assertThat(AnalysisLockType.RAG_INDEXING.ordinal()).isEqualTo(2);
+        assertThat(AnalysisLockType.QA_DOCUMENTATION.ordinal()).isEqualTo(2);
+        assertThat(AnalysisLockType.RAG_INDEXING.ordinal()).isEqualTo(3);
     }
 }

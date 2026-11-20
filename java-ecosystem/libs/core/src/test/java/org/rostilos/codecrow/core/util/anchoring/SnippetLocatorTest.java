@@ -6,6 +6,30 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SnippetLocatorTest {
+    @Test
+    void composerMemberMustPreserveCommaForExactSourceHighlighting() {
+        String content = "{\n  \"require\": {\n    \"phpmailer/phpmailer\": \"6.4.1\",\n    \"php\": \"^8\"\n  }\n}";
+        String snippet = "    \"phpmailer/phpmailer\": \"6.4.1\",";
+        assertThat(SnippetAnchoringService.anchor(snippet, content, 3, "composer.json").startLine()).isEqualTo(3);
+        assertThat(SnippetLocator.locateExact(snippet, content, 3).line()).isEqualTo(3);
+        assertThat(SnippetLocator.locateExact(snippet.strip().replace(",", ""), content, 3).line()).isZero();
+    }
+
+
+    @Test void exactAnchorsRequireTheWholeContiguousSnippet() {
+        assertThat(SnippetLocator.locateExact("first();\nsecond();", "first();\nchanged();", 1).line()).isZero();
+        assertThat(SnippetLocator.locateExact("first();\nsecond();", "first();\nother();\nsecond();", 1).line()).isZero();
+        var moved = SnippetLocator.locateExact("first();\nsecond();", "\n    first();\n    second();\n", 1);
+        assertThat(moved.line()).isEqualTo(2);
+        assertThat(moved.endLine()).isEqualTo(3);
+    }
+
+    @Test void exactAnchorsDoNotGuessBetweenDuplicatesOrNormalizeLiteralContents() {
+        assertThat(SnippetLocator.locateExact("call();", "call();\n\ncall();", 2).line()).isZero();
+        assertThat(SnippetLocator.locateExact("call();", "call();\n\ncall();", 3).line()).isEqualTo(3);
+        assertThat(SnippetLocator.locateExact("print('a  b')", "print('a b')", 1).line()).isZero();
+        assertThat(SnippetLocator.locateExact("  ", "\n", 1).line()).isZero();
+    }
 
     // ── Null / blank guards ──────────────────────────────────────────────
 

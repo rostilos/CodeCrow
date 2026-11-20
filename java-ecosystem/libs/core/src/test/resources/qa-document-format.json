@@ -1,0 +1,57 @@
+[
+  {
+    "name": "canonical",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n**Submit the order** (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": true
+  },
+  {
+    "name": "marker-spacing-and-case",
+    "markdown": "# Guide\r\n\r\n<!--CODECROW-test-cases : start-->\r\n## Перевірки\r\n<!--CODECROW-test-cases : content-->\r\n**Submit the order** (HIGH)\r\n1. Open checkout.\r\n2. Confirm the order appears.\r\n<!--CODECROW-test-cases : end-->\r\n\r\n## Risks\r\nVerify saved baskets.\r\n\r\n<!--CODECROW-environment : start-->\r\n## Підготовка\r\n<!--CODECROW-environment : content-->\r\nUse the QA account.\r\n<!--CODECROW-environment : end-->",
+    "shareable": true
+  },
+  {
+    "name": "missing-content-delimiters",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n**Submit the order** (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": true
+  },
+  {
+    "name": "bold-priority",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n**Submit the order (HIGH)**\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": true
+  },
+  {
+    "name": "numbered-scenario",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n1. **Submit the order** (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": true
+  },
+  {
+    "name": "heading-scenario",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n### Submit the order (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": true
+  },
+  {
+    "name": "freeform-scenarios",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": true
+  },
+  {
+    "name": "duplicate-start",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n**Submit the order** (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n<!-- codecrow-test-cases:end -->\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": false
+  },
+  {
+    "name": "missing-end",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n**Submit the order** (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": false
+  },
+  {
+    "name": "unmarked",
+    "markdown": "## Tests\n**Submit the order** (HIGH)\nConfirm order.\n## Environment\nUse the QA account.",
+    "shareable": false
+  },
+  {
+    "name": "overlapping",
+    "markdown": "# Guide\n\n<!-- codecrow-test-cases:start -->\n## Перевірки\n<!-- codecrow-test-cases:content -->\n**Submit the order** (HIGH)\n1. Open checkout.\n2. Confirm the order appears.\n\n\n## Risks\nVerify saved baskets.\n\n<!-- codecrow-environment:start -->\n## Підготовка\n<!-- codecrow-environment:content -->\n<!-- codecrow-test-cases:end -->\nUse the QA account.\n<!-- codecrow-environment:end -->",
+    "shareable": false
+  }
+]

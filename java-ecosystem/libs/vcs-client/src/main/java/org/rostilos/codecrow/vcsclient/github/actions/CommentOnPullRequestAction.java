@@ -49,8 +49,14 @@ public class CommentOnPullRequestAction {
         }
     }
 
-    public void postReviewComment(String owner, String repo, int pullRequestNumber, 
+    public void postReviewComment(String owner, String repo, int pullRequestNumber,
                                    String body, String commitId, String path, int line) throws IOException {
+        postReviewComment(owner, repo, pullRequestNumber, body, commitId, path, line,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.HEAD);
+    }
+
+    public void postReviewComment(String owner, String repo, int pullRequestNumber,
+                                   String body, String commitId, String path, int line, org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide anchorSide) throws IOException {
         String apiUrl = String.format("%s/repos/%s/%s/pulls/%d/comments",
                 GitHubConfig.API_BASE, owner, repo, pullRequestNumber);
 
@@ -59,7 +65,7 @@ public class CommentOnPullRequestAction {
         payload.put("commit_id", commitId);
         payload.put("path", path);
         payload.put("line", line);
-        payload.put("side", "RIGHT");
+        payload.put("side", anchorSide == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE ? "LEFT" : "RIGHT");
 
         Request req = new Request.Builder()
                 .url(apiUrl)
@@ -113,24 +119,22 @@ public class CommentOnPullRequestAction {
     }
 
     public List<Map<String, Object>> listComments(String owner, String repo, int prNumber) throws IOException {
-        String apiUrl = String.format("%s/repos/%s/%s/issues/%d/comments?per_page=100",
-                GitHubConfig.API_BASE, owner, repo, prNumber);
-
-        Request req = new Request.Builder()
-                .url(apiUrl)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-
-        try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
-            if (!resp.isSuccessful()) {
-                String respBody = resp.body() != null ? resp.body().string() : "";
-                log.warn("Failed to list comments: {} - {}", resp.code(), respBody);
-                return List.of();
+        List<Map<String, Object>> comments = new ArrayList<>();
+        for (int page = 1; ; page++) {
+            String apiUrl = String.format("%s/repos/%s/%s/issues/%d/comments?per_page=100&page=%d",
+                    GitHubConfig.API_BASE, owner, repo, prNumber, page);
+            Request req = new Request.Builder().url(apiUrl)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28").get().build();
+            try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+                if (!resp.isSuccessful()) {
+                    throw new IOException("Failed to list GitHub comments: HTTP " + resp.code());
+                }
+                String body = resp.body() != null ? resp.body().string() : "[]";
+                List<Map<String, Object>> entries = objectMapper.readValue(body, new TypeReference<>() {});
+                comments.addAll(entries);
+                if (entries.size() < 100) return List.copyOf(comments);
             }
-            String body = resp.body() != null ? resp.body().string() : "[]";
-            return objectMapper.readValue(body, new TypeReference<List<Map<String, Object>>>() {});
         }
     }
 

@@ -25,6 +25,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "project",
         uniqueConstraints = {
                 @UniqueConstraint(columnNames = {"workspace_id", "namespace"})

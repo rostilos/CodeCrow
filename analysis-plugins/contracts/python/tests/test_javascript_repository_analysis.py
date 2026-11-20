@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import sys
+import base64
+import gzip
+import json
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from codecrow_plugins import (
     CandidateClaim,
@@ -16,6 +22,137 @@ from codecrow_plugins import (
 
 
 PLUGINS_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _aliases(analysis):
+    return {fact.source: fact.target for packet in analysis.packets for fact in packet.facts
+            if fact.relation == 'declares-file-alias'}
+
+
+def test_package_exports_retain_existing_exact_and_wildcard_targets_with_shadowing():
+    manifest = FileArtifact('packages/auth/package.json', json.dumps(dict(name='@scope/auth', exports={
+        '.': './src/auth.ts', './admin': './src/admin.tsx', './routes/*': './src/routes/*',
+        './routes/private/*': None, './routes/login.ts': './src/login.ts',
+        './routes/conditional.ts': {'import': './src/routes/conditional.ts'},
+        './routes/array.ts': ['./src/routes/array.ts'], './absent': './src/absent.ts',
+        './twice/*': './src/*/copy-*.ts',
+    })))
+    paths = ('src/auth.ts', 'src/admin.tsx', 'src/routes/setup.ts', 'src/routes/login.ts',
+             'src/routes/private/secret.ts', 'src/login.ts', 'src/routes/conditional.ts',
+             'src/routes/array.ts', 'src/a/copy-a.ts', 'src/b/copy-c.ts')
+    runtime, capabilities, analysis = _analyze(manifest, *(FileArtifact('packages/auth/' + p, '') for p in paths))
+    expected = {'@scope/auth': 'packages/auth/src/auth.ts', '@scope/auth/admin': 'packages/auth/src/admin.tsx',
+                '@scope/auth/routes/setup.ts': 'packages/auth/src/routes/setup.ts',
+                '@scope/auth/routes/login.ts': 'packages/auth/src/login.ts', '@scope/auth/twice/a': 'packages/auth/src/a/copy-a.ts'}
+    assert _aliases(analysis) == expected
+    restored, diagnostics = runtime.start_repository_analysis(capabilities, 'next', analysis.snapshots).finish()
+    assert not diagnostics and _aliases(restored) == expected
+    for packet in analysis.packets:
+        for fact in packet.facts:
+            if fact.relation != 'declares-file-alias':
+                continue
+            assert fact.path == manifest.path and fact.related_paths == (fact.target,)
+            assert {fact.path, fact.target} <= set(packet.paths)
+            assert dict(fact.attributes)['jsonPointer'].startswith('/exports/')
+
+
+def test_export_patterns_are_declarations_not_file_inventory_or_runtime_bindings():
+    manifest = FileArtifact('packages/auth/package.json', json.dumps(dict(name='@scope/auth', exports={
+        './routes/*': './src/routes/*', './empty/*': './missing/*', './conditional/*': {'import': './conditional/*'},
+    })))
+    runtime, capabilities, analysis = _analyze(manifest, FileArtifact('packages/auth/src/routes/login.ts', ''))
+    patterns = [fact for packet in analysis.packets for fact in packet.facts if fact.relation == 'declares-file-pattern']
+    assert {fact.target for fact in patterns} == {'packages/auth/src/routes/*', 'packages/auth/missing/*'}
+    assert all(fact.source == fact.path == manifest.path and not fact.related_paths for fact in patterns)
+    assert all(dict(fact.attributes)['targetSpecifier'].startswith('./') for fact in patterns)
+    assert all('*' not in path for packet in analysis.packets for path in packet.paths)
+    assert _aliases(analysis) == {'@scope/auth/routes/login.ts': 'packages/auth/src/routes/login.ts'}
+    restored, diagnostics = runtime.start_repository_analysis(capabilities, 'next', analysis.snapshots).finish()
+    assert not diagnostics and restored.packets == analysis.packets
+    handle = runtime.start_repository_analysis(capabilities, 'deleted', analysis.snapshots)
+    handle.ingest((FileArtifact(manifest.path, '', deleted=True),))
+    deleted, diagnostics = handle.finish()
+    assert not diagnostics and not any(f.relation == 'declares-file-pattern' for p in deleted.packets for f in p.facts)
+
+
+@pytest.mark.parametrize('exports', [None, './dist/missing.js', {'import': './dist/missing.js'}, {'invalid': None, '.': './index.js'}])
+def test_package_identity_is_independent_of_exports_and_survives_snapshot_updates(exports):
+    path = 'packages/admin/package.json'
+    runtime, capabilities, analysis = _analyze(FileArtifact(path, json.dumps(dict(name='@scope/admin', exports=exports))))
+    for name in ('@scope/admin', 'renamed-admin', None):
+        if name != '@scope/admin':
+            handle = runtime.start_repository_analysis(capabilities, 'next', analysis.snapshots)
+            handle.ingest((FileArtifact(path, json.dumps(dict(name=name)), deleted=name is None),))
+            analysis, diagnostics = handle.finish()
+            assert not diagnostics
+        restored, diagnostics = runtime.start_repository_analysis(capabilities, 'restored', analysis.snapshots).finish()
+        assert not diagnostics and restored.packets == analysis.packets
+        facts = [f for p in restored.packets for f in p.facts if f.relation == 'declares-package']
+        if name is None:
+            assert not facts
+        else:
+            fact, = facts
+            assert (fact.source, fact.target, fact.path) == (name, path, path)
+            assert fact.related_paths == (path,) and dict(fact.attributes)['jsonPointer'] == '/name'
+
+
+@pytest.mark.parametrize('name', [None, 42, {}, '', '../pkg', '@scope/pkg/subpath'])
+def test_invalid_package_names_do_not_create_identity_facts(name):
+    _, _, analysis = _analyze(FileArtifact('package.json', json.dumps(dict(name=name))))
+    assert not [f for p in analysis.packets for f in p.facts if f.relation == 'declares-package']
+
+
+@pytest.mark.parametrize('exports,expected', [
+    ('./src/main.ts', {'pkg': 'src/main.ts'}),
+    ({'./*': './src/*', './m*': None}, {'pkg/other.ts': 'src/other.ts'}),
+    ({'./*': './src/*', './*.ts': None}, {}),
+    ({'./*': './src/*', './main.ts': None}, {'pkg/other.ts': 'src/other.ts'}),
+    ({'.': '../src/main.ts'}, {}), ({'.': './src/../src/main.ts'}, {}),
+    ({'.': './node_modules/hidden.ts'}, {}), ({'.': './NODE_MODULES/hidden.ts'}, {}),
+    ({'.': './src/%6dain.ts'}, {}), ({'.': './src/main.ts?x'}, {}),
+    ({'.': './src/main.ts', 'import': './src/main.ts'}, {}),
+    ({'./**': './src/*'}, {}), ({'import': './src/main.ts'}, {}),
+    ({'./m*ain.ts': './src/m*ain.ts'}, {}),
+])
+def test_package_export_targets_respect_precedence_and_keep_unsupported_entries_unknown(exports, expected):
+    _, _, analysis = _analyze(FileArtifact('package.json', json.dumps(dict(name='pkg', exports=exports))),
+        *(FileArtifact(p, '') for p in ('src/main.ts', 'src/other.ts', 'node_modules/hidden.ts', 'NODE_MODULES/hidden.ts')))
+    assert _aliases(analysis) == expected
+
+
+def test_package_alias_inventory_changes_and_deletions_survive_snapshot_restore():
+    def manifest(target):
+        return FileArtifact('package.json', json.dumps(dict(name='pkg', exports=target)))
+    runtime, capabilities, analysis = _analyze(manifest('./a.ts'), FileArtifact('a.ts', ''), FileArtifact('b.ts', ''))
+    for updates, expected in [
+        ((manifest('./b.ts'),), {'pkg': 'b.ts'}),
+        ((FileArtifact('b.ts', '', deleted=True),), {}),
+        ((FileArtifact('b.ts', ''),), {'pkg': 'b.ts'}),
+        ((FileArtifact('package.json', '', deleted=True),), {}),
+    ]:
+        handle = runtime.start_repository_analysis(capabilities, 'next', analysis.snapshots)
+        handle.ingest(updates)
+        analysis, diagnostics = handle.finish()
+        assert not diagnostics and _aliases(analysis) == expected
+
+
+def test_old_component_snapshot_restores_with_observable_missing_alias_inventory(caplog):
+    runtime, capabilities, analysis = _analyze(_card(), _product())
+    snapshot, = analysis.snapshots
+    data = json.loads(gzip.decompress(base64.b64decode(snapshot.content)))
+    legacy = replace(snapshot, content=base64.b64encode(gzip.compress(json.dumps(data['components']).encode())).decode())
+    restored, diagnostics = runtime.start_repository_analysis(capabilities, 'next', (legacy,)).finish()
+    assert not diagnostics and restored.packets == analysis.packets
+    assert 'aliases require a repository refresh' in caplog.text
+
+
+def test_malformed_manifest_removes_old_alias_and_reports_optional_enrichment_failure():
+    runtime, capabilities, analysis = _analyze(FileArtifact('package.json', '{"name":"pkg","exports":"./a.ts"}'), FileArtifact('a.ts', ''))
+    handle = runtime.start_repository_analysis(capabilities, 'next', analysis.snapshots)
+    handle.ingest((FileArtifact('package.json', '{broken'),))
+    updated, diagnostics = handle.finish()
+    assert diagnostics and not _aliases(updated)
+    assert not [f for p in updated.packets for f in p.facts if f.relation == 'declares-package']
 
 
 def _runtime():
@@ -376,7 +513,7 @@ def test_javascript_validator_requires_exact_kind_path_and_identifier():
     assert coarse[0].code == "javascript-coarse-evidence-class"
 
 
-def test_component_contract_reaches_prompt_visible_exact_evidence():
+def test_component_contract_reaches_structural_graph_relation_map(tmp_path):
     _, _, analysis = _analyze(_card(), _product())
     project_root = PLUGINS_ROOT.parent
     sys.path.insert(
@@ -384,66 +521,56 @@ def test_component_contract_reaches_prompt_visible_exact_evidence():
         str(
             project_root
             / "python-ecosystem"
-            / "inference-orchestrator"
+            / "rag-pipeline"
             / "src"
         ),
     )
-    from service.review.orchestrator.context_helpers import format_rag_context
-
-    packet = analysis.packets[0]
-    fact_payload = [
-        dict(fact.as_metadata())
-        for fact in packet.facts
-    ]
-    text = "\n".join((
-        "Deterministic repository architecture context",
-        "Plugin: javascript",
-        "Kind: javascript-component-relation",
-        "Source: src/Product.jsx",
-        "Related paths: src/Card.jsx, src/Product.jsx",
-        "Facts:",
-        *(
-            f"- [{fact.kind}] {fact.source} {fact.relation} "
-            f"{fact.target} ({fact.path}:{fact.line})"
-            for fact in packet.facts
-        ),
-    ))
-    chunks = [
-        {
-            "text": text,
-            "metadata": {
-                "path": (
-                    "__analysis_architecture__/javascript/"
-                    "component-contract.context"
-                ),
-                "architecture_key": (
-                    "javascript-component-relation:src/Product.jsx:0"
-                ),
-                "architecture_paths": list(packet.paths),
-                "plugin_graph_facts": fact_payload,
-            },
-            "_source": "pr_indexed",
-            "_match_type": "architecture_relation",
-            "score": 1.0,
-        }
-    ]
-    visible = {}
-    prompt = format_rag_context(
-        {"relevant_code": chunks},
-        pr_changed_files=["src/Product.jsx"],
-        visible_evidence_by_id=visible,
+    from rag_pipeline.core.structural_store import (
+        StructuralGenerationStore,
+        StructuralGraphReader,
+        StructuralGraphWriter,
     )
 
-    assert "Evidence ID: RAG-" in prompt
-    assert "[javascript-component-resolution]" in prompt
-    assert "[javascript-jsx-prop-contract]" in prompt
-    assert "src/Product.jsx::Product::Card" in prompt
-    assert "src/Card.jsx::Card::title" in prompt
+    packet = analysis.packets[0]
+    store = StructuralGenerationStore(tmp_path / "structural-index")
+    pending = store.pending_paths("cc_workspace_project_main_generation")
+    connection = store.initialize(pending)
+    try:
+        writer = StructuralGraphWriter(connection)
+        for fact in packet.facts:
+            writer.add_graph_fact(
+                fact,
+                plugin_id="javascript",
+                packet_kind=packet.kind,
+                packet_key=packet.key,
+            )
+        writer.resolve_relations()
+        connection.commit()
+        reader = StructuralGraphReader(connection, {
+            "branch": "main",
+            "repository_revision": "0123456789abcdef",
+            "generation_manifest_sha256": "a" * 64,
+        })
+        relation_map = reader.relations_for_paths(
+            ["src/Product.jsx"],
+            max_relations=20,
+        )
+    finally:
+        connection.close()
+
+    relations = relation_map["relations"]
+    assert relation_map["coverage"]["state"] == "complete"
+    assert all(relation["evidenceId"].startswith("relation:") for relation in relations)
+    assert all(relation["origin"]["plugin"] == "javascript" for relation in relations)
     assert {
-        fact["kind"]
-        for facts in visible.values()
-        for fact in facts
+        relation["kind"]
+        for relation in relations
     } == {
         "javascript-component-resolution",
         "javascript-jsx-prop-contract",
     }
+    assert any(
+        relation["source"] == "src/Product.jsx::Product::Card"
+        and relation["target"] == "src/Card.jsx::Card::title"
+        for relation in relations
+    )

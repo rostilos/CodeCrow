@@ -44,6 +44,24 @@ class CommentOnPullRequestActionTest {
     }
 
     @Test
+    void commentLookupReadsLaterPagesAndDoesNotTreatFailureAsAnEmptyConversation() throws Exception {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true, true, false);
+        when(response.code()).thenReturn(503);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn(
+                new ObjectMapper().writeValueAsString(java.util.Collections.nCopies(100, Map.of("id", 1, "body", "human comment"))),
+                "[{\"id\":700,\"body\":\"<!-- codecrow-review-checks -->\"}]");
+        assertThat(action.listComments("owner", "repo", 42)).hasSize(101)
+                .anySatisfy(comment -> assertThat(comment.get("id")).isEqualTo(700));
+        assertThatThrownBy(() -> action.listComments("owner", "repo", 42)).isInstanceOf(IOException.class);
+        var requests = ArgumentCaptor.forClass(Request.class);
+        verify(okHttpClient, times(3)).newCall(requests.capture());
+        assertThat(requests.getAllValues().get(1).url().queryParameter("page")).isEqualTo("2");
+    }
+
+    @Test
     void testPostComment_SuccessfulResponse_NoException() throws IOException {
         when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
         when(call.execute()).thenReturn(response);
@@ -328,4 +346,17 @@ class CommentOnPullRequestActionTest {
                         "PUT /repos/owner/repo/pulls/123/reviews/51"
                 );
     }
+
+    @Test void deletedSourceCommentUsesLeftCoordinates() throws Exception {
+        ArgumentCaptor<Request> request=ArgumentCaptor.forClass(Request.class);
+        when(okHttpClient.newCall(request.capture())).thenReturn(call);
+        when(call.execute()).thenReturn(response); when(response.isSuccessful()).thenReturn(true);
+        action.postReviewComment("owner","repo",123,"Removal regression","head","deleted.java",10,
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        Buffer buffer=new Buffer(); request.getValue().body().writeTo(buffer);
+        JsonNode body=new ObjectMapper().readTree(buffer.readUtf8());
+        assertThat(body.path("side").asText()).isEqualTo("LEFT");
+        assertThat(body.path("line").asInt()).isEqualTo(10);
+    }
+
 }

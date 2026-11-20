@@ -66,13 +66,16 @@ public class TaskManagementService {
     private final TaskManagementConnectionRepository connectionRepository;
     private final TaskManagementClientFactory clientFactory;
     private final ProjectRepository projectRepository;
+    private final jakarta.persistence.EntityManager entityManager;
 
     public TaskManagementService(TaskManagementConnectionRepository connectionRepository,
                                   TaskManagementClientFactory clientFactory,
-                                  ProjectRepository projectRepository) {
+                                  ProjectRepository projectRepository,
+                                  jakarta.persistence.EntityManager entityManager) {
         this.connectionRepository = connectionRepository;
         this.clientFactory = clientFactory;
         this.projectRepository = projectRepository;
+        this.entityManager = entityManager;
     }
 
     // ─── Connection CRUD ─────────────────────────────────────────────
@@ -221,6 +224,7 @@ public class TaskManagementService {
             Long projectId,
             TaskManagementProjectConfigRequest request) {
         Project project = resolveProjectInWorkspace(workspaceId, projectId);
+        entityManager.refresh(project, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
 
         validateTaskManagementConfigRequest(workspaceId, request);
 
@@ -252,6 +256,7 @@ public class TaskManagementService {
     @Transactional
     public QaAutoDocConfig updateQaAutoDocConfig(Long workspaceId, Long projectId, QaAutoDocConfigRequest request) {
         Project project = resolveProjectInWorkspace(workspaceId, projectId);
+        entityManager.refresh(project, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
 
         // Validate template mode and custom template
         QaAutoDocConfig.TemplateMode mode = request.templateMode() != null

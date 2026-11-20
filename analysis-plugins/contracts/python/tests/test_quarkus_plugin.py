@@ -265,7 +265,7 @@ import jakarta.ws.rs.Path;
     assert outcome.diagnostic.path == JAVA_PATH
 
 
-def test_indexes_only_safe_bounded_application_property_keys():
+def test_indexes_only_safe_application_property_keys_with_a_finite_bound():
     path = "services/catalog/src/main/resources/application.properties"
     content = "\n".join((
         "# comments are ignored",
@@ -290,11 +290,13 @@ def test_indexes_only_safe_bounded_application_property_keys():
     profiled = next(fact for fact in outcome.value if fact.target.startswith("%"))
     assert profiled.attributes == (("profile", "test"),)
 
-    bounded = _plugin().index_file(FileArtifact(
+    complete = _plugin().index_file(FileArtifact(
         path,
         "\n".join(f"key.{index}=value" for index in range(140)),
     ))
-    assert len(bounded.value) == 128
+    assert len(complete.value) == 128
+    assert any(fact.target == "key.127" for fact in complete.value)
+    assert not any(fact.target == "key.139" for fact in complete.value)
 
 
 def test_review_requests_exact_facts_and_validation_never_promotes_topology():
@@ -388,3 +390,62 @@ import jakarta.ws.rs.Path;
     assert absence_for_other_route.value.code == "quarkus-topology-not-defect-proof"
     assert unknown_kind.value.decision is ValidationDecision.INSUFFICIENT_EVIDENCE
     assert unknown_kind.value.code == "quarkus-unknown-fact-kind"
+
+
+def test_review_preserves_paths_beyond_former_boundary():
+    paths = tuple(
+        f"services/service-{index:03d}/src/main/java/example/Resource.java"
+        for index in range(67)
+    )
+
+    review = _plugin().review(paths)
+
+    assert review.status is OutcomeStatus.HANDLED
+    assert tuple(
+        request.identifier for request in review.value.evidence_requests
+    ) == paths
+
+
+def test_java_indexing_preserves_facts_beyond_former_boundary():
+    fields = "\n".join(
+        f'    @ConfigProperty(name = "item.key.{index}") String field{index};'
+        for index in range(165)
+    )
+    source = (
+        "package example;\n"
+        "import org.eclipse.microprofile.config.inject.ConfigProperty;\n"
+        "class LargeConfig {\n"
+        f"{fields}\n"
+        "}\n"
+    )
+
+    outcome = _plugin().index_file(FileArtifact(JAVA_PATH, source))
+
+    assert outcome.status is OutcomeStatus.HANDLED
+    config_facts = tuple(
+        fact for fact in outcome.value
+        if fact.kind == "quarkus-config-property"
+    )
+    assert len(config_facts) == 165
+    assert any(fact.target == "item.key.164" for fact in config_facts)
+
+
+def test_scheduled_fact_rejects_long_static_annotation_arguments():
+    identity = "job-" + ("x" * 300)
+    source = (
+        "package example;\n"
+        "import io.quarkus.scheduler.Scheduled;\n"
+        "class ScheduledJobs {\n"
+        f'    @Scheduled(every = "10s", identity = "{identity}")\n'
+        "    void refresh() {}\n"
+        "}\n"
+    )
+
+    outcome = _plugin().index_file(FileArtifact(JAVA_PATH, source))
+
+    assert outcome.status is OutcomeStatus.HANDLED
+    scheduled = next(
+        fact for fact in outcome.value
+        if fact.kind == "quarkus-scheduled-method"
+    )
+    assert dict(scheduled.attributes) == {"every": "10s"}

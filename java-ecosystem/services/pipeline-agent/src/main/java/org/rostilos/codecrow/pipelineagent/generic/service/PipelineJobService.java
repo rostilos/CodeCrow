@@ -4,7 +4,6 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.processor.PipelineActionProcessor;
@@ -16,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import java.util.Optional;
 
 /**
@@ -30,10 +31,12 @@ public class PipelineJobService implements AnalysisJobService {
 
     private final JobService jobService;
     private final ProjectRepository projectRepository;
+    private final ObjectMapper objectMapper;
 
-    public PipelineJobService(JobService jobService, ProjectRepository projectRepository) {
+    public PipelineJobService(JobService jobService, ProjectRepository projectRepository, ObjectMapper objectMapper) {
         this.jobService = jobService;
         this.projectRepository = projectRepository;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -56,7 +59,7 @@ public class PipelineJobService implements AnalysisJobService {
                 request.pullRequestId,
                 request.sourceBranchName,
                 request.targetBranchName,
-                null, // commitHash - not available in request
+                request.getCommitHash(),
                 JobTriggerSource.PIPELINE,
                 null  // triggeredBy - pipeline has no user context
         );
@@ -81,77 +84,42 @@ public class PipelineJobService implements AnalysisJobService {
         return jobService.createBranchAnalysisJob(
                 project,
                 request.getTargetBranchName(),
-                null, // commitHash - not available in request
+                request.getCommitHash(),
                 JobTriggerSource.PIPELINE,
-                null  // triggeredBy - pipeline has no user context
+                null, // triggeredBy - pipeline has no user context
+                request.getSourcePrNumber()
         );
     }
 
-    public Job createRagInitialIndexJob(Project project, User triggeredBy) {
-        log.info("Creating RAG initial indexing job for project: {}", project.getName());
-        return jobService.createRagIndexJob(
-                project,
-                true,
-                JobTriggerSource.API,
-                triggeredBy
-        );
+    /** Called only after project authentication, before executor submission. */
+    public void persistDispatch(Job job, AnalysisProcessRequest request) {
+        try {
+            jobService.queueWebhookJob(job, objectMapper.writeValueAsString(request));
+        } catch (Exception failure) {
+            failJob(job, "Could not persist pipeline dispatch: " + failure.getMessage());
+            throw new IllegalStateException("Pipeline work was not accepted", failure);
+        }
     }
 
-    /**
-     * Implementation of AnalysisJobService interface.
-     */
-    @Override
-    public Job createRagIndexJob(Project project, User triggeredBy) {
-        return createRagInitialIndexJob(project, triggeredBy);
-    }
-
-    /**
-     * Create a job for RAG indexing with configurable trigger source.
-     * @param project The project to index
-     * @param isInitial true for initial indexing, false for incremental update
-     * @param triggerSource The source that triggered the job (WEBHOOK, API, etc.)
-     * @return The created job
-     */
-    @Override
-    public Job createRagIndexJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
-        log.info("Creating RAG {} job for project: {} (trigger: {})", 
-                isInitial ? "initial indexing" : "incremental update", 
-                project.getName(), 
-                triggerSource);
-        return jobService.createRagIndexJob(
-                project,
-                isInitial,
-                triggerSource,
-                null
-        );
+    public boolean claimForExecution(Job job) {
+        return jobService.claimPipelineJobForExecution(job.getId());
     }
 
     @Override
-    public Job createRagIndexJob(
+    public Job createRepositoryIndexBuildJob(
             Project project,
-            boolean isInitial,
             JobTriggerSource triggerSource,
             String branchName,
-            String commitHash) {
-        log.info("Creating branch-bound RAG {} job for project: {}, branch: {} (trigger: {})",
-                isInitial ? "initial indexing" : "incremental update",
+            String revision) {
+        log.info("Creating repository index build job for project: {}, branch: {} (trigger: {})",
                 project.getName(), branchName, triggerSource);
-        return jobService.createRagIndexJob(
+        return jobService.createRepositoryIndexBuildJob(
                 project,
-                isInitial,
                 triggerSource,
                 null,
                 branchName,
-                commitHash
+                revision
         );
-    }
-
-    /**
-     * Alias for createRagIndexJob for backward compatibility.
-     * Used by pipeline processors for RAG jobs triggered by webhooks.
-     */
-    public Job createPipelineRagJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
-        return createRagIndexJob(project, isInitial, triggerSource);
     }
 
     /**

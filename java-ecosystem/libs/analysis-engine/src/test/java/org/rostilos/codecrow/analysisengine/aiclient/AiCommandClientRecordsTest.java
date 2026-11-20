@@ -11,6 +11,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("AiCommandClient Records")
 class AiCommandClientRecordsTest {
 
+    @Test
+    void commandPayloadSerializesProviderRoutingAsAnObject() throws Exception {
+        String routing = "{\"extra_body\":{\"provider\":{\"order\":[\"azure\"],\"allow_fallbacks\":false}}}";
+        var request = new AiCommandClient.SummarizeRequest(1L, "ws", "repo", "ws", "project", "OPENROUTER", "openai/gpt-4o", "offline", null, routing, 42L, "feature", "main", "abc", null, null, null, true, 4096, "github", null, null, null, null);
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var payload = mapper.readTree(mapper.writeValueAsString(request));
+        assertThat(payload.path("aiCustomParameters")).isEqualTo(mapper.readTree(routing));
+    }
+
     @Nested
     @DisplayName("SummarizeRequest")
     class SummarizeRequestTests {
@@ -18,11 +27,7 @@ class AiCommandClientRecordsTest {
         @Test
         @DisplayName("should create with all fields")
         void shouldCreateWithAllFields() {
-            AiCommandClient.SummarizeRequest request = new AiCommandClient.SummarizeRequest(
-                    1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                    "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
-                    "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket", null
-            );
+            AiCommandClient.SummarizeRequest request = new AiCommandClient.SummarizeRequest(1L, "workspace", "repo-slug", "project-workspace", "namespace", "openai", "gpt-4", "api-key", null, null, 42L, "feature", "main", "abc123", "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket", null, null, null, null);
 
             assertThat(request.projectId()).isEqualTo(1L);
             assertThat(request.projectVcsWorkspace()).isEqualTo("workspace");
@@ -52,12 +57,7 @@ class AiCommandClientRecordsTest {
         @Test
         @DisplayName("should create with all fields")
         void shouldCreateWithAllFields() {
-            AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(
-                    1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                    "anthropic", "claude-3", "api-key", null, "What is this code doing?",
-                    42L, "abc123", "oauth-client", "oauth-secret", "access-token",
-                    8192, "github", null, "analysis context", List.of("issue-1", "issue-2")
-            );
+            AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(1L, "workspace", "repo-slug", "project-workspace", "namespace", "anthropic", "claude-3", "api-key", null, null, "What is this code doing?", 42L, "main", "abc123", "manifest", "collection", "oauth-client", "oauth-secret", "access-token", 8192, "github", null, "analysis context", List.of("issue-1", "issue-2"), null, null);
 
             assertThat(request.projectId()).isEqualTo(1L);
             assertThat(request.aiProvider()).isEqualTo("anthropic");
@@ -72,15 +72,10 @@ class AiCommandClientRecordsTest {
         @Test
         @DisplayName("should support null optional fields")
         void shouldSupportNullOptionalFields() {
-            AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(
-                    1L, "workspace", "repo-slug", null, null,
-                    "openai", "gpt-4", "api-key", null, "question",
-                    null, null, null, null, null,
-                    null, "bitbucket", null, null, null
-            );
+            AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(1L, "workspace", "repo-slug", null, null, "openai", "gpt-4", "api-key", null, null, "question", null, null, null, null, null, null, null, null, null, "bitbucket", null, null, null, null, null);
 
             assertThat(request.pullRequestId()).isNull();
-            assertThat(request.commitHash()).isNull();
+            assertThat(request.repositoryRevision()).isNull();
             assertThat(request.analysisContext()).isNull();
             assertThat(request.issueReferences()).isNull();
         }
@@ -144,11 +139,7 @@ class AiCommandClientRecordsTest {
         @Test
         @DisplayName("should create with all fields")
         void shouldCreateWithAllFields() {
-            AiCommandClient.ReviewRequest request = new AiCommandClient.ReviewRequest(
-                    1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                    "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
-                    "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket", null
-            );
+            AiCommandClient.ReviewRequest request = new AiCommandClient.ReviewRequest(1L, "workspace", "repo-slug", "project-workspace", "namespace", "openai", "gpt-4", "api-key", null, null, 42L, "feature", "main", "abc123", "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket", null, null, null);
 
             assertThat(request.projectId()).isEqualTo(1L);
             assertThat(request.pullRequestId()).isEqualTo(42L);

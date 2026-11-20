@@ -39,6 +39,7 @@
         </resources>
     </build>
     <modules>
+        <module>composer-audit/java</module>
         <module>data-contracts/java</module>
     </modules>
 </project>

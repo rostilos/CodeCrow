@@ -20,7 +20,7 @@ import java.time.LocalDateTime;
     @Index(name = "idx_vcs_repo_binding_connection", columnList = "vcs_connection_id"),
     @Index(name = "idx_vcs_repo_binding_external", columnList = "provider, external_repo_id")
 }, uniqueConstraints = {
-    @UniqueConstraint(name = "uq_vcs_repo_binding_external", columnNames = {"provider", "external_repo_id"})
+    @UniqueConstraint(name = "uq_vcs_repo_binding_scoped_external", columnNames = {"workspace_id", "vcs_connection_id", "external_repo_id"})
 })
 public class VcsRepoBinding implements VcsRepoInfo {
 

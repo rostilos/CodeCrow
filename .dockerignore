@@ -4,6 +4,9 @@ frontend
 deployment
 tools
 specs
+.work
+.ci-logs
+.ci-test-results
 **/__pycache__
 **/.pytest_cache
 **/tests
@@ -13,5 +16,7 @@ specs
 analysis-plugins/contracts/java
 analysis-plugins/languages/*/java
 analysis-plugins/frameworks/*/java
+analysis-plugins/domains/*/java
+analysis-plugins/build
 analysis-plugins/contracts/fixtures
 analysis-plugins/contracts/manifest

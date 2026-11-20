@@ -2,11 +2,13 @@ package org.rostilos.codecrow.analysisengine.service.pr;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
+import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
@@ -39,6 +41,12 @@ public class PullRequestDiffPreparationService {
             String previousCommitHash,
             String currentCommitHash,
             CommitRangeDiffFetcher deltaDiffFetcher) {
+        // The proposed PR tree is target + the complete base-to-head patch. It
+        // must not inherit review-scope filtering or an incremental Stage 1
+        // selection, otherwise unchanged batches can observe stale target-head
+        // files while the overlay is incorrectly described as exact.
+        ProposedTreePaths proposedTreePaths = proposedTreePaths(rawFullDiff);
+
         String scopedFullDiff = AnalysisScopeFilter.filterDiff(rawFullDiff, project);
         if (scopedFullDiff == null || scopedFullDiff.isBlank()) {
             return PreparedDiff.empty(previousCommitHash, currentCommitHash);
@@ -76,7 +84,25 @@ public class PullRequestDiffPreparationService {
 
         return new PreparedDiff(
                 fullDiff, deltaDiff, mode, changedFiles, deletedFiles,
+                proposedTreePaths.changedFiles(), proposedTreePaths.deletedFiles(),
                 previousCommitHash, currentCommitHash);
+    }
+
+    private ProposedTreePaths proposedTreePaths(String rawFullDiff) {
+        LinkedHashSet<String> changed = new LinkedHashSet<>();
+        LinkedHashSet<String> deleted = new LinkedHashSet<>();
+        for (DiffParsingUtils.FileChange change : DiffParsingUtils.parseFileChanges(rawFullDiff)) {
+            if (change.newPath() != null && !change.newPath().isBlank()) {
+                changed.add(change.newPath());
+            }
+            if ((change.changeType() == DiffParsingUtils.ChangeType.DELETED
+                    || change.changeType() == DiffParsingUtils.ChangeType.RENAMED)
+                    && change.oldPath() != null
+                    && !change.oldPath().isBlank()) {
+                deleted.add(change.oldPath());
+            }
+        }
+        return new ProposedTreePaths(List.copyOf(changed), List.copyOf(deleted));
     }
 
     private boolean canUseIncremental(String previousCommitHash, String currentCommitHash) {
@@ -133,22 +159,34 @@ public class PullRequestDiffPreparationService {
         String fetch(String baseCommit, String headCommit) throws IOException;
     }
 
+    private record ProposedTreePaths(List<String> changedFiles, List<String> deletedFiles) {
+    }
+
     public record PreparedDiff(
             String fullDiff,
             String deltaDiff,
             AnalysisMode analysisMode,
             List<String> changedFiles,
             List<String> deletedFiles,
+            List<String> proposedTreeChangedFiles,
+            List<String> proposedTreeDeletedFiles,
             String previousCommitHash,
             String currentCommitHash) {
 
         public PreparedDiff {
             changedFiles = changedFiles != null ? List.copyOf(changedFiles) : Collections.emptyList();
             deletedFiles = deletedFiles != null ? List.copyOf(deletedFiles) : Collections.emptyList();
+            proposedTreeChangedFiles = proposedTreeChangedFiles != null
+                    ? List.copyOf(proposedTreeChangedFiles)
+                    : Collections.emptyList();
+            proposedTreeDeletedFiles = proposedTreeDeletedFiles != null
+                    ? List.copyOf(proposedTreeDeletedFiles)
+                    : Collections.emptyList();
         }
 
         public static PreparedDiff empty(String previousCommitHash, String currentCommitHash) {
-            return new PreparedDiff(null, null, AnalysisMode.FULL, List.of(), List.of(),
+            return new PreparedDiff(null, null, AnalysisMode.FULL,
+                    List.of(), List.of(), List.of(), List.of(),
                     previousCommitHash, currentCommitHash);
         }
 

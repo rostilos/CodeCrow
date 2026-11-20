@@ -100,12 +100,13 @@ public class ReconcileTaskScheduler {
      * Execute a single reconcile task and track it as a Job.
      */
     private void executeTask(ReconcileTask task) {
+        if (reconcileTaskRepository.claimPendingTask(task.getId(), OffsetDateTime.now()) != 1) {
+            return;
+        }
         log.info("Starting reconcile task: id={}, externalId={}, project={}, branch='{}'",
                 task.getId(), task.getExternalId(), task.getProjectId(), task.getBranchName());
 
-        // Mark as IN_PROGRESS
         task.markInProgress();
-        reconcileTaskRepository.save(task);
 
         // Look up the Project entity for Job creation
         Optional<Project> projectOpt = projectRepository.findById(task.getProjectId());

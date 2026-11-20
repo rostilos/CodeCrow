@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 from codecrow_plugins import (
     FileArtifact,
@@ -17,8 +15,6 @@ from codecrow_plugins import (
 
 
 PLUGINS_ROOT = Path(__file__).resolve().parents[3]
-PROJECT_ROOT = PLUGINS_ROOT.parent
-
 
 def _symbols() -> tuple[SymbolDefinition, ...]:
     values = (
@@ -417,6 +413,86 @@ def test_magento_repository_reports_timed_substages():
     )
 
 
+def test_magento_repository_session_retains_admitted_view_sources():
+    catalog = PluginCatalog.discover(PLUGINS_ROOT)
+    session = catalog.implementation("magento").start_repository_analysis(
+        "admission-test"
+    ).value
+    retained_paths = {
+        "vendor/acme/theme/Magento_Theme/layouts.xml",
+        "vendor/acme/theme/view/frontend/page_layout/one-column.xml",
+        "vendor/acme/theme/view/frontend/web/css/source.css",
+        "vendor/acme/theme/view/frontend/web/css/source.less",
+        "vendor/acme/theme/view/frontend/web/graphql/cart.gql",
+        "vendor/acme/theme/view/frontend/web/graphql/cart.graphql",
+        "vendor/acme/theme/view/frontend/web/js/component.js",
+        "vendor/acme/theme/view/frontend/web/js/component.jsx",
+        "vendor/acme/theme/view/frontend/web/js/component.mjs",
+        "vendor/acme/theme/view/frontend/web/js/component.ts",
+        "vendor/acme/theme/view/frontend/web/js/component.tsx",
+        "vendor/acme/theme/view/frontend/web/template/item.html",
+    }
+    ignored_paths = {
+        "vendor/acme/theme/docs/example.txt",
+        "vendor/acme/theme/docs/layouts.xml",
+    }
+
+    session.ingest(tuple(
+        FileArtifact(path, f"source:{path}")
+        for path in sorted((*retained_paths, *ignored_paths))
+    ))
+
+    assert retained_paths <= set(session.artifacts)
+    assert ignored_paths.isdisjoint(session.artifacts)
+
+
+def test_magento_theme_only_repository_emits_theme_and_view_facts():
+    analysis = _resolve(
+        artifacts={
+            "composer.json": '{"type":"magento2-theme"}',
+            "registration.php": """<?php
+                ComponentRegistrar::register(
+                    ComponentRegistrar::THEME,
+                    'frontend/Acme/standalone',
+                    __DIR__
+                );
+            """,
+            "theme.xml": "<theme><title>Standalone</title></theme>",
+            "Magento_Theme/layout/default.xml": """
+                <page><body><block name="standalone.banner"
+                    template="Magento_Theme::banner.phtml" /></body></page>
+            """,
+            "Magento_Theme/templates/banner.phtml": "<div>Banner</div>",
+        },
+        symbols=(),
+    )
+    facts = tuple(
+        fact for packet in analysis.packets for fact in packet.facts
+    )
+
+    assert any(
+        fact.kind == "magento-theme"
+        and fact.source == "Acme/standalone"
+        for fact in facts
+    )
+    assert any(
+        fact.kind == "magento-layout-handle"
+        and fact.source == "default"
+        and fact.path == "Magento_Theme/layout/default.xml"
+        for fact in facts
+    )
+    assert any(
+        fact.kind == "magento-layout-block"
+        and fact.target == "standalone.banner"
+        for fact in facts
+    )
+    assert not any(
+        packet.kind == "magento-module"
+        or any(fact.kind.startswith("magento-module") for fact in packet.facts)
+        for packet in analysis.packets
+    )
+
+
 def test_magento_repository_honors_host_finalization_deadline():
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
@@ -646,48 +722,7 @@ def test_email_templates_link_declaration_files_theme_fallback_and_consumers():
         "vendor/acme/theme-parent/Acme_Email/email/order.html",
     } <= set(consumer_packet.paths)
 
-    sys.path.insert(
-        0,
-        str(PROJECT_ROOT / "python-ecosystem" / "rag-pipeline" / "src"),
-    )
-    from rag_pipeline.core.index_manager.indexer import RepositoryIndexer
-
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
-    repository_plugins = ("php", "magento")
-    capabilities = SimpleNamespace(
-        repository_plugins=repository_plugins,
-        fingerprint="sha256:" + "0" * 64,
-        descriptor_fingerprint=(
-            catalog.registry.fingerprint_for(repository_plugins)
-        ),
-        implementation_fingerprint=(
-            catalog.implementation_fingerprint(repository_plugins)
-        ),
-    )
-    nodes = RepositoryIndexer._architecture_nodes(
-        analysis,
-        capabilities,
-        "ws",
-        "project",
-        "main",
-        "commit",
-        capabilities.implementation_fingerprint,
-    )
-    consumer_nodes = [
-        node
-        for node in nodes
-        if any(
-            fact["kind"] == "magento-email-template-consumer"
-            for fact in node.metadata["plugin_graph_facts"]
-        )
-    ]
-    assert len(consumer_nodes) == 1
-    assert "acme_order" in consumer_nodes[0].text
-    assert (
-        "app/code/Acme/Email/view/frontend/email/order.html"
-        in consumer_nodes[0].metadata["architecture_paths"]
-    )
-
     magento = catalog.implementation("magento")
     restored = magento.restore_repository_analysis(
         "email-overlay",
@@ -1435,6 +1470,41 @@ def test_magento_graphql_client_resolves_custom_query_root():
     }
 
 
+def test_magento_graphql_client_reads_retained_graphql_documents():
+    client_paths = {
+        "app/code/Acme/GraphQl/view/frontend/web/graphql/products.gql",
+        "app/code/Acme/GraphQl/view/frontend/web/graphql/products.graphql",
+    }
+    analysis = _resolve(
+        artifacts={
+            "app/code/Acme/GraphQl/etc/module.xml": (
+                '<config><module name="Acme_GraphQl" /></config>'
+            ),
+            "app/code/Acme/GraphQl/etc/schema.graphqls": """
+                type Query { products: Products }
+                type Products { total_count: Int! }
+            """,
+            **{
+                path: "query Products { products { total_count } }"
+                for path in client_paths
+            },
+        },
+        symbols=(),
+    )
+    client_facts = tuple(
+        fact
+        for packet in analysis.packets
+        for fact in packet.facts
+        if fact.kind == "magento-graphql-operation-field"
+    )
+
+    assert {fact.path for fact in client_facts} == client_paths
+    assert {
+        fact.target.rsplit("::", 1)[-1]
+        for fact in client_facts
+    } == {"Query.products", "Products.total_count"}
+
+
 def test_module_only_repository_keeps_cross_module_relationships():
     interface_path = "app/code/Acme/Contracts/Api/CartInterface.php"
     implementation_path = "app/code/Acme/Checkout/Model/Cart.php"
@@ -1534,7 +1604,9 @@ def test_layout_binds_selected_phtml_to_exact_block_method_and_view_model(
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
     session = plugin.start_repository_analysis("0123456789abcdef").value
-    repository_module = sys.modules[session.__class__.__module__]
+    repository_module = sys.modules[
+        session.__class__.__module__.rsplit(".", 1)[0] + ".frontend_topology"
+    ]
     monkeypatch.setattr(
         repository_module,
         "extract_template_global_references",
@@ -1576,6 +1648,26 @@ def test_layout_binds_selected_phtml_to_exact_block_method_and_view_model(
             "Acme\\Checkout\\ViewModel\\Cart",
             "class",
             "app/code/Acme/Checkout/ViewModel/Cart.php",
+        ),
+        SymbolDefinition(
+            (
+                "template:app/code/Acme/Checkout/view/frontend/"
+                "templates/cart.phtml"
+            ),
+            "template",
+            (
+                "app/code/Acme/Checkout/view/frontend/"
+                "templates/cart.phtml"
+            ),
+            attributes=((
+                "php-template-instance-call-reference:0000",
+                json.dumps({
+                    "line": 1,
+                    "literalStringArguments": {},
+                    "method": "getCartId",
+                    "receiver": "block",
+                }, sort_keys=True, separators=(",", ":")),
+            ),),
         ),
     )
     analysis = _resolve(
@@ -2928,6 +3020,65 @@ def test_magento_interceptor_facts_respect_php_applicability_and_direct_override
         fact.kind == "magento-intercepted-method"
         and fact.target == "Vendor\\Model\\FinalTarget::save"
         for fact in facts
+    )
+
+
+def test_magento_inherited_plugin_facts_bound_descendant_expansion():
+    descendants = tuple(
+        SymbolDefinition(
+            f"Vendor\\Model\\Descendant{index:03d}",
+            "class",
+            f"app/code/Vendor/Module/Model/Descendant{index:03d}.php",
+            parents=("Vendor\\Model\\Base",),
+        )
+        for index in range(200)
+    )
+    analysis = _resolve(
+        artifacts={
+            "app/etc/config.php": """<?php return ['modules' => [
+                'Vendor_Module' => 1,
+            ]];""",
+            "app/code/Vendor/Module/etc/module.xml": (
+                '<config><module name="Vendor_Module" /></config>'
+            ),
+            "app/code/Vendor/Module/etc/di.xml": r"""
+                <config>
+                    <type name="Vendor\Model\Base">
+                        <plugin name="guard" type="Vendor\Plugin\Guard" />
+                    </type>
+                </config>
+            """,
+        },
+        symbols=tuple(sorted((
+            SymbolDefinition(
+                "Vendor\\Model\\Base",
+                "class",
+                "app/code/Vendor/Module/Model/Base.php",
+            ),
+            SymbolDefinition(
+                "Vendor\\Plugin\\Guard",
+                "class",
+                "app/code/Vendor/Module/Plugin/Guard.php",
+            ),
+            *descendants,
+        ))),
+    )
+    inherited = tuple(
+        fact
+        for packet in analysis.packets
+        for fact in packet.facts
+        if fact.kind == "magento-di-inherited-plugin"
+        and fact.target == "Vendor\\Plugin\\Guard"
+    )
+
+    assert len(inherited) == 199
+    assert any(
+        fact.source == "Vendor\\Model\\Descendant198"
+        for fact in inherited
+    )
+    assert not any(
+        fact.source == "Vendor\\Model\\Descendant199"
+        for fact in inherited
     )
 
 
@@ -4549,7 +4700,7 @@ def test_magento_template_event_abstains_without_coactivation_or_unique_listener
     )
 
 
-def test_magento_repository_snapshot_recomputes_effective_pr_overlay():
+def test_magento_repository_snapshot_recomputes_restored_state():
     base = _resolve()
     catalog = PluginCatalog.discover(PLUGINS_ROOT)
     plugin = catalog.implementation("magento")
@@ -4605,414 +4756,3 @@ def test_magento_repository_snapshot_applies_deletions():
 
     assert outcome.status is OutcomeStatus.HANDLED
     assert all(deleted_path not in packet.paths for packet in outcome.value.packets)
-
-
-def test_magento_architecture_reaches_stage_1_as_focused_fresh_context():
-    """Exercise plugin graph -> storage nodes -> exact retrieval -> prompt text."""
-    sys.path.insert(
-        0,
-        str(PROJECT_ROOT / "python-ecosystem" / "rag-pipeline" / "src"),
-    )
-    sys.path.insert(
-        0,
-        str(PROJECT_ROOT / "python-ecosystem" / "inference-orchestrator" / "src"),
-    )
-    from rag_pipeline.core.index_manager.indexer import RepositoryIndexer
-    from rag_pipeline.core.index_representation import (
-        INDEX_REPRESENTATION_PAYLOAD_KEY,
-    )
-    from rag_pipeline.services.base import RAGQueryBase
-    from rag_pipeline.services.deterministic_context import DeterministicContextMixin
-    from rag_pipeline.core.review_grouping import (
-        review_groups_from_architecture_payloads,
-    )
-    from qdrant_client.http.models import FieldCondition, MatchValue
-    context_helpers_path = (
-        PROJECT_ROOT
-        / "python-ecosystem"
-        / "inference-orchestrator"
-        / "src"
-        / "service"
-        / "review"
-        / "orchestrator"
-        / "context_helpers.py"
-    )
-    module_spec = importlib.util.spec_from_file_location(
-        "codecrow_test_context_helpers",
-        context_helpers_path,
-    )
-    assert module_spec and module_spec.loader
-    context_helpers = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(context_helpers)
-
-    analysis = _resolve()
-    catalog = PluginCatalog.discover(PLUGINS_ROOT)
-    repository_plugins = ("php", "magento")
-    capabilities = SimpleNamespace(
-        repository_plugins=repository_plugins,
-        fingerprint="sha256:" + "0" * 64,
-        descriptor_fingerprint=catalog.registry.fingerprint_for(repository_plugins),
-        implementation_fingerprint=catalog.implementation_fingerprint(
-            repository_plugins
-        ),
-    )
-    nodes = RepositoryIndexer._architecture_nodes(
-        analysis,
-        capabilities,
-        "ws",
-        "project",
-        "feature",
-        "commit",
-        capabilities.implementation_fingerprint,
-    )
-    changed_path = "app/code/Acme/Checkout/Plugin/CartAudit.php"
-    matching_nodes = [
-        node for node in nodes
-        if changed_path in node.metadata["architecture_paths"]
-    ]
-    assert matching_nodes
-
-    points = [
-        SimpleNamespace(
-            id=f"packet-{index}",
-            payload={
-                **node.metadata,
-                "text": node.text,
-                "branch": "feature",
-                "pr": True,
-                "pr_number": 42,
-            },
-        )
-        for index, node in enumerate(matching_nodes)
-    ]
-
-    class FakeQdrant:
-        def __init__(self, records=points):
-            self.calls = 0
-            self.records = records
-
-        def scroll(self, **_kwargs):
-            self.calls += 1
-            return (
-                (self.records, None)
-                if self.calls == 1
-                else ([], None)
-            )
-
-    service = object.__new__(type(
-        "MagentoContextService",
-        (DeterministicContextMixin, RAGQueryBase),
-        {},
-    ))
-    service.plugin_catalog = catalog
-    service.index_representation_fingerprint = matching_nodes[0].metadata[
-        INDEX_REPRESENTATION_PAYLOAD_KEY
-    ]
-    service._plugin_identity_cache = {}
-    service.qdrant_client = FakeQdrant()
-    architecture_context = {}
-    architecture_related = {}
-    chunks = []
-    stats = service._query_architecture_context(
-        "collection",
-        FieldCondition(key="branch", match=MatchValue(value="feature")),
-        [changed_path],
-        5,
-        ["feature", "main"],
-        "feature",
-        set(),
-        {changed_path},
-        set(),
-        chunks,
-        architecture_context,
-        architecture_related,
-        set(),
-    )
-
-    expected_facts = [
-        fact
-        for node in matching_nodes
-        for fact in node.metadata["plugin_graph_facts"]
-        if changed_path in {
-            fact["path"],
-            *fact.get("related_paths", []),
-        }
-    ]
-    retrieved_facts = [
-        fact
-        for chunk in chunks
-        for fact in chunk["metadata"]["plugin_graph_facts"]
-    ]
-    assert len(retrieved_facts) == len(expected_facts)
-    assert all(
-        changed_path in {fact["path"], *fact.get("related_paths", [])}
-        for fact in retrieved_facts
-    )
-    assert stats["truncated"] is False
-
-    # Stage 1's separately tested normalization maps payload pr=true to this
-    # freshness label before invoking the formatter.
-    normalized = [
-        {
-            **chunk,
-            "_source": (
-                "pr_indexed"
-                if chunk["metadata"].get("pr") is True
-                else "deterministic"
-            ),
-        }
-        for chunk in chunks
-    ]
-    prompt_context = context_helpers.format_rag_context(
-        {"relevant_code": normalized},
-        pr_changed_files=[changed_path],
-    )
-
-    assert normalized
-    assert all(chunk["_source"] == "pr_indexed" for chunk in normalized)
-    assert "Acme\\Checkout\\Plugin\\CartAudit" in prompt_context
-    assert "intercepted-by" in prompt_context
-    assert len(prompt_context) <= 32_000
-
-    queue_handler_path = (
-        "app/code/Acme/Checkout/Model/QueueHandler.php"
-    )
-    queue_nodes = [
-        node for node in nodes
-        if queue_handler_path
-        in node.metadata["architecture_paths"]
-        and any(
-            fact["kind"]
-            == "magento-message-effective-handler"
-            for fact in node.metadata["plugin_graph_facts"]
-        )
-    ]
-    assert queue_nodes
-    queue_points = [
-        SimpleNamespace(
-            id=f"queue-packet-{index}",
-            payload={
-                **node.metadata,
-                "text": node.text,
-                "branch": "feature",
-                "pr": True,
-                "pr_number": 42,
-            },
-        )
-        for index, node in enumerate(queue_nodes)
-    ]
-    service.qdrant_client = FakeQdrant(queue_points)
-    queue_chunks = []
-    service._query_architecture_context(
-        "collection",
-        FieldCondition(key="branch", match=MatchValue(value="feature")),
-        [queue_handler_path],
-        5,
-        ["feature", "main"],
-        "feature",
-        set(),
-        {queue_handler_path},
-        set(),
-        queue_chunks,
-        {},
-        {},
-        set(),
-    )
-    queue_prompt_context = context_helpers.format_rag_context(
-        {
-            "relevant_code": [
-                {**chunk, "_source": "pr_indexed"}
-                for chunk in queue_chunks
-            ]
-        },
-        pr_changed_files=[queue_handler_path],
-    )
-
-    assert "magento-message-effective-handler" in queue_prompt_context
-    assert (
-        "Acme\\Checkout\\Model\\QueueHandler::process"
-        in queue_prompt_context
-    )
-    assert len(queue_prompt_context) <= 32_000
-    assert review_groups_from_architecture_payloads(
-        (node.metadata for node in queue_nodes),
-        (
-            "app/code/Acme/Checkout/etc/queue_consumer.xml",
-            queue_handler_path,
-        ),
-    ) == [[
-        "app/code/Acme/Checkout/Model/QueueHandler.php",
-        "app/code/Acme/Checkout/etc/queue_consumer.xml",
-    ]]
-
-    system_path = (
-        "app/code/Acme/Checkout/etc/adminhtml/system.xml"
-    )
-    conditional_layout_path = (
-        "app/code/Acme/Checkout/view/frontend/layout/"
-        "checkout_cart_save.xml"
-    )
-    system_nodes = [
-        node for node in nodes
-        if (
-            system_path in node.metadata["architecture_paths"]
-            and any(
-                (
-                    fact["kind"].startswith("magento-system-config-")
-                    or fact["kind"] in {
-                        "magento-layout-acl-condition",
-                        "magento-layout-config-condition",
-                    }
-                )
-                for fact in node.metadata["plugin_graph_facts"]
-            )
-        )
-    ]
-    assert system_nodes
-    system_points = [
-        SimpleNamespace(
-            id=f"system-packet-{index}",
-            payload={
-                **node.metadata,
-                "text": node.text,
-                "branch": "feature",
-                "pr": True,
-                "pr_number": 42,
-            },
-        )
-        for index, node in enumerate(system_nodes)
-    ]
-    service.qdrant_client = FakeQdrant(system_points)
-    system_chunks = []
-    service._query_architecture_context(
-        "collection",
-        FieldCondition(key="branch", match=MatchValue(value="feature")),
-        [system_path, conditional_layout_path],
-        10,
-        ["feature", "main"],
-        "feature",
-        set(),
-        {system_path, conditional_layout_path},
-        set(),
-        system_chunks,
-        {},
-        {},
-        set(),
-    )
-    system_prompt_context = context_helpers.format_rag_context(
-        {
-            "relevant_code": [
-                {**chunk, "_source": "pr_indexed"}
-                for chunk in system_chunks
-            ]
-        },
-        pr_changed_files=[system_path, conditional_layout_path],
-    )
-
-    assert "magento-system-config-field" in system_prompt_context
-    assert "acme/cart/runtime_mode" in system_prompt_context
-    assert "uses-source-model" in system_prompt_context
-    assert "Acme\\Checkout\\Model\\Cart" in system_prompt_context
-    assert "uses-backend-model" in system_prompt_context
-    assert "Acme\\Checkout\\Model\\Service" in system_prompt_context
-    assert "has-default-declaration" in system_prompt_context
-    assert "Acme_Checkout::cart" in system_prompt_context
-    assert "visible-when-config-enabled" in system_prompt_context
-    assert "visible-to-resource" in system_prompt_context
-    assert "checkout_cart_save" in system_prompt_context
-    assert "reads-config-value" in system_prompt_context
-    assert "checks-config-flag" in system_prompt_context
-    assert "Acme\\Checkout\\Model\\ConfigReader::mode" in (
-        system_prompt_context
-    )
-    assert len(system_prompt_context) <= 32_000
-    assert review_groups_from_architecture_payloads(
-        (node.metadata for node in system_nodes),
-        (
-            system_path,
-            "app/code/Acme/Checkout/etc/config.xml",
-            "app/code/Acme/Checkout/Model/ConfigReader.php",
-            "app/code/Acme/Checkout/Model/Service.php",
-            conditional_layout_path,
-        ),
-    ) == [[
-        "app/code/Acme/Checkout/Model/ConfigReader.php",
-        "app/code/Acme/Checkout/Model/Service.php",
-        "app/code/Acme/Checkout/etc/adminhtml/system.xml",
-        "app/code/Acme/Checkout/etc/config.xml",
-        conditional_layout_path,
-    ]]
-
-    menu_path = "app/code/Acme/Checkout/etc/adminhtml/menu.xml"
-    menu_controller_path = (
-        "app/code/Acme/Checkout/Controller/Adminhtml/Cart/Index.php"
-    )
-    menu_changed_paths = (
-        menu_path,
-        menu_controller_path,
-        "app/code/Acme/Checkout/etc/adminhtml/routes.xml",
-        "app/code/Acme/Checkout/etc/adminhtml/system.xml",
-        "app/code/Acme/Checkout/etc/acl.xml",
-    )
-    menu_nodes = [
-        node for node in nodes
-        if (
-            menu_path in node.metadata["architecture_paths"]
-            and any(
-                fact["kind"].startswith("magento-admin-menu-")
-                for fact in node.metadata["plugin_graph_facts"]
-            )
-        )
-    ]
-    assert menu_nodes
-    service.qdrant_client = FakeQdrant([
-        SimpleNamespace(
-            id=f"menu-packet-{index}",
-            payload={
-                **node.metadata,
-                "text": node.text,
-                "branch": "feature",
-                "pr": True,
-                "pr_number": 42,
-            },
-        )
-        for index, node in enumerate(menu_nodes)
-    ])
-    menu_chunks = []
-    service._query_architecture_context(
-        "collection",
-        FieldCondition(key="branch", match=MatchValue(value="feature")),
-        list(menu_changed_paths),
-        10,
-        ["feature", "main"],
-        "feature",
-        set(),
-        set(menu_changed_paths),
-        set(),
-        menu_chunks,
-        {},
-        {},
-        set(),
-    )
-    menu_prompt_context = context_helpers.format_rag_context(
-        {
-            "relevant_code": [
-                {**chunk, "_source": "pr_indexed"}
-                for chunk in menu_chunks
-            ]
-        },
-        pr_changed_files=list(menu_changed_paths),
-    )
-    assert "magento-admin-menu-item" in menu_prompt_context
-    assert "magento-admin-menu-action" in menu_prompt_context
-    assert "acme/cart/index" in menu_prompt_context
-    assert "Acme_Checkout::cart" in menu_prompt_context
-    assert "acme/cart/enabled" in menu_prompt_context
-    assert menu_controller_path in menu_prompt_context
-    assert len(menu_prompt_context) <= 32_000
-    menu_groups = review_groups_from_architecture_payloads(
-        (node.metadata for node in menu_nodes),
-        menu_changed_paths,
-    )
-    assert len(menu_groups) == 1
-    assert set(menu_groups[0]) == set(menu_changed_paths)

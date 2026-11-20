@@ -1,6 +1,5 @@
 """
-Unit tests for service.review.orchestrator.stage_helpers —
-emit_*, format_project_rules, filter_rag_chunks_for_batch.
+Unit tests for service.review.orchestrator.stage_helpers.
 """
 import json
 import pytest
@@ -10,7 +9,6 @@ from service.review.orchestrator.stage_helpers import (
     emit_error,
     format_project_rules,
     format_project_rules_digest,
-    filter_rag_chunks_for_batch,
 )
 
 
@@ -100,33 +98,3 @@ class TestFormatProjectRulesDigest:
         result = format_project_rules_digest(json.dumps(rules))
         assert "[ENFORCE] Rule1" in result
         assert "[SUPPRESS] Rule2" in result
-
-
-# ── filter_rag_chunks_for_batch ──────────────────────────────
-
-class TestFilterRagChunks:
-    def test_empty_chunks(self):
-        ctx = {"relevant_code": []}
-        result = filter_rag_chunks_for_batch(ctx, ["a.py"])
-        assert result is ctx  # returns as-is
-
-    def test_returns_context_without_path_filtering(self):
-        ctx = {
-            "relevant_code": [
-                {"metadata": {"path": "src/a.py"}, "score": 0.5},
-                {"metadata": {"path": "lib/unrelated.py"}, "score": 0.5},
-            ]
-        }
-        result = filter_rag_chunks_for_batch(ctx, ["src/a.py"])
-        assert result is ctx
-        assert len(result["relevant_code"]) == 2
-
-    def test_chunk_without_path_kept(self):
-        ctx = {
-            "relevant_code": [
-                {"metadata": {}, "score": 0.3},
-            ]
-        }
-        result = filter_rag_chunks_for_batch(ctx, ["a.py"])
-        filtered = result.get("relevant_code", result.get("chunks", []))
-        assert len(filtered) == 1

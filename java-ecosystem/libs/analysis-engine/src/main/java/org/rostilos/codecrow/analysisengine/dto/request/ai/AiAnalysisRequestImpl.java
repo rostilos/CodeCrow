@@ -7,6 +7,8 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.util.tracking.PrIssueHistory;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
@@ -37,6 +39,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
     protected final boolean ragEnabled;
+    protected final ReviewIndexPolicy ragIndexPolicy;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -44,11 +47,14 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String taskHistoryContext;
     protected final List<String> changedFiles;
     protected final List<String> deletedFiles;
+    protected final List<String> proposedTreeChangedFiles;
+    protected final List<String> proposedTreeDeletedFiles;
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
     protected final String sourceBranchName;
     protected final String vcsProvider;
     protected final String vcsBaseUrl;
+    protected final String vcsQuotaIdentity;
     protected final String rawDiff;
 
     // Incremental analysis fields
@@ -56,6 +62,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
+    protected final String targetHeadCommitHash;
     protected final String baseCommitHash;
 
     // File enrichment data (full file contents + dependency graph)
@@ -86,6 +93,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
         this.ragEnabled = builder.ragEnabled;
+        this.ragIndexPolicy = builder.ragIndexPolicy;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -93,6 +101,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.taskHistoryContext = builder.taskHistoryContext;
         this.changedFiles = builder.changedFiles;
         this.deletedFiles = builder.deletedFiles;
+        this.proposedTreeChangedFiles = builder.proposedTreeChangedFiles;
+        this.proposedTreeDeletedFiles = builder.proposedTreeDeletedFiles;
         this.diffSnippets = builder.diffSnippets;
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
@@ -100,12 +110,14 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.sourceBranchName = builder.sourceBranchName;
         this.vcsProvider = builder.vcsProvider;
         this.vcsBaseUrl = builder.vcsBaseUrl;
+        this.vcsQuotaIdentity = builder.vcsQuotaIdentity;
         this.rawDiff = builder.rawDiff;
         // Incremental analysis fields
         this.analysisMode = builder.analysisMode != null ? builder.analysisMode : AnalysisMode.FULL;
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
+        this.targetHeadCommitHash = builder.targetHeadCommitHash;
         this.baseCommitHash = builder.baseCommitHash;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
@@ -119,6 +131,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     public Long getProjectId() {
         return projectId;
     }
+
+    @Override
+    public String getVcsQuotaIdentity() { return vcsQuotaIdentity; }
 
     public String getProjectVcsWorkspace() {
         return projectVcsWorkspace;
@@ -208,6 +223,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return deletedFiles;
     }
 
+    @Override
+    public List<String> getProposedTreeChangedFiles() {
+        return proposedTreeChangedFiles != null ? proposedTreeChangedFiles : changedFiles;
+    }
+
+    @Override
+    public List<String> getProposedTreeDeletedFiles() {
+        return proposedTreeDeletedFiles != null ? proposedTreeDeletedFiles : deletedFiles;
+    }
+
     public List<String> getDiffSnippets() {
         return diffSnippets;
     }
@@ -259,6 +284,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     }
 
     @Override
+    public String getTargetHeadCommitHash() {
+        return targetHeadCommitHash != null && !targetHeadCommitHash.isBlank()
+                ? targetHeadCommitHash
+                : baseCommitHash;
+    }
+
+    @Override
     public String getBaseCommitHash() {
         return baseCommitHash;
     }
@@ -307,6 +339,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private boolean useLocalMcp;
         private boolean useMcpTools;
         private boolean ragEnabled = true;
+        private ReviewIndexPolicy ragIndexPolicy;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -314,10 +347,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String taskHistoryContext;
         private List<String> changedFiles;
         private List<String> deletedFiles;
+        private List<String> proposedTreeChangedFiles;
+        private List<String> proposedTreeDeletedFiles;
         private List<String> diffSnippets;
         private String targetBranchName;
         private String sourceBranchName;
         private String vcsProvider;
+        private String vcsQuotaIdentity;
         private String vcsBaseUrl;
         private String rawDiff;
         // Incremental analysis fields
@@ -325,6 +361,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
+        private String targetHeadCommitHash;
         private String baseCommitHash;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
@@ -413,8 +450,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
          * This provides the LLM with complete issue history including resolved issues,
          * helping it understand what was already found and fixed.
          * 
-         * Issues are deduplicated by fingerprint (file + line ±3 + severity + truncated
-         * reason).
+         * Issues are deduplicated by fingerprint (file + line ±3 + severity + complete
+         * normalized reason).
          * When duplicates exist across versions, we keep the most recent version's data
          * but preserve resolved status if ANY version marked it resolved.
          * 
@@ -426,72 +463,50 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                 return self();
             }
 
-            // Convert all issues to DTOs
-            List<AiRequestPreviousIssueDTO> allIssues = allPrAnalyses.stream()
-                    .flatMap(analysis -> analysis.getIssues().stream())
-                    .map(AiRequestPreviousIssueDTO::fromEntity)
-                    .toList();
-
-            // Deduplicate: group by fingerprint, keep most recent version but preserve
-            // resolved status
-            java.util.Map<String, AiRequestPreviousIssueDTO> deduped = new java.util.LinkedHashMap<>();
-
-            for (AiRequestPreviousIssueDTO issue : allIssues) {
-                String fingerprint = computeIssueFingerprint(issue);
-                AiRequestPreviousIssueDTO existing = deduped.get(fingerprint);
-
-                if (existing == null) {
-                    // First occurrence of this issue
-                    deduped.put(fingerprint, issue);
-                } else {
-                    // Duplicate found - keep the one with higher prVersion (more recent)
-                    // But if older version is resolved and newer is not, preserve resolved status
-                    int existingVersion = existing.prVersion() != null ? existing.prVersion() : 0;
-                    int currentVersion = issue.prVersion() != null ? issue.prVersion() : 0;
-
-                    boolean existingResolved = "resolved".equalsIgnoreCase(existing.status());
-                    boolean currentResolved = "resolved".equalsIgnoreCase(issue.status());
-
-                    if (currentVersion > existingVersion) {
-                        // Current is newer - use it, but preserve resolved status if existing was
-                        // resolved
-                        if (existingResolved && !currentResolved) {
-                            // Older version was resolved but newer one isn't marked - use resolved data
-                            // from older
-                            deduped.put(fingerprint, mergeResolvedStatus(issue, existing));
-                        } else {
-                            deduped.put(fingerprint, issue);
-                        }
-                    } else if (existingVersion == currentVersion) {
-                        // Same version - prefer resolved one
-                        if (currentResolved && !existingResolved) {
-                            deduped.put(fingerprint, issue);
-                        }
-                    }
-                    // If existing is newer, keep it (already in map)
+            List<CodeAnalysisIssue> history = allPrAnalyses.stream()
+                    .flatMap(analysis -> analysis.getIssues().stream()).toList();
+            var decisions = PrIssueHistory.decisions(history);
+            java.util.Map<String, List<CodeAnalysisIssue>> groups = new java.util.LinkedHashMap<>();
+            for (CodeAnalysisIssue issue : history) {
+                String identity = PrIssueHistory.identity(issue);
+                if (identity == null) {
+                    identity = issue.getAnchorSide() + "::" + computeIssueFingerprint(AiRequestPreviousIssueDTO.fromEntity(issue));
                 }
+                groups.computeIfAbsent(identity, key -> new java.util.ArrayList<>()).add(issue);
             }
-
-            this.previousCodeAnalysisIssues = new java.util.ArrayList<>(deduped.values());
+            this.previousCodeAnalysisIssues = new java.util.ArrayList<>();
+            for (List<CodeAnalysisIssue> group : groups.values()) {
+                CodeAnalysisIssue newest = group.stream().max(java.util.Comparator.comparingInt(issue ->
+                        issue.getAnalysis() != null && issue.getAnalysis().getPrVersion() != null
+                                ? issue.getAnalysis().getPrVersion() : 0)).orElseThrow();
+                CodeAnalysisIssue decision = PrIssueHistory.decisionFor(newest, decisions);
+                CodeAnalysisIssue statusSource = decision != null ? decision
+                        : group.stream().filter(CodeAnalysisIssue::isResolved).findFirst().orElse(newest);
+                boolean resolved = decision != null
+                        ? PrIssueHistory.effectiveResolved(newest, decision)
+                        : statusSource.isResolved();
+                this.previousCodeAnalysisIssues.add(mergeStatus(AiRequestPreviousIssueDTO.fromEntity(newest),
+                        AiRequestPreviousIssueDTO.fromEntity(statusSource), resolved ? "resolved" : "open"));
+            }
 
             return self();
         }
 
         /**
          * Compute a fingerprint for an issue to detect duplicates across PR versions.
-         * Uses: file + normalized line (±3 tolerance) + severity + first 50 chars of
-         * reason.
+         * Uses: file + normalized line (±3 tolerance) + severity + complete normalized
+         * reason. A prefix-only reason would merge distinct findings and discard one.
          */
         private String computeIssueFingerprint(AiRequestPreviousIssueDTO issue) {
             String file = issue.file() != null ? issue.file() : "";
             // Normalize line to nearest multiple of 3 for tolerance
             int lineGroup = issue.line() != null ? (issue.line() / 3) : 0;
             String severity = issue.severity() != null ? issue.severity() : "";
-            String reasonPrefix = issue.reason() != null
-                    ? issue.reason().substring(0, Math.min(50, issue.reason().length())).toLowerCase().trim()
+            String normalizedReason = issue.reason() != null
+                    ? issue.reason().toLowerCase().trim()
                     : "";
 
-            return file + "::" + lineGroup + "::" + severity + "::" + reasonPrefix;
+            return file + "::" + lineGroup + "::" + severity + "::" + normalizedReason;
         }
 
         /**
@@ -499,9 +514,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
          * Creates a new DTO with the newer issue's data but the older issue's
          * resolution info.
          */
-        private AiRequestPreviousIssueDTO mergeResolvedStatus(
+        private AiRequestPreviousIssueDTO mergeStatus(
                 AiRequestPreviousIssueDTO newer,
-                AiRequestPreviousIssueDTO resolvedOlder) {
+                AiRequestPreviousIssueDTO resolvedOlder, String status) {
             return new AiRequestPreviousIssueDTO(
                     newer.id(),
                     newer.type(),
@@ -514,12 +529,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                     newer.line(),
                     newer.branch(),
                     newer.pullRequestId(),
-                    resolvedOlder.status(), // Use resolved status from older
+                    status,
                     newer.category(),
                     newer.prVersion(),
-                    resolvedOlder.resolvedDescription(),
-                    resolvedOlder.resolvedByCommit(),
-                    resolvedOlder.resolvedInAnalysisId(),
+                    "resolved".equals(status) ? resolvedOlder.resolvedDescription() : null,
+                    "resolved".equals(status) ? resolvedOlder.resolvedByCommit() : null,
+                    "resolved".equals(status) ? resolvedOlder.resolvedInAnalysisId() : null,
+                    newer.anchorSide(),
                     newer.codeSnippet());
         }
 
@@ -540,6 +556,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withUseMcpTools(boolean useMcpTools) {
             this.useMcpTools = useMcpTools;
+            return self();
+        }
+
+        public T withRagIndexPolicy(ReviewIndexPolicy ragIndexPolicy) {
+            this.ragIndexPolicy = ragIndexPolicy;
             return self();
         }
 
@@ -583,6 +604,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withProposedTreeChangedFiles(List<String> proposedTreeChangedFiles) {
+            this.proposedTreeChangedFiles = proposedTreeChangedFiles;
+            return self();
+        }
+
+        public T withProposedTreeDeletedFiles(List<String> proposedTreeDeletedFiles) {
+            this.proposedTreeDeletedFiles = proposedTreeDeletedFiles;
+            return self();
+        }
+
         public T withDiffSnippets(List<String> diffSnippets) {
             this.diffSnippets = diffSnippets;
             return self();
@@ -590,6 +621,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withBaseCommitHash(String baseCommitHash) {
             this.baseCommitHash = baseCommitHash;
+            return self();
+        }
+
+        public T withTargetHeadCommitHash(String targetHeadCommitHash) {
+            this.targetHeadCommitHash = targetHeadCommitHash;
             return self();
         }
 
@@ -611,6 +647,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withVcsProvider(String vcsProvider) {
             this.vcsProvider = vcsProvider;
+            return self();
+        }
+
+        public T withVcsQuotaIdentity(String identity) {
+            this.vcsQuotaIdentity = identity;
             return self();
         }
 
@@ -676,6 +717,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getUseMcpTools() {
         return useMcpTools;
+    }
+
+    @Override
+    public ReviewIndexPolicy getRagIndexPolicy() {
+        return ragIndexPolicy;
     }
 
     @Override

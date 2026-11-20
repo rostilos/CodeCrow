@@ -188,11 +188,48 @@ class HunkCoverageLedger:
             raise RuntimeError("Stage 1 omitted reviewable hunk paths: " + ", ".join(missing))
         self._advance_paths(reviewed, HunkCoverageState.PLANNED, HunkCoverageState.REVIEWED)
 
-    def mark_reviewed_hunks(self, hunk_ids: Iterable[str]) -> None:
+    def mark_budget_omitted_hunks(
+        self,
+        hunk_ids: Iterable[str],
+        *,
+        reason: str,
+    ) -> None:
+        """Exclude planned hunks omitted by a finite invocation budget."""
+        omitted = set(hunk_ids)
+        unknown = sorted(omitted - set(self.reviewable_hunk_ids))
+        if unknown:
+            raise RuntimeError(
+                "Stage 1 reported unknown budget-omitted hunk identities: "
+                + ", ".join(unknown)
+            )
+        diagnostic = str(reason).strip() or "omitted by Stage 1 invocation budget"
+        for hunk_id in omitted:
+            record = self._records[hunk_id]
+            if record.state is not HunkCoverageState.PLANNED:
+                raise RuntimeError(
+                    f"Invalid hunk coverage transition for {record.hunk_id}: "
+                    f"{record.state.value} -> {HunkCoverageState.EXCLUDED.value}"
+                )
+            record.state = HunkCoverageState.EXCLUDED
+            record.reason = diagnostic
+
+    def mark_reviewed_hunks(
+        self,
+        hunk_ids: Iterable[str],
+        *,
+        allow_excluded: bool = False,
+        allow_incomplete: bool = False,
+    ) -> None:
         reviewed = set(hunk_ids)
         expected = set(self.reviewable_hunk_ids)
+        if allow_excluded:
+            expected -= {
+                record.hunk_id
+                for record in self._records.values()
+                if record.state is HunkCoverageState.EXCLUDED
+            }
         missing = sorted(expected - reviewed)
-        if missing:
+        if missing and not allow_incomplete:
             raise RuntimeError(
                 "Stage 1 omitted reviewable hunk identities: " + ", ".join(missing)
             )
@@ -208,11 +245,11 @@ class HunkCoverageLedger:
             HunkCoverageState.REVIEWED,
         )
 
-    def mark_validated(self) -> None:
-        self._advance_all(HunkCoverageState.REVIEWED, HunkCoverageState.VALIDATED)
+    def mark_validated(self, *, allow_incomplete: bool = False) -> None:
+        self._advance_all(HunkCoverageState.REVIEWED, HunkCoverageState.VALIDATED, allow_incomplete=allow_incomplete)
 
-    def complete(self) -> None:
-        self._advance_all(HunkCoverageState.VALIDATED, HunkCoverageState.COMPLETED)
+    def complete(self, *, allow_incomplete: bool = False) -> None:
+        self._advance_all(HunkCoverageState.VALIDATED, HunkCoverageState.COMPLETED, allow_incomplete=allow_incomplete)
 
     def assert_complete(self) -> None:
         incomplete = sorted(
@@ -245,9 +282,13 @@ class HunkCoverageLedger:
                 )
             record.state = target
 
-    def _advance_all(self, expected: HunkCoverageState, target: HunkCoverageState) -> None:
+    def _advance_all(self, expected: HunkCoverageState, target: HunkCoverageState, *, allow_incomplete: bool = False) -> None:
         for record in self._records.values():
             if record.disposition is not HunkDisposition.REVIEWABLE:
+                continue
+            if record.state is HunkCoverageState.EXCLUDED:
+                continue
+            if allow_incomplete and record.state is HunkCoverageState.PLANNED:
                 continue
             if record.state is not expected:
                 raise RuntimeError(

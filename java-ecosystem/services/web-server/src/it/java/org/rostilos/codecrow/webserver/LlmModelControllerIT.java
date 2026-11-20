@@ -13,6 +13,28 @@ import static org.hamcrest.Matchers.*;
  */
 class LlmModelControllerIT extends BaseWebServerIT {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rostilos.codecrow.core.persistence.repository.ai.LlmModelRepository models;
+
+    @Test
+    void providerCatalogueRoundTripsAndIsScopedToSelectedModel() {
+        createTestUser("providers", "providers@example.com", "password123");
+        var model = new org.rostilos.codecrow.core.model.ai.LlmModel();
+        model.setProviderKey(org.rostilos.codecrow.core.model.ai.AIProviderKey.OPENROUTER);
+        model.setModelId("test/selected");
+        model.setProviders(java.util.List.of(new org.rostilos.codecrow.core.model.ai.LlmModel.ModelProvider("azure", "Azure")));
+        model.setProvidersSyncedAt(java.time.OffsetDateTime.now());
+        models.saveAndFlush(model);
+        authenticatedRequest("providers").queryParam("modelId", "test/selected")
+                .get("/api/llm-models/openrouter-providers").then().statusCode(200)
+                .body("providers.slug", contains("azure")).body("syncedAt", notNullValue());
+        authenticatedRequest("providers").queryParam("modelId", "test/other")
+                .get("/api/llm-models/openrouter-providers").then().statusCode(200)
+                .body("providers", empty()).body("syncedAt", nullValue());
+        unauthenticatedRequest().queryParam("modelId", "test/selected")
+                .get("/api/llm-models/openrouter-providers").then().statusCode(401);
+    }
+
     @Nested
     @DisplayName("GET /api/llm-models")
     class SearchModels {

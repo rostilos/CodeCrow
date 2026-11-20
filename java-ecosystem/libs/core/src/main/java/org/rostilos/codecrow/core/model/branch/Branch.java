@@ -29,7 +29,26 @@ public class Branch {
     @Column(name = "commit_hash", length = 40)
     private String commitHash;
 
-    /** Last commit hash that was fully and successfully analyzed (all steps completed). */
+    @Version
+    @Column(name = "row_version", nullable = false)
+    private long rowVersion;
+
+    @Column(name = "reconciliation_pending", nullable = false)
+    private boolean reconciliationPending;
+
+    @Column(name = "reconciliation_diagnostic", columnDefinition = "TEXT")
+    private String reconciliationDiagnostic;
+
+    @Column(name = "reconciliation_attempts", nullable = false)
+    private int reconciliationAttempts;
+
+    @Column(name = "reconciliation_attempted_at")
+    private OffsetDateTime reconciliationAttemptedAt;
+
+    @Column(name = "retry_commit_hash", length = 40)
+    private String retryCommitHash;
+
+    /** Last committed core revision; optional semantic completion is tracked separately. */
     @Column(name = "last_successful_commit_hash", length = 40)
     private String lastSuccessfulCommitHash;
 
@@ -111,6 +130,25 @@ public class Branch {
     public String getCommitHash() { return commitHash; }
     public void setCommitHash(String commitHash) { this.commitHash = commitHash; }
 
+    public boolean isReconciliationPending() { return reconciliationPending; }
+    public String getReconciliationDiagnostic() { return reconciliationDiagnostic; }
+    public int getReconciliationAttempts() { return reconciliationAttempts; }
+    public OffsetDateTime getReconciliationAttemptedAt() { return reconciliationAttemptedAt; }
+    public String getRetryCommitHash() { return retryCommitHash; }
+    public void setRetryCommitHash(String hash) { retryCommitHash = hash; }
+
+    public void beginReconciliation(boolean newRevision) {
+        reconciliationPending = true;
+        reconciliationDiagnostic = "Reconciliation pending; retry after interruption or unavailable evidence";
+        reconciliationAttempts = newRevision ? 1 : reconciliationAttempts + 1;
+        reconciliationAttemptedAt = OffsetDateTime.now();
+    }
+
+    public void finishReconciliation(String diagnostic) {
+        reconciliationPending = diagnostic != null;
+        reconciliationDiagnostic = diagnostic;
+    }
+
     public String getLastSuccessfulCommitHash() { return lastSuccessfulCommitHash; }
     public void setLastSuccessfulCommitHash(String lastSuccessfulCommitHash) { this.lastSuccessfulCommitHash = lastSuccessfulCommitHash; }
 
@@ -132,6 +170,7 @@ public class Branch {
      */
     public void markHealthy(String commitHash) {
         this.lastSuccessfulCommitHash = commitHash;
+        this.retryCommitHash = null;
         this.lastKnownHeadCommit = commitHash;
         this.healthStatus = BranchHealthStatus.HEALTHY;
         this.consecutiveFailures = 0;

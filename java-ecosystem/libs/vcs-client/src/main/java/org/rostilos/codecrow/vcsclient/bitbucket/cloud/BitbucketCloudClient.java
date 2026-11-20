@@ -499,6 +499,7 @@ public class BitbucketCloudClient implements VcsClient {
     
     private IOException createException(String operation, Response response) throws IOException {
         String body = response.body() != null ? response.body().string() : "";
+        org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(response, body);
         return new IOException("Failed to " + operation + ": " + response.code() + " - " + body);
     }
     
@@ -542,6 +543,19 @@ public class BitbucketCloudClient implements VcsClient {
         if (archiveDownloader == null) {
             throw new IOException(
                     "Bitbucket repository acquisition requires an OAuth access-token Git transport");
+        }
+    }
+
+    @Override
+    public String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        String spec = URLEncoder.encode(baseCommit + ".." + headCommit, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/merge-base/" + spec;
+        Request request = new Request.Builder().url(url).header("Accept", "application/json").get().build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) throw new IOException("Merge-base lookup failed");
+            String hash = objectMapper.readTree(response.body().string()).path("hash").asText(null);
+            if (hash == null || hash.isBlank()) throw new IOException("Merge-base revision is unavailable");
+            return hash;
         }
     }
 
@@ -893,8 +907,9 @@ public class BitbucketCloudClient implements VcsClient {
         GetPullRequestAction.PullRequestMetadata metadata =
                 new GetPullRequestAction(httpClient).getPullRequest(
                         workspaceId, repoIdOrSlug, String.valueOf(pullRequestNumber));
-        String baseCommit = resolveCommitHashIfNeeded(
+        String targetHeadCommit = resolveCommitHashIfNeeded(
                 workspaceId, repoIdOrSlug, metadata.getDestinationCommit());
+        String baseCommit = targetHeadCommit;
         String headCommit = resolveCommitHashIfNeeded(
                 workspaceId, repoIdOrSlug, metadata.getSourceCommit());
         String state = metadata.getState();
@@ -904,11 +919,12 @@ public class BitbucketCloudClient implements VcsClient {
                 metadata.getDescription(),
                 metadata.getSourceRef(),
                 metadata.getDestRef(),
+                targetHeadCommit,
                 baseCommit,
                 headCommit,
                 state,
                 "MERGED".equalsIgnoreCase(state),
-                null);
+                null, metadata.getAuthorId(), metadata.getAuthorName());
     }
 
     @Override
@@ -1190,73 +1206,4 @@ public class BitbucketCloudClient implements VcsClient {
         return new VcsCollaborator(userId, username, displayName, avatarUrl, permission, htmlUrl);
     }
     
-    /**
-     * Batch fetch file contents with parallel execution and exponential backoff.
-     * Bitbucket Cloud doesn't have a batch API, so we fetch in parallel with rate limit handling.
-     */
-    @Override
-    public java.util.Map<String, String> getFileContents(
-            String workspaceId, 
-            String repoIdOrSlug, 
-            java.util.List<String> filePaths, 
-            String branchOrCommit,
-            int maxFileSizeBytes
-    ) throws IOException {
-        java.util.Map<String, String> results = new java.util.concurrent.ConcurrentHashMap<>();
-        
-        // Use parallel stream with controlled concurrency
-        int parallelism = Math.min(10, filePaths.size()); // Max 10 concurrent requests
-        java.util.concurrent.ForkJoinPool customPool = new java.util.concurrent.ForkJoinPool(parallelism);
-        
-        try {
-            customPool.submit(() -> 
-                filePaths.parallelStream().forEach(path -> {
-                    int maxRetries = 3;
-                    int retryCount = 0;
-                    long backoffMs = 1000; // Start with 1 second
-                    
-                    while (retryCount < maxRetries) {
-                        try {
-                            String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
-                            if (content != null) {
-                                int sizeBytes = content.getBytes(
-                                        java.nio.charset.StandardCharsets.UTF_8).length;
-                                if (sizeBytes <= maxFileSizeBytes) {
-                                    results.put(path, content);
-                                } else {
-                                    log.warn(
-                                            "Full source for {} is {} bytes and exceeds the {} byte acquisition limit",
-                                            path, sizeBytes, maxFileSizeBytes);
-                                }
-                            }
-                            break; // Success, exit retry loop
-                        } catch (IOException e) {
-                            retryCount++;
-                            if (e.getMessage() != null && e.getMessage().contains("429")) {
-                                // Rate limited - exponential backoff
-                                try {
-                                    Thread.sleep(backoffMs);
-                                    backoffMs *= 2; // Double the backoff
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    break;
-                                }
-                            } else if (retryCount >= maxRetries) {
-                                // Log and skip this file
-                                log.warn("Failed to fetch file {} after {} retries: {}", path, maxRetries, e.getMessage());
-                            }
-                        }
-                    }
-                })
-            ).get();
-        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
-            log.error("Error in parallel file fetch: {}", e.getMessage());
-            throw new IOException("Batch file fetch failed", e);
-        } finally {
-            customPool.shutdown();
-        }
-        
-        log.info("Batch fetched {}/{} files from Bitbucket", results.size(), filePaths.size());
-        return results;
-    }
 }

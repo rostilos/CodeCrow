@@ -1,0 +1,64 @@
+name: codecrow-codex-luna-25
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: codecrow-codex-benchmark-redis
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  fix-permissions:
+    image: busybox
+    command: sh -c 'chmod 1777 /tmp && chown 1001:1001 /var/lib/codecrow/structural-index'
+    volumes:
+      - source_tmp:/tmp
+      - structural_index:/var/lib/codecrow/structural-index
+  rag-pipeline:
+    image: codecrow-local-rag-pipeline:latest
+    container_name: codecrow-codex-benchmark-rag-pipeline
+    env_file: ${CODECROW_BENCHMARK_RUN:?Run directory required}/config/rag-pipeline.env
+    command: [python, main.py]
+    ports: ['127.0.0.1:19004:8001']
+    depends_on:
+      redis: {condition: service_healthy}
+      fix-permissions: {condition: service_completed_successfully}
+    volumes:
+      - source_tmp:/tmp
+      - structural_index:/var/lib/codecrow/structural-index
+      - rag_logs:/app/logs
+      - ${CODECROW_BENCHMARK_RUN}/config/rag-pipeline.env:/app/.env:ro
+    healthcheck:
+      test: [CMD, curl, -f, 'http://127.0.0.1:8001/health']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  inference-orchestrator:
+    image: codecrow-local-inference-orchestrator:latest
+    container_name: codecrow-codex-benchmark-inference-orchestrator
+    env_file: ${CODECROW_BENCHMARK_RUN:?Run directory required}/config/inference-orchestrator.env
+    command: [python, /benchmark/inference_entrypoint.py]
+    ports: ['127.0.0.1:19015:8000']
+    depends_on:
+      rag-pipeline: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes:
+      - source_tmp:/tmp
+      - inference_logs:/app/logs
+      - .:/benchmark:ro
+      - ${CODECROW_BENCHMARK_RUN}/config/inference-orchestrator.env:/app/.env:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+      - openrouter.ai:127.0.0.1
+      - api.openrouter.ai:127.0.0.1
+      - api.openai.com:127.0.0.1
+    healthcheck:
+      test: [CMD, curl, -f, 'http://127.0.0.1:8000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+volumes:
+  source_tmp:
+  structural_index:
+  rag_logs:
+  inference_logs:

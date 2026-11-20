@@ -7,6 +7,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
+import org.rostilos.codecrow.core.service.PersonalAccessTokenService;
+import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.security.service.UserDetailsServiceImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +27,9 @@ public class AuthTokenFilter extends OncePerRequestFilter {
     @Autowired
     private UserDetailsServiceImpl userDetailsService;
 
+    @Autowired
+    private PersonalAccessTokenService personalTokens;
+
     private static final Logger logger = LoggerFactory.getLogger(AuthTokenFilter.class);
 
     @Override
@@ -32,10 +37,20 @@ public class AuthTokenFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         try {
             String jwt = parseJwt(request);
-            logger.debug("Processing request: {} {} - JWT present: {}", 
-                request.getMethod(), request.getRequestURI(), jwt != null);
-            
-            if (jwt != null && jwtUtils.validateJwtToken(jwt)) {
+            logger.debug("Processing request: {} {} - credential present: {}",
+                    request.getMethod(), request.getRequestURI(), jwt != null);
+            if (jwt != null && jwt.startsWith(PersonalAccessTokenService.PREFIX)) {
+                var token = personalTokens.authenticate(jwt);
+                if (token.isEmpty()) {
+                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Token is invalid, expired, revoked, or membership is inactive.");
+                    return;
+                }
+                var user = UserDetailsImpl.build(token.get().getUser());
+                var authentication = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+                request.setAttribute("personalAccessToken", token.get());
+            } else if (jwt != null && jwtUtils.validateJwtToken(jwt)) {
                 String username = jwtUtils.getUserNameFromJwtToken(jwt);
                 logger.debug("JWT validated for user: {}", username);
 

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "post-fix-replay-lock.schema.json",
+  "title": "CodeCrow Magento 2 verified-F replay lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "generatedAt",
+    "forkRepository",
+    "corpusId",
+    "corpusDigest",
+    "executionCorpusDigest",
+    "primaryReplayLockDigest",
+    "planDigest",
+    "plan",
+    "cases",
+    "lockDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-post-fix-replay-lock"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "forkRepository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "planDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "plan": {
+      "type": "object"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "baseRef",
+          "baseSha",
+          "reviewHeadSha",
+          "finalRef",
+          "finalSha",
+          "forkPrNumber",
+          "forkPrUrl"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseSha": {
+            "$ref": "#/$defs/sha1"
+          },
+          "reviewHeadSha": {
+            "$ref": "#/$defs/sha1"
+          },
+          "finalRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "finalSha": {
+            "$ref": "#/$defs/sha1"
+          },
+          "forkPrNumber": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "forkPrUrl": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    },
+    "lockDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

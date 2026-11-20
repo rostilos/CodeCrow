@@ -4,58 +4,39 @@ Shared prompt fragments reused across multiple stages.
 
 ISSUE_CATEGORIES = """
 Available issue categories (use EXACTLY one of these values):
-- SECURITY: Security vulnerabilities, injection risks, authentication issues
-- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks
-- CODE_QUALITY: Code smells, maintainability issues, complexity problems
-- BUG_RISK: Potential bugs, edge cases, null pointer risks
-- STYLE: Code style, formatting, naming conventions
-- DOCUMENTATION: Missing or inadequate documentation
-- BEST_PRACTICES: Violations of language, framework, or domain best practices
-- ERROR_HANDLING: Improper exception handling, missing error checks
-- TESTING: Test coverage issues, untestable code
-- ARCHITECTURE: Design issues, coupling problems, SOLID violations
+- SECURITY: vulnerabilities, injection, broken auth/authorization, unsafe data handling
+- PERFORMANCE: measurable waste — redundant I/O, N+1 queries, unbounded work, resource leaks
+- CODE_QUALITY: code smells, complexity, dead code, confusing structure with real cost
+- BUG_RISK: logic errors, edge cases, null/unsafe dereferences, broken invariants
+- STYLE: naming and readability defects that measurably impair comprehension
+- DOCUMENTATION: comments/docs the code contradicts, or missing docs for changed public contracts
+- BEST_PRACTICES: framework/language misuse demonstrated by the changed code
+- ERROR_HANDLING: swallowed failures, wrong recovery, missing error paths on fallible operations
+- TESTING: broken tests, missing coverage of changed behavior, untestable designs
+- ARCHITECTURE: cross-file design defects, coupling violations, SOLID breaches, DRY violations, layering violations
+"""
+
+CAUSAL_ANCHOR_INSTRUCTIONS = """
+CAUSAL ANCHORING:
+- Anchor file/primary_file, line and codeSnippet to the changed cause in a visible reviewable PR diff hunk, regardless of scope. Cite unchanged downstream consequences in reason/evidence and relatedLocations.
+- For partial deletions, copy an exact surviving current-source line at the removal boundary inside that hunk and explain the removed behavior's causal link. Never substitute an unrelated nearby line.
 """
 
 CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS = """
 LINE, CODE SNIPPET, AND SCOPE CONTRACT:
 - "line" is a best-effort line number in the new version; the system re-anchors using codeSnippet.
 - For every NEW finding, "codeSnippet" is mandatory. Copy one exact, verbatim source line from the visible current/new-side diff or file context, preserving whitespace and quotes. Never fabricate, annotate, shorten, or paraphrase it.
-- Choose the most representative anchor line: the faulty line for LINE, the first line of the block for BLOCK, the function signature for FUNCTION, or the most relevant declaration/changed line for FILE.
+- For a whole-file deletion only, use an exact removed BASE-side line and its old line number (anchorSide=BASE; otherwise HEAD). Report a current regression caused by removal, not a defect that disappeared with the file. Never describe removed bytes as head source.
+- Choose the source line in a visible reviewable diff hunk that causes the defect, regardless of scope.
 - Empty or non-matching codeSnippet values cause a NEW finding to be discarded.
 - Sole exception: an exact previous issue returned with isResolved=true is a historical lifecycle update, not a new finding. It may reuse the supplied previous codeSnippet even when that fixed line is absent from current source, and it may omit codeSnippet when no historical snippet was supplied.
 - "scope" is required and must be one of LINE, BLOCK, FUNCTION, FILE. Use LINE only when one line fully captures the problem; use BLOCK/FUNCTION/FILE for wider issues.
 - Do not compute endLine or line ranges.
-"""
+""" + CAUSAL_ANCHOR_INSTRUCTIONS
 
-ISSUE_DEDUPLICATION_INSTRUCTIONS = """
-⚠️ CRITICAL: AVOID DUPLICATE ISSUES
-
-Before reporting an issue, check if you've already reported the SAME root cause:
-
-MERGE THESE INTO ONE ISSUE:
-- Multiple instances of the same hardcoded value (e.g., store ID '6' in 3 places)
-- Same security vulnerability pattern repeated in different methods
-- Same missing validation across multiple endpoints
-- Same deprecated API usage in multiple files
-
-HOW TO REPORT GROUPED ISSUES:
-1. Report ONE issue for the root cause
-2. In the "reason" field, mention: "Found in X locations: [list files/lines]"
-3. Use the FIRST occurrence's line number
-4. In suggestedFixDiff, show the fix for ONE location as example
-
-EXAMPLE - WRONG (duplicate issues):
-Issue 1: title: "Hardcoded timeout value", reason: "Hardcoded timeout of 30s in sendRequest()..."
-Issue 2: title: "Hardcoded timeout value", reason: "Hardcoded timeout of 30s in retryRequest()..."
-Issue 3: title: "Hardcoded timeout value", reason: "Timeout 30s is hardcoded..."
-
-EXAMPLE - CORRECT (merged into one):
-Issue 1: title: "Hardcoded timeout prevents runtime configuration", reason: "Hardcoded timeout value '30' prevents environment-specific tuning. Found in 3 locations:
-  - service/HttpClient:45 (sendRequest)
-  - service/HttpClient:89 (retryRequest)
-  - util/ConnectionHelper:23
-  Recommended: Extract to configuration and inject as a dependency."
-"""
+ISSUE_DEDUPLICATION_INSTRUCTIONS = (
+    "ATOMIC: 1 root/issue. Repeats: relatedLocations."
+)
 
 SUGGESTED_FIX_DIFF_FORMAT = """
 📝 SUGGESTED FIX DIFF FORMAT:

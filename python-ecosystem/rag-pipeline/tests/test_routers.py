@@ -1,211 +1,265 @@
-"""
-Tests for rag_pipeline.api.routers — system, parse, index, query, pr.
-Tests individual route handlers and helper functions.
-"""
+"""Focused unit coverage for production API routers."""
+
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import patch, MagicMock
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 
-# ─────────────────────────────────────────────────────────────
-# System router
-# ─────────────────────────────────────────────────────────────
 class TestSystemRouter:
-
     def test_root(self):
         from rag_pipeline.api.routers.system import root
-        result = root()
-        assert "message" in result
-        assert "version" not in result
+
+        assert root()["message"] == "CodeCrow Repository Index API"
 
     def test_health(self):
         from rag_pipeline.api.routers.system import health
-        result = asyncio.run(health())
-        assert result["status"] == "healthy"
 
-    @patch("rag_pipeline.api.routers.system.gc")
-    def test_force_gc(self, mock_gc):
-        from rag_pipeline.api.routers.system import force_garbage_collection
-        mock_gc.collect.return_value = 42
+        assert asyncio.run(health())["status"] == "healthy"
 
-        # psutil might not be available — mock the import
-        with patch("rag_pipeline.api.routers.system.psutil", create=True) as mock_psutil:
-            mock_process = MagicMock()
-            mock_process.memory_info.return_value.rss = 100 * 1024 * 1024
-            mock_psutil.Process.return_value = mock_process
-            try:
-                result = force_garbage_collection()
-                assert result["objects_collected"] == 42
-            except Exception:
-                # If psutil import fails, the function handles it
-                pass
+    def test_current_representation_identity_uses_active_manager(self):
+        from rag_pipeline.api import api as api_module
+        from rag_pipeline.api.routers.system import current_representation_identity
+
+        previous = api_module.index_manager
+        manager = MagicMock()
+        manager.current_representation_identity.return_value = {
+            "representation_identity": "sha256:" + "0" * 64,
+            "index_representation_fingerprint": "sha256:" + "1" * 64,
+            "plugin_descriptor_fingerprint": "sha256:" + "2" * 64,
+            "plugin_implementation_fingerprint": "sha256:" + "3" * 64,
+            "plugin_ids": ["java"],
+        }
+        api_module.index_manager = manager
+        try:
+            result = current_representation_identity()
+        finally:
+            api_module.index_manager = previous
+
+        assert result["plugin_ids"] == ["java"]
+        manager.current_representation_identity.assert_called_once_with()
 
 
-# ─────────────────────────────────────────────────────────────
-# Parse router
-# ─────────────────────────────────────────────────────────────
 class TestParseRouter:
-
-    def test_parse_file_returns_metadata(self):
-        from rag_pipeline.api.routers.parse import parse_file
+    @patch("rag_pipeline.core.splitter.ASTCodeSplitter")
+    def test_parse_file_projects_ast_chunk_metadata(self, splitter_class):
         from rag_pipeline.api.models import ParseFileRequest
+        from rag_pipeline.api.routers.parse import parse_file
 
-        request = ParseFileRequest(
+        splitter_class.return_value.split_documents.return_value = [
+            SimpleNamespace(metadata={
+                "imports": ["os"],
+                "symbol_names": ["hello"],
+                "calls": ["print"],
+            })
+        ]
+
+        result = parse_file(ParseFileRequest(
             path="test.py",
-            content="def hello():\n    pass\n",
+            content="import os\ndef hello():\n    pass\n",
             language="python",
-        )
-
-        result = parse_file(request)
+        ))
         assert result.path == "test.py"
         assert result.success is True
-
-    def test_parse_file_invalid_content(self):
-        from rag_pipeline.api.routers.parse import parse_file
-        from rag_pipeline.api.models import ParseFileRequest
-
-        request = ParseFileRequest(
-            path="test.xyz",
-            content="some content",
+        assert result.language == "python"
+        assert result.imports == ["os"]
+        assert result.symbol_names == ["hello"]
+        assert result.calls == ["print"]
+        parsed_documents = (
+            splitter_class.return_value.split_documents.call_args.args[0]
         )
-
-        result = parse_file(request)
-        # Should return result (may have success True or False)
-        assert result.path == "test.xyz"
+        assert parsed_documents[0].metadata == {"path": "test.py"}
 
 
-# ─────────────────────────────────────────────────────────────
-# Index router helpers
-# ─────────────────────────────────────────────────────────────
-class TestIndexRouter:
+class TestQueryRouter:
+    @patch("rag_pipeline.api.routers.query._manager")
+    def test_code_search_is_revision_bound(self, manager_factory):
+        from rag_pipeline.api.models import CodeSearchRequest
+        from rag_pipeline.api.routers.query import code_search
 
-    @patch("rag_pipeline.api.routers.index._get_singletons")
-    def test_get_limits(self, mock_singletons):
-        from rag_pipeline.api.routers.index import get_limits
-
-        mock_config = MagicMock()
-        mock_config.max_chunks_per_index = 50000
-        mock_config.max_files_per_index = 5000
-        mock_config.max_file_size_bytes = 1_000_000
-        mock_config.chunk_size = 1500
-        mock_config.chunk_overlap = 200
-        mock_singletons.return_value = (mock_config, MagicMock())
-
-        result = get_limits()
-        assert result["max_chunks_per_index"] == 50000
-        assert result["chunk_size"] == 1500
-
-
-# ─────────────────────────────────────────────────────────────
-# Query router helpers
-# ─────────────────────────────────────────────────────────────
-class TestQueryRouterHelpers:
-
-    def test_normalize_changed_file_candidates(self):
-        from rag_pipeline.api.routers.query import _normalize_changed_file_candidates
-
-        result = _normalize_changed_file_candidates(["src/main.py", "/src/main.py"])
-        assert "src/main.py" in result
-
-    def test_normalize_empty_list(self):
-        from rag_pipeline.api.routers.query import _normalize_changed_file_candidates
-
-        result = _normalize_changed_file_candidates([])
-        assert result == []
-
-    def test_normalize_none(self):
-        from rag_pipeline.api.routers.query import _normalize_changed_file_candidates
-
-        result = _normalize_changed_file_candidates(None)
-        assert result == []
-
-    def test_format_pr_results(self):
-        from rag_pipeline.api.routers.query import _format_pr_results
-
-        mock_point = MagicMock()
-        mock_point.payload = {
+        manager = MagicMock()
+        reader = manager.open_reader.return_value.__enter__.return_value
+        reader.search_units.return_value = [{
+            "unitId": "unit:main",
             "path": "src/main.py",
-            "text": "def hello(): pass",
-            "semantic_name": "hello",
-            "semantic_type": "function",
-            "pr_branch": "feature/test",
+            "recordType": "source_unit",
+            "startLine": 1,
+            "endLine": 3,
+            "language": "python",
+            "kind": "function",
+            "name": "main",
+            "qualifiedName": "main",
+        }]
+        reader.get_unit.return_value = {
+            "unit": {"content": "def main():\n    pass\n"},
+            "sourceEvidence": True,
         }
-        mock_point.score = 0.95
+        reader.snapshot.return_value = {"revision": "abc123"}
+        manager_factory.return_value = manager
 
-        results = _format_pr_results([mock_point])
-        assert len(results) == 1
-        assert results[0]["path"] == "src/main.py"
-        assert results[0]["text"] == "def hello(): pass"
-
-    def test_format_pr_results_skips_empty(self):
-        from rag_pipeline.api.routers.query import _format_pr_results
-
-        mock_point = MagicMock()
-        mock_point.payload = {"path": "", "text": ""}
-        mock_point.score = 0.5
-
-        results = _format_pr_results([mock_point])
-        assert len(results) == 0
-
-    def test_format_pr_results_forced_score(self):
-        from rag_pipeline.api.routers.query import _format_pr_results
-
-        mock_point = MagicMock()
-        mock_point.payload = {
-            "path": "a.py",
-            "text": "code",
-            "semantic_name": "",
-            "semantic_type": "",
-            "pr_branch": "main",
-        }
-        mock_point.score = 0.5
-
-        results = _format_pr_results([mock_point], forced_score=1.0)
-        assert results[0]["score"] == 1.0
-
-
-# ─────────────────────────────────────────────────────────────
-# Query router — semantic_search endpoint
-# ─────────────────────────────────────────────────────────────
-class TestQueryRouterEndpoints:
-
-    @patch("rag_pipeline.api.routers.query._get_singletons")
-    def test_semantic_search(self, mock_singletons):
-        from rag_pipeline.api.routers.query import semantic_search
-        from rag_pipeline.api.models import QueryRequest
-
-        mock_query_service = MagicMock()
-        mock_query_service.semantic_search.return_value = [
-            {"text": "result", "score": 0.9, "metadata": {}}
-        ]
-        mock_singletons.return_value = (MagicMock(), mock_query_service)
-
-        request = QueryRequest(
-            query="find function",
+        result = code_search(CodeSearchRequest(
+            query="main",
             workspace="ws",
             project="proj",
             branch="main",
-        )
-        result = semantic_search(request)
-        assert "results" in result
-        assert len(result["results"]) == 1
+            repository_revision="abc123",
+            repository_generation_manifest_sha256="a" * 64,
+            collection_target="generation-target",
+        ))
 
-    @patch("rag_pipeline.api.routers.query._get_singletons")
-    def test_deterministic_context(self, mock_singletons):
-        from rag_pipeline.api.routers.query import get_deterministic_context
-        from rag_pipeline.api.models import DeterministicContextRequest
+        assert result["results"][0]["match_reasons"] == [
+            "path",
+            "symbol",
+            "source",
+        ]
+        assert manager.open_reader.call_args.kwargs == {
+            "workspace": "ws",
+            "project": "proj",
+            "branch": "main",
+            "revision": "abc123",
+            "generation_manifest_sha256": "a" * 64,
+            "collection_target": "generation-target",
+        }
 
-        mock_query_service = MagicMock()
-        mock_query_service.get_deterministic_context.return_value = {"chunks": []}
-        mock_singletons.return_value = (MagicMock(), mock_query_service)
+    @patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+    @patch("rag_pipeline.api.routers.query._manager")
+    def test_review_context_keeps_host_binding_outside_model_focus(
+        self,
+        manager_factory,
+        service_class,
+    ):
+        from rag_pipeline.api.models import ReviewContextRequest
+        from rag_pipeline.api.routers.query import review_context
 
-        request = DeterministicContextRequest(
+        expected = {
+            "status": "ready",
+            "snapshot": {},
+            "freshness": {},
+            "changed": {},
+            "evidence": {},
+            "sourceWindows": [],
+            "coverage": {},
+            "provenance": {},
+            "omittedFollowups": [],
+        }
+        service_class.return_value.review_context.return_value = expected
+        request = ReviewContextRequest(
             workspace="ws",
-            project="proj",
-            branches=["main"],
-            file_paths=["src/main.py"],
+            project="project",
+            target_branch="main",
+            base_revision="base",
+            source_revision="source",
+            target_repo_path="/tmp/target",
+            review_overlay_path="/tmp/overlay",
+            base_collection_target="sealed-base-target",
+            base_generation_manifest_sha256="a" * 64,
+            review_collection_target="sealed-review-target",
+            review_generation_manifest_sha256="b" * 64,
+            focus_paths=["src/service.py"],
+            question="Who calls Service.run?",
+            focus_symbols=["Service.run"],
         )
-        result = get_deterministic_context(request)
-        assert "context" in result
+
+        assert review_context(request) == expected
+        service_class.assert_called_once_with(manager_factory.return_value)
+        assert service_class.return_value.review_context.call_args.kwargs[
+            "target_repo_path"
+        ] == "/tmp/target"
+        assert service_class.return_value.review_context.call_args.kwargs[
+            "focus_symbols"
+        ] == ["Service.run"]
+        assert service_class.return_value.review_context.call_args.kwargs[
+            "base_collection_target"
+        ] == "sealed-base-target"
+        assert service_class.return_value.review_context.call_args.kwargs[
+            "base_generation_manifest_sha256"
+        ] == "a" * 64
+        assert service_class.return_value.review_context.call_args.kwargs[
+            "review_collection_target"
+        ] == "sealed-review-target"
+        assert service_class.return_value.review_context.call_args.kwargs[
+            "review_generation_manifest_sha256"
+        ] == "b" * 64
+
+    @patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+    @patch("rag_pipeline.api.routers.query._manager")
+    def test_review_context_reports_incomplete_overlay_as_conflict(
+        self,
+        manager_factory,
+        service_class,
+    ):
+        from rag_pipeline.api.models import ReviewContextRequest
+        from rag_pipeline.api.routers.query import review_context
+        from rag_pipeline.core.review_context import ProposedTreeUnavailableError
+
+        service_class.return_value.review_context.side_effect = (
+            ProposedTreeUnavailableError("changed body unavailable")
+        )
+        request = ReviewContextRequest(
+            workspace="ws",
+            project="project",
+            target_branch="main",
+            base_revision="base",
+            source_revision="source",
+            target_repo_path="/tmp/target",
+            review_overlay_path="/tmp/overlay",
+            review_collection_target="sealed-review-target",
+            review_generation_manifest_sha256="b" * 64,
+            focus_paths=["src/service.py"],
+            question="Review the change",
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            review_context(request)
+
+        assert raised.value.status_code == 409
+        assert raised.value.detail == "changed body unavailable"
+
+    @patch("rag_pipeline.api.routers.query.logger.warning")
+    @patch("rag_pipeline.api.routers.query.ProposedTreeReviewContextService")
+    @patch("rag_pipeline.api.routers.query._manager")
+    def test_review_context_reports_active_mutation_as_retryable_conflict(
+        self,
+        manager_factory,
+        service_class,
+        warning,
+    ):
+        from rag_pipeline.api.models import ReviewContextRequest
+        from rag_pipeline.api.routers.query import review_context
+        from rag_pipeline.core.coordination import MutationLeaseUnavailable
+
+        detail = (
+            "another RAG mutation is active for ws/project "
+            "collection cc_review_g_abc"
+        )
+        service_class.return_value.review_context.side_effect = (
+            MutationLeaseUnavailable(detail)
+        )
+        request = ReviewContextRequest(
+            workspace="ws",
+            project="project",
+            target_branch="main",
+            base_revision="base",
+            source_revision="source",
+            target_repo_path="/tmp/target",
+            review_overlay_path="/tmp/overlay",
+            review_collection_target="sealed-review-target",
+            review_generation_manifest_sha256="b" * 64,
+            focus_paths=["src/service.py"],
+            question="Review the change",
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            review_context(request)
+
+        assert raised.value.status_code == 409
+        assert raised.value.detail == detail
+        warning.assert_called_once_with(
+            "Proposed-tree review context mutation conflict: "
+            "workspace=%s project=%s detail=%s",
+            "ws",
+            "project",
+            service_class.return_value.review_context.side_effect,
+        )

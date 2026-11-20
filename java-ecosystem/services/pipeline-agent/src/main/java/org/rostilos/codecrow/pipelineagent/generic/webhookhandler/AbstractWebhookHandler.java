@@ -8,13 +8,17 @@ import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 import java.util.List;
 
 public abstract class AbstractWebhookHandler {
-    protected static String validateProjectConnections(Project project) {
+    @org.springframework.beans.factory.annotation.Autowired
+    protected org.rostilos.codecrow.core.service.AIConnectionResolver aiConnectionResolver =
+            new org.rostilos.codecrow.core.service.AIConnectionResolver();
+
+    protected String validateProjectConnections(Project project) {
         // Use unified hasVcsBinding() method that checks both bindings
         if (!project.hasVcsBinding()) {
             return "VCS connection is not configured for project: " + project.getId();
         }
 
-        if (project.getAiBinding() == null) {
+        if (!aiConnectionResolver.isConfigured(project)) {
             return "AI connection is not configured for project: " + project.getId();
         }
 

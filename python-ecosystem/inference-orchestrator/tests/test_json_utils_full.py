@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pydantic import BaseModel, Field
 from service.review.orchestrator.json_utils import (
+    JsonRepairInputTooLarge,
     parse_llm_response,
     repair_json_with_llm,
     clean_json_text,
@@ -77,7 +78,7 @@ class TestRepairJsonWithLlm:
         assert "fixed" in result or "name" in result
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_truncates_long_input(self):
+    async def test_preserves_complete_long_input(self):
         llm = MagicMock()
         resp = MagicMock()
         resp.content = '{"ok": true}'
@@ -85,8 +86,24 @@ class TestRepairJsonWithLlm:
         long_json = "x" * 5000
         await repair_json_with_llm(llm, long_json, "error", {})
         call_args = llm.ainvoke.call_args[0][0]
-        # The broken json in the prompt should be truncated
-        assert len(call_args) < len(long_json) + 2000
+        assert long_json in call_args
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_oversized_input_is_rejected_whole_without_provider_call(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        broken = "BROKEN:" + ("🙂" * 20_000) + ":TAIL_SENTINEL"
+
+        with pytest.raises(JsonRepairInputTooLarge, match="refusing to slice"):
+            await repair_json_with_llm(
+                llm,
+                broken,
+                "invalid",
+                DummyModel.model_json_schema(),
+                input_token_target=1_000,
+            )
+
+        llm.ainvoke.assert_not_awaited()
 
 
 # ── parse_llm_response ───────────────────────────────────────
@@ -129,13 +146,15 @@ class TestParseLlmResponse:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_structured_output_fallback(self):
         """When initial parse fails, structured output retry is attempted."""
-        content = "NOT_JSON"
+        content = "NOT_JSON" + ("x" * 5_000) + "TAIL_SENTINEL"
         llm = MagicMock()
         structured = MagicMock()
         structured.ainvoke = AsyncMock(return_value=DummyModel(name="structured", value=1))
         llm.with_structured_output.return_value = structured
         result = await parse_llm_response(content, DummyModel, llm)
         assert result.name == "structured"
+        retry_prompt = structured.ainvoke.call_args.args[0]
+        assert retry_prompt.endswith("TAIL_SENTINEL")
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_repair_loop_fallback(self):
@@ -167,3 +186,21 @@ class TestParseLlmResponse:
 
         with pytest.raises(ValueError, match="Failed to parse"):
             await parse_llm_response(content, DummyModel, llm, retries=1)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_oversized_malformed_output_is_not_reinjected_or_sliced(self):
+        content = "NOT_JSON:" + ("界" * 20_000) + ":TAIL_SENTINEL"
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+
+        with pytest.raises(ValueError, match="refusing to slice"):
+            await parse_llm_response(
+                content,
+                DummyModel,
+                llm,
+                retries=2,
+                input_token_target=1_000,
+            )
+
+        llm.with_structured_output.assert_not_called()
+        llm.ainvoke.assert_not_awaited()

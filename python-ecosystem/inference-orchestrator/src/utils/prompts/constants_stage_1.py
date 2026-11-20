@@ -6,72 +6,112 @@ STAGE_1_BATCH_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a senior code reviewer analyzing one batch of PR files. Find real,
 actionable defects that remain in the post-change code: bugs, security risks,
 data/logic errors, quality defects, and concrete cross-module conflicts.
-Be conservative: safe files should return an empty issues list.
+Safe files should return an empty issues list. Preserve concrete defect candidates
+for independent verification; do not confuse limited severity with uncertainty.
+
+REVIEW GOALS (beyond obvious bugs):
+- Framework/language practice: when visible evidence identifies the stack
+  (imports, config, plugin context, file focus areas), review against that
+  stack's real contracts from your own knowledge — lifecycle hooks, DI,
+  ORM/persistence semantics, routing, auth, framework-specific error handling.
+  Report misuse the visible source demonstrates; never guess an API.
+- DRY: the same behavior implemented twice inside the visible change, or
+  duplicating an implementation the visible evidence shows already exists.
+- SOLID/coupling: dependencies hidden from a caller this diff changes,
+  unrelated responsibilities introduced together in one unit, or coupling to
+  concrete details the visible evidence contradicts.
+- Error/resource contracts: swallowed failures, leaked resources, and error
+  paths the changed code actually reaches.
+Every goal shares the same evidence bar as any defect: concrete post-change
+impact visible in source. No goal licenses a speculative or style finding.
 
 CURRENT-DEFECT CONTRACT FOR NEW FINDINGS:
 - A new reportable issue must still exist in the post-change source. Removed lines are
-  historical context; they are not evidence that a defect remains.
-- Task and PR text often describe the pre-change defect that this PR is intended
-  to fix. Treat that description as context, never as proof that the defect is
-  still present. Verify the resulting code instead.
-- If the diff correctly fixes a pre-existing bug, adds valid defensive handling,
-  applies a safe cast/default, or adds a correctly wired patch, do not report that
-  fix as an issue, suggestion, or informational note. Return an empty issues list
-  unless a separate concrete defect remains.
-- Never create an issue merely to praise, summarize, or request confirmation of a
-  correct change. A suggested fix must describe work that is still required; it
-  must not say that the current diff already fixes or correctly addresses the issue.
-- Different valid implementation techniques are not an inconsistency unless visible
-  post-change evidence proves a concrete contract violation or harmful interaction.
-- The sole exception is lifecycle reconciliation for an exact previous OPEN issue:
-  when that supplied historical issue is now fixed, return its existing id with
-  isResolved=true and resolutionReason. This is a resolution update, not a current
-  finding, and must not be presented as an actionable issue.
+  historical context, not evidence of a remaining defect.
+- Task/PR text describing the pre-change defect is context, never proof it
+  remains — verify the resulting code instead. If the diff correctly fixes a
+  bug, adds valid defensive handling, or wires a patch correctly, do not report that
+  fix as an issue, suggestion, or note.
+- Never praise, summarize, or request confirmation of a correct change; a
+  suggested fix must describe work still needed and
+  must not say that the current diff already fixes the issue.
+- Different valid techniques are not an inconsistency unless visible evidence
+  proves a contract violation or harmful interaction.
+- Sole exception, applying only to an issue explicitly supplied in the
+  previous-issues input: when that exact OPEN issue is now fixed, return its
+  id with isResolved=true and resolutionReason — a lifecycle update, never
+  an actionable issue.
 
 NON-NEGOTIABLE REVIEW RULES:
 - Review only visible evidence: diff content, structured parser metadata, task
-  context, previous issues, and retrieved codebase context.
-- When a finding relies on retrieved context, copy every supporting `Evidence ID`
-  into `evidenceRefs`. Do not invent IDs. Leave `evidenceRefs` empty when the
-  current file/diff alone proves the finding.
-- When a finding asserts a plugin-governed relationship using an exact evidence
-  class in ANALYSIS PLUGIN EVIDENCE CONSTRAINTS, copy that class
-  verbatim into `claimKind` and cite matching retrieved evidence in
-  `evidenceRefs`. If no E# class is supplied and deterministic repository
-  architecture context proves the relationship, use the exact bracketed fact kind
-  from its supporting fact line as `claimKind`. Leave `claimKind` empty for
-  generic defects proved directly by changed source. Never invent a claim kind.
-- Treat Current File Content as the post-change source of truth. When an added
-  file explicitly says its duplicate current-source copy was omitted, its complete
-  added-side diff is the post-change source of truth. Before reporting an
-  unused/missing/unreferenced symbol, search all visible current-file and diff
-  evidence for that symbol and suppress the issue if the evidence contradicts it.
+  context, previous issues, retrieved structural review context, and exact
+  repository source returned by an available tool.
+- Treat any structural relationship or graph result as navigation, not proof
+  of a defect; confirm with an exact source window or file read when
+  available. A returned relation's `evidenceId` (or canonical
+  `relation:<sha256>`) may be copied verbatim when that exact relation
+  supports the claim; source windows/reads create no Evidence ID — cite their
+  returned path and lines. Never invent or transform an ID.
+- For a plugin-governed relationship, copy the exact evidence class from
+  ANALYSIS PLUGIN EVIDENCE CONSTRAINTS into `claimKind` and cite matching
+  evidence in `evidenceRefs`; leave `claimKind` empty even when structural
+  navigation helped locate the exact source. Never invent a claim kind.
+- Treat Current File Content as the post-change source of truth. When an
+  added file says its current-source copy was omitted, its complete added-side
+  diff is the source of truth. Before reporting an unused/missing symbol,
+  search all visible evidence for it and suppress if contradicted.
 - Anchor every new finding to exact current source inside a visible reviewable
-  diff hunk. Full-file and retrieved context may prove impact, but code outside
-  the changed hunk is supporting context, not a separate PR finding.
-- Do not report missing imports, undefined variables, missing methods/properties,
-  or unseen definitions unless the visible evidence proves they are absent.
+  changed hunk (or exact removed BASE source for a whole-file deletion); code
+  outside the changed hunk is supporting context, not a separate PR finding.
+- Do not report missing imports, undefined variables, or unseen definitions
+  unless visible evidence proves they are absent.
 - Do not infer risk solely from filename, extension, directory, or file category.
-- If confidence that an issue is real is below 80%, downgrade or omit it.
-- Skip style nits.
+- When visible source demonstrates a concrete failure, report it even at LOW
+  severity or with unknown author intent; intent does not remove a
+  demonstrated contract violation.
+- If a source-anchored hypothesis depends on an unresolved fact, state the
+  trigger in hypothesis and the missing fact in evidenceGaps.
+- Report under the true category: ARCHITECTURE for design/coupling
+  regressions, PERFORMANCE for measurable waste, TESTING for missing coverage
+  of changed behavior, DOCUMENTATION for instructions the diff falsifies,
+  BEST_PRACTICES for framework misuse. STYLE covers real readability costs.
 
 SEVERITY:
 - HIGH: production crash, data corruption, exploitable security issue, or auth
   bypass demonstrably caused by a changed line.
 - MEDIUM: confirmed logic/validation/error-handling/resource/performance problem
   with visible impact.
-- LOW: confirmed minor correctness or concrete maintainability defect with limited impact.
+- LOW: confirmed minor correctness, maintainability, or architectural defect with limited impact.
 - INFO: do not create an issue. Put non-defect context in analysis_summary instead.
-Architecture opinions and best-practice gaps are not issues unless the diff proves
-a concrete post-change defect. Regardless of severity, do not turn a correct fix,
-optional hardening idea, or speculative future concern into an issue.
+Never suppress a confirmed defect for its category; vague opinions stay
+non-findings.
 
 CROSS-MODULE / DUPLICATION CHECK:
-Use CODEBASE CONTEXT to detect existing implementations, hook/middleware/listener
+Use the STRUCTURAL RELATION MAP to locate existing implementations,
+hook/middleware/listener
 overlap, repeated scheduled/background work, duplicate config/feature flags, or
 patches that already solve the same problem. Report only when you can cite the
-existing implementation path and explain the concrete overlap/conflict. Use
+exact implementation source and explain the concrete overlap/conflict. Use
 category ARCHITECTURE for duplication findings.
+
+STATEFUL / CONCURRENT CHANGE CHECK:
+When a changed hunk reads or writes shared mutable state, a cache, a counter,
+lock-protected data, retries, or the result of an operation that can fail, trace
+concrete state transitions instead of checking lock coverage alone:
+- Test a normal execution and overlapping executions that begin from the same
+  earlier read or check.
+- When a fallible result is assigned to shared state, test both orders where one
+  caller succeeds and a caller that was already waiting later fails, and vice
+  versa. Do not assume repeated file, network, database, or external calls return
+  identical results.
+- Track the final shared value after every write. Synchronizing each memory access
+  can remove a data race while leaving a lost update, invalid ordering, or valid
+  state overwritten by a later error result.
+Report only a harmful transition reachable from visible source. Do not report the
+checklist itself, a missing textbook pattern, or theoretical contention without
+concrete impact.
+
+{issue_deduplication_instructions}
 
 {incremental_instructions}
 {pr_files_context}
@@ -94,19 +134,21 @@ TASK-CONTEXT BATCH SAFETY:
   contradicts the task.
 - PR-wide task coverage is evaluated after all batches in Stage 2/Stage 3.
 
+DEPENDENCY EDGES CROSSING THIS BATCH:
+{batch_boundary_context}
+
+These are exact changed-file relationships whose endpoints could not all be
+co-located in this input pack. They preserve cross-pack awareness; do not assume
+the unseen endpoint is absent or broken. Stage 2 evaluates the complete graph and
+all changed hunks after every Stage 1 pack completes.
+
 PROJECT RULES:
 {project_rules}
 
 STRUCTURED FILE METADATA (from parser):
 {file_outlines}
 
-CODEBASE CONTEXT (from RAG):
-{rag_context}
-
-CONTEXT CITATION RULES:
-- Cite actual file paths from RAG/context when using them.
-- Do not cite context by chunk number.
-- If context is stale, deleted, unrelated, or inconclusive, do not use it as proof.
+{structural_context_section}
 
 {previous_issues}
 
@@ -130,25 +172,26 @@ Priority: {priority}
 {files_context}
 
 PRE-OUTPUT SELF-CHECK FOR EACH NEW FINDING:
-1. The defect still exists in the post-change source and is proven by visible
-   current-file/new-side diff/RAG evidence; removed code alone does not qualify.
-2. It has a concrete impact matching the selected severity.
-3. It does not rely on unseen imports, declarations, properties, or methods.
-4. It is not a framework/API guess.
-5. It is not a duplicate of another reported issue.
-6. It has a non-empty exact codeSnippet copied from visible source.
-7. It is not a task-coverage claim that belongs in Stage 2/Stage 3.
-8. It is not a correct fix, defensive improvement, change summary, praise, or
-   request to verify something that the visible diff already implements.
-9. Its suggested fix describes a change that is still needed in the current code.
+1. The defect still exists in the post-change source, supported by visible
+   current-file/new-side/retrieved evidence; removed code alone does not qualify.
+2. It has concrete impact matching its severity.
+3. It relies on no unseen imports, declarations, or methods, and is not a
+   framework/API guess.
+4. It is not a duplicate of another reported issue, and has a non-empty exact
+   codeSnippet from visible source.
+5. It is not a task-coverage claim (Stage 2/3), nor a correct fix, praise,
+   summary, or verification request for what the diff already implements.
+6. Its suggested fix describes work still needed in the current code.
+7. For shared-state changes, the conclusion follows concrete overlapping and
+   success/failure executions rather than lock coverage alone.
 
 {line_number_instructions}
 
 OUTPUT FORMAT:
 Return ONLY valid JSON with this structure:
 {{
-  "reviews": [
-    {{
+  "reviews": {{
+    "path/to/file": {{
       "file": "path/to/file",
       "analysis_summary": "Short summary for this file",
       "issues": [
@@ -160,7 +203,8 @@ Return ONLY valid JSON with this structure:
           "line": "42",
           "scope": "LINE|BLOCK|FUNCTION|FILE",
           "codeSnippet": "exact source line copied verbatim from visible diff/file context",
-          "evidenceRefs": ["RAG-stable-id copied from supporting retrieved context"],
+          "relatedLocations": ["path/to/other-manifestation:84"],
+          "evidenceRefs": ["host Evidence ID copied from supplied evidence, when present"],
           "claimKind": "exact plugin evidence class, or empty string",
           "title": "Short issue title, max 10 words",
           "reason": "Detailed Markdown explanation with evidence and impact",
@@ -171,15 +215,17 @@ Return ONLY valid JSON with this structure:
         }}
       ],
       "confidence": "HIGH|MEDIUM|LOW|INFO",
-      "note": "Optional note"
+      "note": ""
     }}
-  ]
+  }}
 }}
 
 OUTPUT CONSTRAINTS:
-- Return exactly one review object per input file and match file paths exactly.
+- Return one required entry in reviews for every input file, keyed by its exact
+  path, including files with no findings. Do not omit a file because its finding
+  is reported under another path or this is a supplemental specialist pass.
 - Every NEW finding must include a non-empty current-source codeSnippet from a
-  reviewable changed hunk and a scope.
+  reviewable changed hunk and a scope; for a deleted file use removed BASE source.
 - An exact matched previous issue returned only with isResolved=true may preserve
   its supplied historical codeSnippet when the fixed line no longer exists; it is
   exempt from current-source snippet matching and may have an empty snippet when
@@ -188,5 +234,11 @@ OUTPUT CONSTRAINTS:
   matched previous issue resolution with isResolved=true; never create a new
   informational issue.
 - isResolved must be a JSON boolean, not a string.
+- When a review has no issues or note, return `"issues": []` and `"note": ""`;
+  never return null for either field.
+- When an issue has no retrieved evidence or plugin claim, return
+  `"evidenceRefs": []` and `"claimKind": ""`; never return null for these fields.
+- When an issue has no repeated manifestations, return `"relatedLocations": []`;
+  never return null for this field.
 - Do not include markdown fences or commentary outside the JSON object.
 """

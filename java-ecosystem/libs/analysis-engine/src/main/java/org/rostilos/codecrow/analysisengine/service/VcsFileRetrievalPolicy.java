@@ -18,8 +18,7 @@ public class VcsFileRetrievalPolicy {
     private final int archiveFileThreshold;
 
     public VcsFileRetrievalPolicy(
-            @Value("${codecrow.vcs.file-retrieval.archive-threshold:"
-                    + "${codecrow.rag.incremental.archive-file-threshold:25}}")
+            @Value("${codecrow.vcs.file-retrieval.archive-threshold:25}")
             int archiveFileThreshold) {
         this.archiveFileThreshold = Math.max(0, archiveFileThreshold);
     }

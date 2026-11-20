@@ -18,9 +18,9 @@ import java.util.Map;
  * Service for VCS operations in Platform MCP.
  * Reuses vcs-client library actions for Bitbucket/GitHub access.
  * 
- * Authentication is provided via JVM system properties:
- * - accessToken: Direct bearer token
- * - oAuthClient + oAuthSecret: OAuth2 client credentials
+ * Authentication is provided through the request-scoped MCP environment:
+ * - CODECROW_MCP_ACCESS_TOKEN: Direct bearer token
+ * - CODECROW_MCP_OAUTH_CLIENT + CODECROW_MCP_OAUTH_SECRET: OAuth2 client credentials
  * - workspace: Bitbucket workspace slug
  * - repo.slug: Repository slug
  * - pullRequest.id: PR number
@@ -48,9 +48,9 @@ public class VcsService {
         this.vcsProvider = System.getProperty("vcs.provider", "bitbucket");
         
         // Check if we have VCS credentials
-        String accessToken = System.getProperty("accessToken");
-        String oAuthClient = System.getProperty("oAuthClient");
-        String oAuthSecret = System.getProperty("oAuthSecret");
+        String accessToken = McpCredentialSource.accessToken();
+        String oAuthClient = McpCredentialSource.oauthClient();
+        String oAuthSecret = McpCredentialSource.oauthSecret();
         
         boolean hasCredentials = (accessToken != null && !accessToken.isEmpty()) 
                 || (oAuthClient != null && !oAuthClient.isEmpty() && oAuthSecret != null && !oAuthSecret.isEmpty());

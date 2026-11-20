@@ -114,17 +114,3 @@ def format_project_rules_digest(rules_json: Optional[str]) -> str:
         lines.append(f"- [{rule_type}] {title}")
 
     return "\n".join(lines)
-
-
-def filter_rag_chunks_for_batch(
-    rag_context: Dict[str, Any],
-    batch_file_paths: List[str],
-) -> Optional[Dict[str, Any]]:
-    """
-    Compatibility wrapper.
-
-    Stage 1 no longer removes fallback RAG chunks by path, basename, directory,
-    or score before the LLM sees them. Stale/deleted/corrupt protections live in
-    format_rag_context; semantic relevance belongs to retrieval/reranking/LLM.
-    """
-    return rag_context

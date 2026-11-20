@@ -1,5 +1,7 @@
 FROM python:3.11-slim-bullseye AS builder
 
+ENV MCP_USE_ANONYMIZED_TELEMETRY=false
+
 # Set work directory
 WORKDIR /app
 
@@ -7,7 +9,8 @@ WORKDIR /app
 COPY python-ecosystem/inference-orchestrator/src/requirements.txt .
 
 # Install build dependencies required by some Python packages
-RUN apt-get update && \
+RUN printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye-updates main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260830T000000Z/ bullseye-security main\n' > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
     libc-dev \
@@ -39,21 +42,28 @@ COPY python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar* 
 # --- Production Stage ---
 FROM python:3.11-slim-bullseye
 
+ENV MCP_USE_ANONYMIZED_TELEMETRY=false
+
 # CRITICAL FIX: Pull a slim JRE from eclipse-temurin instead of using apt-get
 # This saves ~150-200MB compared to installing openjdk-17-jre-headless via apt
 COPY --from=eclipse-temurin:17-jre /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
-RUN apt-get update && \
+RUN printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260830T000000Z/ bullseye-updates main\ndeb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260830T000000Z/ bullseye-security main\n' > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
-    curl && \
+    curl gosu && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Create non-root user and set permissions
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN mkdir -p /app/logs/prompt-dry-runs && chown -R appuser:appuser /app
+# Shared repository snapshots are created by Pipeline Agent as UID/GID 1001.
+# Use the same numeric identity so the request-bound MCP process can read them
+# and lifecycle cleanup does not depend on recursively changing shared-volume permissions.
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid appuser --no-create-home \
+        --shell /usr/sbin/nologin appuser
+RUN mkdir -p /app/logs/prompt-dry-runs /app/codecrow-config /run/codecrow-config && chown -R appuser:appuser /app
 
 WORKDIR /app
 
@@ -78,8 +88,11 @@ COPY --chown=appuser:appuser --from=builder /app/codecrow-platform-mcp-1.0.jar* 
 ENV PYTHONPATH=/app:/app/plugins/contracts/python
 ENV CODECROW_PLUGINS_ROOT=/app/plugins
 
-# Switch to non-root user
-USER appuser
+COPY python-ecosystem/inference-orchestrator/src/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER root
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Expose port (default for FastAPI/Uvicorn)
 EXPOSE 8000

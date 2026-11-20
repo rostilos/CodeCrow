@@ -9,6 +9,7 @@ public enum PluginCapability {
     INDEX("index"),
     PLANNING("planning"),
     PROMPT("prompt"),
+    REVIEW_CHECK("review-check"),
     SYNTAX("syntax"),
     VALIDATION("validation");
 

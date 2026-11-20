@@ -40,7 +40,7 @@ class QaDocHandoffRetryPolicyTest {
     }
 
     @Test
-    void doesNotReuseALegacyDocumentWithoutTheCompleteSentinelContract() {
+    void reusesAnUnmarkedDocumentForPrivateHandoffWithoutAnotherPaidGeneration() {
         QaDocDocument document = document("commit-a", OffsetDateTime.now());
         document.setMarkdownContent("""
                 <!-- codecrow-test-cases:start -->
@@ -53,7 +53,7 @@ class QaDocHandoffRetryPolicyTest {
                 """);
 
         assertThat(QaDocHandoffRetryPolicy.shouldReuse(
-                document, null, "commit-a", "TASK-1")).isFalse();
+                document, null, "commit-a", "TASK-1")).isTrue();
     }
 
     @Test

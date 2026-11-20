@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.platformmcp.tool.impl;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -25,7 +26,18 @@ public class AskAboutAnalysisTool implements PlatformTool {
     
     private static final Logger log = LoggerFactory.getLogger(AskAboutAnalysisTool.class);
     private static final int MAX_QUESTION_LENGTH = 2000;
-    
+    private static final int MAX_ANALYSIS_ISSUES = 50;
+    private static final int MAX_RELATED_ISSUES = 10;
+    private final PlatformApiService apiService;
+
+    public AskAboutAnalysisTool() {
+        this(null);
+    }
+
+    AskAboutAnalysisTool(PlatformApiService apiService) {
+        this.apiService = apiService;
+    }
+
     @Override
     public String getName() {
         return "askAboutAnalysis";
@@ -55,12 +67,14 @@ public class AskAboutAnalysisTool implements PlatformTool {
         log.info("Getting analysis context for question about analysisId={}, question length={}", 
                 analysisId, question.length());
         
-        PlatformApiService apiService = PlatformApiService.getInstance();
+        PlatformApiService activeApiService = apiService != null
+                ? apiService
+                : PlatformApiService.getInstance();
         
         // Get the analysis data
         Map<String, Object> analysisData;
         try {
-            analysisData = apiService.getAnalysisById(analysisId);
+            analysisData = activeApiService.getAnalysisById(analysisId);
         } catch (Exception e) {
             log.warn("Failed to fetch analysis {}: {}", analysisId, e.getMessage());
             analysisData = null;
@@ -74,13 +88,19 @@ public class AskAboutAnalysisTool implements PlatformTool {
         }
         
         // Search for issues related to the question keywords
-        List<Map<String, Object>> relatedIssues = List.of();
+        List<Map<String, Object>> relatedIssues = null;
+        Integer relatedIssueTotal = null;
         try {
             // Extract keywords from question for search
             String searchCategory = extractCategoryFromQuestion(question);
             String searchSeverity = extractSeverityFromQuestion(question);
             
-            relatedIssues = apiService.searchIssues(searchSeverity, searchCategory, null, 10);
+            List<Map<String, Object>> completeRelatedIssues =
+                    activeApiService.searchIssues(searchSeverity, searchCategory, null);
+            relatedIssueTotal = completeRelatedIssues.size();
+            relatedIssues = List.copyOf(completeRelatedIssues.subList(
+                    0,
+                    Math.min(MAX_RELATED_ISSUES, completeRelatedIssues.size())));
         } catch (Exception e) {
             log.warn("Failed to search related issues: {}", e.getMessage());
         }
@@ -88,9 +108,31 @@ public class AskAboutAnalysisTool implements PlatformTool {
         Map<String, Object> result = new HashMap<>();
         result.put("analysisId", analysisId);
         result.put("question", question);
-        result.put("analysis", analysisData);
-        result.put("relatedIssues", relatedIssues);
-        result.put("issueCount", relatedIssues.size());
+        result.put("analysis", boundedAnalysisProjection(analysisData));
+        if (relatedIssues != null) {
+            result.put("relatedIssues", relatedIssues);
+            result.put("issueCount", relatedIssues.size());
+            boolean relatedComplete = relatedIssueTotal != null
+                    && relatedIssueTotal <= MAX_RELATED_ISSUES;
+            result.put("relatedIssuesComplete", relatedComplete);
+            result.put("relatedIssueTotalCount", relatedIssueTotal);
+            result.put("omittedRelatedIssueCount", Math.max(
+                    0,
+                    relatedIssueTotal - relatedIssues.size()));
+            result.put("relatedIssuesStatus", relatedComplete
+                    ? "complete"
+                    : "bounded_for_mcp_prompt");
+            if (!relatedComplete) {
+                result.put("relatedIssuesDiagnostic",
+                        "Related issue projection reached the MCP prompt limit; "
+                                + "additional matches remain available through searchIssues.");
+            }
+        } else {
+            result.put("relatedIssuesComplete", false);
+            result.put("relatedIssuesStatus", "unavailable");
+            result.put("relatedIssuesDiagnostic",
+                    "Related issue search failed; do not interpret this as no matching issues.");
+        }
         
         if (includeContext != null && includeContext) {
             result.put("contextIncluded", true);
@@ -105,6 +147,30 @@ public class AskAboutAnalysisTool implements PlatformTool {
         ));
         
         return result;
+    }
+
+    private Map<String, Object> boundedAnalysisProjection(
+            Map<String, Object> analysisData) {
+        Map<String, Object> bounded = new LinkedHashMap<>(analysisData);
+        Object rawIssues = bounded.get("issues");
+        if (!(rawIssues instanceof List<?> completeIssues)) {
+            return bounded;
+        }
+        int admitted = Math.min(MAX_ANALYSIS_ISSUES, completeIssues.size());
+        int omitted = completeIssues.size() - admitted;
+        bounded.put("issues", List.copyOf(completeIssues.subList(0, admitted)));
+        bounded.put("issueCount", admitted);
+        bounded.put("totalIssueCount", completeIssues.size());
+        bounded.put("issuesComplete", omitted == 0);
+        bounded.put("omittedIssueCount", omitted);
+        if (omitted > 0) {
+            bounded.put("issuesStatus", "bounded_for_mcp_prompt");
+            bounded.put("issuesDiagnostic",
+                    "Analysis issue projection reached the MCP prompt limit; "
+                            + "omitted issues remain available from the complete analysis API "
+                            + "and must not be treated as absent.");
+        }
+        return bounded;
     }
     
     /**

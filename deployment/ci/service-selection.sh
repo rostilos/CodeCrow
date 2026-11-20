@@ -9,12 +9,13 @@ CODECROW_DEPLOYABLE_SERVICES=(
   "inference-orchestrator"
   "rag-pipeline"
   "web-frontend"
+  "composer-audit"
 )
 
 CODECROW_RESOLVED_SERVICES=()
 
 codecrow_service_usage() {
-  echo "all, java, python, frontend, web-server, pipeline-agent, inference-orchestrator, rag-pipeline, web-frontend"
+  echo "all, java, python, frontend, web-server, pipeline-agent, inference-orchestrator, rag-pipeline, web-frontend, composer-audit"
 }
 
 codecrow_add_resolved_service() {
@@ -58,6 +59,9 @@ codecrow_resolve_services() {
         ;;
       frontend|front-end|web-frontend|ui|web-ui)
         codecrow_add_resolved_service "web-frontend"
+        ;;
+      composer-audit)
+        codecrow_add_resolved_service "composer-audit"
         ;;
       web-server)
         codecrow_add_resolved_service "web-server"

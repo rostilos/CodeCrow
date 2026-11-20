@@ -18,6 +18,8 @@ import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
 public class OpenRouterModelFetcher implements LlmModelFetcher {
@@ -101,6 +103,7 @@ public class OpenRouterModelFetcher implements LlmModelFetcher {
                         logger.debug("Model {} has no pricing info", model.id);
                     }
 
+                    fetchProviders(llmModel, entity);
                     models.add(llmModel);
                 }
             }
@@ -108,10 +111,49 @@ public class OpenRouterModelFetcher implements LlmModelFetcher {
             logger.info("Fetched {} models from OpenRouter (filtered from total)", models.size());
 
         } catch (Exception e) {
-            logger.error("Failed to fetch models from OpenRouter: {}", e.getMessage(), e);
+            throw new IllegalStateException("Failed to fetch models from OpenRouter", e);
         }
 
         return models;
+    }
+
+    private void fetchProviders(LlmModel model, HttpEntity<String> entity) {
+        try {
+            var url = UriComponentsBuilder.fromUriString(OPENROUTER_MODELS_URL)
+                    .pathSegment(model.getModelId().split("/"))
+                    .pathSegment("endpoints").build().encode().toUri();
+            var response = restTemplate.exchange(url, HttpMethod.GET, entity, EndpointsResponse.class);
+            var body = response.getBody();
+            if (body == null || body.data == null || body.data.endpoints == null) {
+                throw new IllegalStateException("Missing endpoints in catalogue response");
+            }
+            var providers = new LinkedHashMap<String, LlmModel.ModelProvider>();
+            for (Endpoint endpoint : body.data.endpoints) {
+                if (endpoint.tag == null || endpoint.tag.isBlank()) {
+                    throw new IllegalStateException("Missing provider routing tag");
+                }
+                providers.putIfAbsent(endpoint.tag, new LlmModel.ModelProvider(
+                        endpoint.tag, endpoint.providerName != null ? endpoint.providerName : endpoint.tag));
+            }
+            model.setProviders(new ArrayList<>(providers.values()));
+            model.setProvidersSyncedAt(OffsetDateTime.now());
+        } catch (Exception e) {
+            // Retain the last successful provider catalogue when this model's refresh fails.
+            logger.warn("OpenRouter providers for {} could not be refreshed: {}", model.getModelId(), e.getMessage());
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class EndpointsResponse { public EndpointData data; }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class EndpointData { public List<Endpoint> endpoints; }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class Endpoint {
+        public String tag;
+        @JsonProperty("provider_name")
+        public String providerName;
     }
 
     private boolean hasToolSupport(OpenRouterModel model) {

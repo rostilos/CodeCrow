@@ -65,7 +65,7 @@ public class AstScopeEnricher {
         int skipped = 0;
 
         for (CodeAnalysisIssue issue : issues) {
-            if (issue == null) continue;
+            if (issue == null || issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) continue;
 
             String filePath = issue.getFilePath();
             Integer lineNumber = issue.getLineNumber();
@@ -182,7 +182,7 @@ public class AstScopeEnricher {
         int skipped = 0;
 
         for (CodeAnalysisIssue issue : issues) {
-            if (issue == null) continue;
+            if (issue == null || issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) continue;
 
             String filePath = issue.getFilePath();
             Integer lineNumber = issue.getLineNumber();

@@ -15,6 +15,8 @@ module org.rostilos.codecrow.vcs {
     requires org.rostilos.codecrow.security;
     requires spring.web;
     requires spring.tx;
+    requires spring.data.redis;
+    requires lettuce.core;
     requires jjwt.api;
 
     exports org.rostilos.codecrow.vcsclient;

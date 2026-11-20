@@ -118,7 +118,7 @@ class AnalysisItemDTOTest {
                     "openai",
                     10,
                     2,
-                    "5m"
+                    "5m", "feature", "abc123", 2, "PR_REVIEW"
             );
             
             assertThat(dto.id()).isEqualTo("123");

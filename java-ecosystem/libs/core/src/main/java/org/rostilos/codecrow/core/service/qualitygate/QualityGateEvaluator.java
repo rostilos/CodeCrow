@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.qualitygate.QualityGateMetric;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -31,8 +32,11 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
     private static final Logger log = LoggerFactory.getLogger(QualityGateEvaluator.class);
 
     private final QualityGateRepository qualityGateRepository;
+    private final org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks;
 
-    public QualityGateEvaluator(QualityGateRepository qualityGateRepository) {
+    public QualityGateEvaluator(QualityGateRepository qualityGateRepository,
+                                org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks) {
+        this.reviewChecks = reviewChecks;
         this.qualityGateRepository = qualityGateRepository;
     }
 
@@ -71,11 +75,16 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
      * @return QualityGateResult containing pass/fail status and details
      */
     public QualityGateResult evaluate(CodeAnalysis analysis, QualityGate qualityGate) {
+        if (analysis.getStatus() == AnalysisStatus.PARTIAL) {
+            return QualityGateResult.skipped();
+        }
         if (qualityGate == null || !qualityGate.isActive()) {
             log.debug("No active quality gate configured, skipping evaluation");
             return QualityGateResult.skipped();
         }
 
+        var checkFindings = reviewChecks.findForAnalysis(analysis).stream()
+                .flatMap(result -> result.getFindings().stream()).toList();
         List<ConditionResult> conditionResults = new ArrayList<>();
         boolean overallPass = true;
 
@@ -84,7 +93,15 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
                 continue;
             }
 
-            int actualValue = getMetricValue(analysis, condition);
+            int actualValue = getMetricValue(analysis, condition) + (int) checkFindings.stream().filter(finding -> {
+                if (condition.getMetric() == QualityGateMetric.ISSUES_BY_SEVERITY && condition.getSeverity() == IssueSeverity.RESOLVED) return finding.isResolved();
+                if (finding.isResolved()) return false;
+                return switch (condition.getMetric()) {
+                    case NEW_ISSUES -> true;
+                    case ISSUES_BY_SEVERITY -> condition.getSeverity() == null || finding.getSeverity() == condition.getSeverity();
+                    case ISSUES_BY_CATEGORY -> condition.getCategory() == null || finding.getIssueCategory() == condition.getCategory();
+                };
+            }).count();
             boolean conditionFails = condition.fails(actualValue);
             
             if (conditionFails) {
@@ -115,7 +132,7 @@ public class QualityGateEvaluator implements AnalysisStatusEvaluator {
     private int getMetricValue(CodeAnalysis analysis, QualityGateCondition condition) {
         return switch (condition.getMetric()) {
             case ISSUES_BY_SEVERITY -> getIssueCountBySeverity(analysis, condition.getSeverity());
-            case NEW_ISSUES -> analysis.getTotalIssues() - analysis.getResolvedCount();
+            case NEW_ISSUES -> analysis.getTotalIssues();
             case ISSUES_BY_CATEGORY -> getIssueCountByCategory(analysis, condition.getCategory());
         };
     }

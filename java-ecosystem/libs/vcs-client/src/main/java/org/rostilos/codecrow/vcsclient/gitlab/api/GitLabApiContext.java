@@ -100,6 +100,7 @@ public final class GitLabApiContext {
 
     public IOException error(String operation, Response response) throws IOException {
         String body = bodyOr(response, "");
+        org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(response, body);
         GitLabException cause = new GitLabException(operation, response.code(), body);
         return new IOException(cause.getMessage(), cause);
     }

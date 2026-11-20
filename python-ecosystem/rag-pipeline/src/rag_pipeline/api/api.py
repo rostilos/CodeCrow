@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from ..models.config import RAGConfig
 from ..core.index_manager import RAGIndexManager
-from ..services.query_service import RAGQueryService
+from .heavy_work import configure_heavy_operations, configure_build_workers, close_build_workers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 # --- Lifecycle-managed singletons ---
 config: Optional[RAGConfig] = None
 index_manager: Optional[RAGIndexManager] = None
-query_service: Optional[RAGQueryService] = None
 
 _DEFAULT_PENDING_JANITOR_INTERVAL_SECONDS = 3600
 _MIN_PENDING_JANITOR_INTERVAL_SECONDS = 300
@@ -45,19 +44,28 @@ def _pending_janitor_interval_seconds() -> int:
 
 
 async def _pending_collection_janitor(manager: RAGIndexManager) -> None:
-    """Periodically remove only expired, unowned pending collections."""
+    """Remove abandoned builds and inactive request-scoped generations."""
     interval = _pending_janitor_interval_seconds()
     unavailable = False
     while True:
         try:
             cleaned = await asyncio.to_thread(
-                manager.cleanup_expired_pending_collections
+                manager.cleanup_expired_collections
             )
             if unavailable:
                 logger.info("Pending collection janitor recovered")
                 unavailable = False
-            if cleaned:
-                logger.info("Pending collection janitor removed %s collections", cleaned)
+            cleaned_total = (
+                sum(cleaned.values())
+                if isinstance(cleaned, dict)
+                else int(cleaned or 0)
+            )
+            if cleaned_total:
+                logger.info(
+                    "Structural collection janitor removed %s collections: %s",
+                    cleaned_total,
+                    cleaned,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exception:
@@ -82,68 +90,54 @@ async def _pending_collection_janitor(manager: RAGIndexManager) -> None:
 async def lifespan(app: FastAPI):
     """Manage startup and shutdown lifecycle of the application.
 
-    Creates shared singletons (config, index_manager, query_service) on
-    startup and tears them down on shutdown — closing Qdrant + HTTP clients.
+    Creates shared configuration and index-manager singletons on
+    startup and tears them down on shutdown.
     """
-    global config, index_manager, query_service
+    global config, index_manager
     logger.info("Starting RAG Pipeline API...")
     config = RAGConfig()
+    configure_heavy_operations(config.full_index_concurrency)
     index_manager = RAGIndexManager(config)
-    query_service = RAGQueryService(
-        config,
-        plugin_catalog=index_manager.plugin_catalog,
-    )
-    from .routers.index import (
-        cleanup_orphaned_index_repository_stream_workspaces,
-    )
-    cleaned_stream_workspaces = (
-        cleanup_orphaned_index_repository_stream_workspaces()
-    )
-    if cleaned_stream_workspaces:
-        logger.info(
-            "Removed %s orphaned RAG HTTP index workspaces",
-            cleaned_stream_workspaces,
-        )
-
-    # Initialize and start the Redis Queue Consumer
-    from ..server.rag_queue_consumer import RAGQueueConsumer
-    rag_queue_consumer = RAGQueueConsumer(index_manager)
-    app.state.rag_queue_consumer = rag_queue_consumer
-    await rag_queue_consumer.start()
-    app.state.pending_collection_janitor = asyncio.create_task(
-        _pending_collection_janitor(index_manager)
-    )
-
-    logger.info("RAG Pipeline API started successfully")
-    yield
-    logger.info("Shutting down RAG Pipeline API...")
-    if hasattr(app.state, "pending_collection_janitor"):
-        app.state.pending_collection_janitor.cancel()
+    configure_build_workers(config)
+    janitor = None
+    try:
+        from .routers.index import cleanup_orphaned_index_repository_stream_workspaces
         try:
-            await app.state.pending_collection_janitor
-        except asyncio.CancelledError:
-            pass
-    if hasattr(app.state, 'rag_queue_consumer'):
-        await app.state.rag_queue_consumer.stop()
-    # HTTP streaming requests run synchronous indexing in dedicated workers.
-    # A disconnected response task can be gone before that call returns, so
-    # drain the independently tracked workers before closing shared embedding
-    # and Qdrant clients.
-    from .routers.index import drain_index_repository_stream_workers
-    await drain_index_repository_stream_workers()
-    if hasattr(index_manager, 'embed_model') and hasattr(index_manager.embed_model, 'close'):
-        index_manager.embed_model.close()
-    if hasattr(query_service, 'embed_model') and hasattr(query_service.embed_model, 'close'):
-        query_service.embed_model.close()
-    if query_service is not None:
-        query_service.close()
-    if index_manager is not None:
-        index_manager.close()
-    logger.info("RAG Pipeline API shutdown complete")
+            cleaned = cleanup_orphaned_index_repository_stream_workspaces()
+            if cleaned:
+                logger.info("Removed %s orphaned RAG HTTP index workspaces", cleaned)
+        except Exception:
+            logger.warning("Orphan workspace cleanup unavailable; retaining workspaces", exc_info=True)
+
+        janitor = asyncio.create_task(_pending_collection_janitor(index_manager))
+        app.state.pending_collection_janitor = janitor
+        logger.info("RAG Pipeline API started successfully")
+        yield
+    finally:
+        logger.info("Shutting down RAG Pipeline API...")
+        try:
+            if janitor is not None:
+                janitor.cancel()
+                try:
+                    await janitor
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            # Detached synchronous workers must finish before their manager closes.
+            from .routers.index import drain_index_repository_stream_workers
+            try:
+                await drain_index_repository_stream_workers()
+            finally:
+                try:
+                    await close_build_workers()
+                finally:
+                    index_manager.close()
+                    index_manager = None
+        logger.info("RAG Pipeline API shutdown complete")
 
 
 app = FastAPI(
-    title="CodeCrow RAG API",
+    title="CodeCrow Repository Index API",
     version="unreleased",
     lifespan=lifespan,
 )
@@ -157,14 +151,12 @@ from .routers.system import router as system_router
 from .routers.parse import router as parse_router
 from .routers.index import router as index_router
 from .routers.query import router as query_router
-from .routers.pr import router as pr_router
 from .routers.inspect import router as inspect_router
 
 app.include_router(system_router)
 app.include_router(parse_router)
 app.include_router(index_router)
 app.include_router(query_router)
-app.include_router(pr_router)
 app.include_router(inspect_router)
 
 # Uvicorn loads this module by import string in every worker. Wrap the exported

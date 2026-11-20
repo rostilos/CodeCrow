@@ -19,7 +19,6 @@ from .api import (
     PluginKind,
     PluginOutcome,
     ProjectCapabilities,
-    RepositoryAnalysisMode,
     RepositoryFacts,
     ReviewContribution,
     RepositoryAnalysis,
@@ -31,11 +30,12 @@ from .api import (
     ValidationResult,
 )
 from .catalog import PluginCatalog
-from .facts import build_repository_facts, overlay_repository_facts
+from .facts import build_repository_facts
 from .import_graph import (
     ImportBinding,
     ImportFileRecord,
     ImportGraphSession,
+    ImportRecordIndex,
     ImportedCall,
 )
 from .manifest import load_descriptor, load_descriptors
@@ -61,6 +61,7 @@ __all__ = [
     "ImportBinding",
     "ImportFileRecord",
     "ImportGraphSession",
+    "ImportRecordIndex",
     "ImportedCall",
     "OutcomeStatus",
     "PluginCatalog",
@@ -73,7 +74,6 @@ __all__ = [
     "PluginRuntime",
     "ProjectCapabilities",
     "ProjectSelector",
-    "RepositoryAnalysisMode",
     "RepositoryFacts",
     "ReviewContribution",
     "RepositoryAnalysis",
@@ -85,7 +85,6 @@ __all__ = [
     "ValidationDecision",
     "ValidationResult",
     "build_repository_facts",
-    "overlay_repository_facts",
     "load_descriptor",
     "load_descriptors",
 ]

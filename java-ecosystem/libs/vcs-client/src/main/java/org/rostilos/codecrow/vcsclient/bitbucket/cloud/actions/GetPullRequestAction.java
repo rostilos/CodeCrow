@@ -37,6 +37,8 @@ public class GetPullRequestAction {
         private final String destRef;
         private final String sourceCommit;
         private final String destinationCommit;
+        private String authorId;
+        private String authorName;
 
         public PullRequestMetadata(String title, String description, String state, String sourceRef, String destRef,
                                    String sourceCommit, String destinationCommit) {
@@ -49,6 +51,8 @@ public class GetPullRequestAction {
             this.destinationCommit = destinationCommit;
         }
 
+        public String getAuthorId() { return authorId; }
+        public String getAuthorName() { return authorName; }
         public String getTitle() { return title; }
         public String getDescription() { return description; }
         public String getState() { return state; }
@@ -112,8 +116,11 @@ public class GetPullRequestAction {
                 destinationCommit = json.get("destination").get("commit").path("hash").asText("");
             }
 
-            return new PullRequestMetadata(title, description, state, sourceRef, destRef,
+            var metadata = new PullRequestMetadata(title, description, state, sourceRef, destRef,
                     sourceCommit, destinationCommit);
+            metadata.authorId = json.path("author").path("uuid").asText(null);
+            metadata.authorName = json.path("author").path("display_name").asText(null);
+            return metadata;
 
         } catch (IOException e) {
             log.error("Failed to get pull request: {}", e.getMessage(), e);

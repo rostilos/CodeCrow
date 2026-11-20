@@ -44,6 +44,26 @@ class FileSnapshotServiceTest {
         f.set(entity, id);
     }
 
+    @Test void imagesNeverReachAnySnapshotWriteOrDirectRead() {
+        var files = Map.of("photo.PNG", "IMAGE_BYTES", "drawing.svg", "<svg/>", "camera.CR3", "RAW_BYTES");
+        assertThat(service.persistSnapshots(new CodeAnalysis(), files, "sha")).isZero();
+        assertThat(service.updateOrPersistSnapshots(new CodeAnalysis(), files, "sha")).isZero();
+        assertThat(service.persistSnapshotsForPr(new PullRequest(), new CodeAnalysis(), files, "sha")).isZero();
+        assertThat(service.persistSnapshotsForBranch(new Branch(), files, "sha")).isZero();
+        assertThat(service.getFileContent(1L, "photo.PNG")).isEmpty();
+        assertThat(service.getFileContentForPr(1L, "drawing.svg")).isEmpty();
+        assertThat(service.getFileContentForBranchById(1L, "camera.CR3")).isEmpty();
+        assertThat(service.getFileContentForBranch(1L, "main", "camera.CR3")).isEmpty();
+        verifyNoInteractions(contentRepository, snapshotRepository, branchRepository);
+    }
+
+    @Test void oldImageSnapshotsAreNotReturned() {
+        var image = new AnalyzedFileSnapshot(); image.setFilePath("old.svg");
+        var source = new AnalyzedFileSnapshot(); source.setFilePath("source.py");
+        when(snapshotRepository.findByAnalysisId(1L)).thenReturn(List.of(image, source));
+        assertThat(service.getSnapshots(1L)).containsExactly(source);
+    }
+
     private AnalyzedFileContent makeContent(String hash, String content) throws Exception {
         AnalyzedFileContent fc = new AnalyzedFileContent();
         setId(fc, 100L);

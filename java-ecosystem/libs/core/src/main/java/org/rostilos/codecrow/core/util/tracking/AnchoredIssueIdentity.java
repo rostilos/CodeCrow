@@ -31,6 +31,9 @@ public final class AnchoredIssueIdentity {
             return null;
         }
 
+        if (issue.getAnchorSide() == org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE) {
+            fingerprint = "BASE:" + fingerprint;
+        }
         String lineHash = issue.getLineHash();
         if (lineHash != null && !lineHash.isBlank()) {
             return fingerprint + ":line-hash:" + lineHash;

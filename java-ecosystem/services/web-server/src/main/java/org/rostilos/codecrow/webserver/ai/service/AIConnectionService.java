@@ -55,19 +55,22 @@ public class AIConnectionService {
     private final WorkspaceRepository workspaceRepository;
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
+    private final LlmModelService llmModelService;
 
     public AIConnectionService(
             AiConnectionRepository connectionRepository,
             TokenEncryptionService tokenEncryptionService,
             WorkspaceRepository workspaceRepository,
             ObjectMapper objectMapper,
-            RestTemplate restTemplate
+            RestTemplate restTemplate,
+            LlmModelService llmModelService
     ) {
         this.connectionRepository = connectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
         this.workspaceRepository = workspaceRepository;
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
+        this.llmModelService = llmModelService;
     }
 
     @Transactional(readOnly = true)
@@ -92,7 +95,7 @@ public class AIConnectionService {
         newAiConnection.setApiKeyEncrypted(apiKeyEncrypted);
         newAiConnection.setBaseUrl(normalizeProviderMetadata(request.providerKey, request.baseUrl));
         newAiConnection.setCustomParameters(normalizeProviderCustomParameters(
-                request.providerKey,
+                request.providerKey, request.aiModel,
                 request.customParameters));
 
         return connectionRepository.save(newAiConnection);
@@ -104,6 +107,7 @@ public class AIConnectionService {
                 .orElseThrow(() -> new NoSuchElementException("Connection not found"));
 
         AIProviderKey previousProvider = connection.getProviderKey();
+        String previousModel = connection.getAiModel();
         AIProviderKey effectiveProvider = request.providerKey != null ? request.providerKey : previousProvider;
         String effectiveBaseUrl;
         if (request.baseUrl != null) {
@@ -131,11 +135,18 @@ public class AIConnectionService {
         }
 
         connection.setBaseUrl(normalizeProviderMetadata(effectiveProvider, effectiveBaseUrl));
-        if (effectiveProvider != AIProviderKey.OPENAI_COMPATIBLE) {
+        boolean selectionChanged = effectiveProvider != previousProvider
+                || !java.util.Objects.equals(previousModel, connection.getAiModel());
+        if (effectiveProvider != AIProviderKey.OPENAI_COMPATIBLE && effectiveProvider != AIProviderKey.OPENROUTER) {
             connection.setCustomParameters(null);
         } else if (request.customParameters != null) {
-            connection.setCustomParameters(normalizeCustomParameters(request.customParameters));
-        } else if (request.providerKey != null && request.providerKey != previousProvider) {
+            // An unrelated edit must preserve a saved lock even if its provider left the catalogue.
+            if (selectionChanged || !sameCustomParameters(request.customParameters, connection.getCustomParameters())) {
+                connection.setCustomParameters(normalizeProviderCustomParameters(
+                        effectiveProvider, connection.getAiModel(), request.customParameters));
+            }
+        } else if (effectiveProvider != previousProvider
+                || (selectionChanged && effectiveProvider == AIProviderKey.OPENROUTER)) {
             connection.setCustomParameters(null);
         }
 
@@ -219,7 +230,8 @@ public class AIConnectionService {
                     Map.of(
                             "HTTP-Referer", "https://codecrow.cloud",
                             "X-Title", "CodeCrow AI"
-                    )
+                    ),
+                    parseOpenAiCompatibleCustomParameters(connection.getCustomParameters()).bodyParameters()
             );
             case OPENAI_COMPATIBLE -> buildOpenAiCompatiblePingRequest(connection, apiKey);
             case ANTHROPIC -> buildAnthropicPingRequest(connection, apiKey);
@@ -385,7 +397,6 @@ public class AIConnectionService {
         List<String> suffixes = List.of(
                 "/chat/completions",
                 "/completions",
-                "/embeddings",
                 "/responses"
         );
         for (String suffix : suffixes) {
@@ -412,10 +423,48 @@ public class AIConnectionService {
         }
     }
 
+    private boolean sameCustomParameters(String first, String second) {
+        try {
+            return java.util.Objects.equals(
+                    objectMapper.readTree(first == null || first.isBlank() ? "null" : first),
+                    objectMapper.readTree(second == null || second.isBlank() ? "null" : second));
+        } catch (JsonProcessingException e) {
+            return false;
+        }
+    }
+
     private String normalizeProviderCustomParameters(
             AIProviderKey providerKey,
+            String modelId,
             String customParameters
     ) {
+        if (providerKey == AIProviderKey.OPENROUTER) {
+            String normalized = normalizeCustomParameters(customParameters);
+            if (normalized == null) return null;
+            try {
+                JsonNode routing = objectMapper.readTree(normalized).path("extra_body").path("provider");
+                JsonNode order = routing.path("order");
+                if (!order.isArray() || order.isEmpty()
+                        || !routing.path("allow_fallbacks").isBoolean()
+                        || routing.path("allow_fallbacks").booleanValue()) {
+                    throw new IllegalArgumentException("OpenRouter requires a provider order with allow_fallbacks=false");
+                }
+                var available = llmModelService.getOpenRouterProviders(modelId).providers().stream()
+                        .map(org.rostilos.codecrow.core.model.ai.LlmModel.ModelProvider::slug).toList();
+                var selected = new java.util.ArrayList<String>();
+                for (JsonNode provider : order) {
+                    if (!provider.isTextual() || !available.contains(provider.textValue())
+                            || selected.contains(provider.textValue())) {
+                        throw new IllegalArgumentException("Select distinct providers available for this OpenRouter model");
+                    }
+                    selected.add(provider.textValue());
+                }
+                return objectMapper.writeValueAsString(Map.of("extra_body", Map.of("provider", Map.of(
+                        "order", selected, "allow_fallbacks", false))));
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("Invalid OpenRouter provider settings", e);
+            }
+        }
         if (providerKey != AIProviderKey.OPENAI_COMPATIBLE) {
             return null;
         }

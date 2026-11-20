@@ -456,6 +456,19 @@ public class GitHubClient implements VcsClient {
     }
     
     @Override
+    public String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        String spec = URLEncoder.encode(baseCommit + "..." + headCommit, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/compare/" + spec + "?per_page=1";
+        Request request = new Request.Builder().url(url).header(ACCEPT_HEADER, "application/vnd.github+json").get().build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) throw new IOException("Merge-base lookup failed");
+            String hash = objectMapper.readTree(response.body().string()).path("merge_base_commit").path("sha").asText(null);
+            if (hash == null || hash.isBlank()) throw new IOException("Merge-base revision is unavailable");
+            return hash;
+        }
+    }
+
+    @Override
     public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
         // Use raw content endpoint to get actual file content (not base64-encoded JSON)
         // The Accept header tells GitHub to return raw file content
@@ -937,10 +950,13 @@ public class GitHubClient implements VcsClient {
                 metadata.path("head").path("ref").asText(null),
                 metadata.path("base").path("ref").asText(null),
                 metadata.path("base").path("sha").asText(null),
+                metadata.path("base").path("sha").asText(null),
                 metadata.path("head").path("sha").asText(null),
                 state,
                 merged,
-                getTextOrNull(metadata, "html_url"));
+                getTextOrNull(metadata, "html_url"),
+                metadata.path("user").path("id").asText(null),
+                metadata.path("user").path("login").asText(null));
     }
 
     @Override
@@ -1310,6 +1326,7 @@ public class GitHubClient implements VcsClient {
     
     private IOException createException(String operation, Response response) throws IOException {
         String body = response.body() != null ? response.body().string() : "";
+        org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(httpClient, response, body);
         GitHubException cause = new GitHubException(operation, response.code(), body);
         return new IOException(cause.getMessage(), cause);
     }
@@ -1397,64 +1414,29 @@ public class GitHubClient implements VcsClient {
                     .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
                     .build();
             
-            int maxRetries = 3;
-            int retryCount = 0;
-            long backoffMs = 1000;
-            
-            while (retryCount < maxRetries) {
-                try (Response response = httpClient.newCall(request).execute()) {
-                    if (response.code() == 429) {
-                        // Rate limited - exponential backoff
-                        retryCount++;
-                        Thread.sleep(backoffMs);
-                        backoffMs *= 2;
-                        continue;
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.io.InterruptedIOException("VCS file acquisition cancelled");
+            }
+            try (Response response = httpClient.newCall(request).execute()) {
+                String body = response.body() != null ? response.body().string() : "{}";
+                org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(httpClient, response, body);
+                if (!response.isSuccessful()) {
+                    log.warn("GraphQL batch unavailable (HTTP {}); using bounded REST reads", response.code());
+                    results.putAll(VcsClient.super.getFileContents(
+                            workspaceId, repoIdOrSlug, batch, branchOrCommit, maxFileSizeBytes));
+                    continue;
+                }
+                JsonNode root = objectMapper.readTree(body);
+                JsonNode data = root.path("data").path("repository");
+                for (int j = 0; j < batch.size(); j++) {
+                    JsonNode fileNode = data.path("file" + j);
+                    if (fileNode.hasNonNull("text") && fileNode.path("byteSize").asInt() <= maxFileSizeBytes) {
+                        results.put(batch.get(j), fileNode.get("text").asText());
                     }
-                    
-                    if (!response.isSuccessful()) {
-                        log.warn("GraphQL batch fetch failed with status {}, falling back to REST API", response.code());
-                        // Fall back to sequential REST API
-                        for (String path : batch) {
-                            try {
-                                String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
-                                if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
-                                    results.put(path, content);
-                                }
-                            } catch (IOException e) {
-                                log.debug("Skipping file {}: {}", path, e.getMessage());
-                            }
-                        }
-                        break;
-                    }
-                    
-                    // Parse GraphQL response
-                    JsonNode root = objectMapper.readTree(response.body().string());
-                    JsonNode data = root.path("data").path("repository");
-                    
-                    for (int j = 0; j < batch.size(); j++) {
-                        String path = batch.get(j);
-                        String alias = "file" + j;
-                        JsonNode fileNode = data.path(alias);
-                        
-                        if (!fileNode.isMissingNode() && fileNode.has("text")) {
-                            int byteSize = fileNode.path("byteSize").asInt(0);
-                            if (byteSize <= maxFileSizeBytes) {
-                                String text = fileNode.get("text").asText();
-                                if (text != null) {
-                                    results.put(path, text);
-                                }
-                            }
-                        }
-                    }
-                    break; // Success
-                    
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted during batch fetch", e);
                 }
             }
         }
-        
+
         log.info("Batch fetched {}/{} files from GitHub via GraphQL", results.size(), filePaths.size());
         return results;
     }

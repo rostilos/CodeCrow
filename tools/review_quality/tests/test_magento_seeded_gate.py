@@ -17,14 +17,20 @@ def test_fixed_magento_candidate_gate_meets_quality_and_cost_targets():
         "modelCalls": True,
         "cost": True,
         "repositorySnapshots": True,
-        "retrievalState": True,
+        "structuralRelationPayloads": True,
     }
     assert report["architecture"]["snapshotPlugins"] == [
         "hyva",
         "magento",
         "php",
     ]
-    assert report["architecture"]["retrievalState"] == "complete"
+    relation_map = report["architecture"]["relationMap"]
+    assert relation_map["state"] == "complete"
+    assert relation_map["relations"]
+    assert all(
+        relation["evidenceId"].startswith("relation:")
+        for relation in relation_map["relations"]
+    )
     assert by_mode["fallback"]["true_positives"] == 3
     assert by_mode["fallback"]["false_positives"] == 18
     assert by_mode["fallback"]["false_negatives"] == 0
@@ -36,6 +42,9 @@ def test_fixed_magento_candidate_gate_meets_quality_and_cost_targets():
         "baseline": "fallback",
         "precision": 0.8571428571428572,
         "recall": 0.0,
+        "f1": 0.75,
+        "f2": 0.5454545454545454,
+        "wall_time_seconds": None,
         "model_calls": 0,
             "input_tokens": 0,
             "output_tokens": 0,

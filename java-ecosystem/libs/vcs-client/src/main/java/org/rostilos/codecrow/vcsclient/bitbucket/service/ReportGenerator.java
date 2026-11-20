@@ -31,10 +31,13 @@ public class ReportGenerator {
 
     private final SiteSettingsProvider siteSettingsProvider;
     private final AnalysisStatusEvaluator analysisStatusEvaluator;
+    private final org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks;
 
     private static final Logger log = LoggerFactory.getLogger(ReportGenerator.class);
 
-    public ReportGenerator(SiteSettingsProvider siteSettingsProvider, AnalysisStatusEvaluator analysisStatusEvaluator) {
+    public ReportGenerator(SiteSettingsProvider siteSettingsProvider, AnalysisStatusEvaluator analysisStatusEvaluator,
+                           org.rostilos.codecrow.core.service.reviewcheck.ReviewCheckResultService reviewChecks) {
+        this.reviewChecks = reviewChecks;
         this.siteSettingsProvider = siteSettingsProvider;
         this.analysisStatusEvaluator = analysisStatusEvaluator;
     }
@@ -131,7 +134,8 @@ public class ReportGenerator {
                             issue.getSuggestedFixDiff(),
                             LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
                             issue.getId(),
-                            issue.getCodeSnippet()
+                            issue.getCodeSnippet(),
+                            issue.getAnchorSide()
                     ))
                     .toList();
 
@@ -162,6 +166,7 @@ public class ReportGenerator {
                     .withIssues(issueSummaries)
                     .withFileIssueCount(fileIssueCount)
                     .withQualityGateResult(qualityGateResult)
+                    .withReviewChecks(createMainReviewCheckSummaries(analysis, platformPrEntityId))
                     .build();
 
         } catch (Exception e) {
@@ -189,7 +194,9 @@ public class ReportGenerator {
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),
                 LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
-                issue.getId()
+                issue.getId(),
+                issue.getCodeSnippet(),
+                issue.getAnchorSide()
         );
     }
 
@@ -375,6 +382,56 @@ public class ReportGenerator {
                             toBitbucketSeverity(componentIssue.getSeverity()),
                             "CODE_SMELL");
                 }).collect(toSet());
+    }
+
+    private List<AnalysisSummary.CheckSummary> createMainReviewCheckSummaries(CodeAnalysis analysis, Long platformPrEntityId) {
+        try {
+            return createReviewCheckSummaries(analysis, platformPrEntityId);
+        } catch (RuntimeException unavailable) {
+            log.warn("Review checks unavailable for analysis {}: {}", analysis.getId(), unavailable.getMessage());
+            String url = LinksGenerator.createStatusUrl(getBaseUrl(), analysis.getProject(),
+                    platformPrEntityId, analysis.getPrVersion(), "open") + "&subTab=checks";
+            return List.of(new AnalysisSummary.CheckSummary("Dependency checks unavailable", url, false, 0, 0, 0, 0));
+        }
+    }
+
+    private List<AnalysisSummary.CheckSummary> createReviewCheckSummaries(CodeAnalysis analysis, Long platformPrEntityId) {
+        return reviewChecks.findForAnalysis(analysis).stream().map(result -> {
+            var findings = result.getFindings().stream().filter(finding -> !finding.isResolved()).toList();
+            String label = result.getCheckId().replace('-', ' ');
+            label = Character.toUpperCase(label.charAt(0)) + label.substring(1);
+            String url = LinksGenerator.createStatusUrl(getBaseUrl(), analysis.getProject(),
+                    platformPrEntityId, analysis.getPrVersion(), "open")
+                    + "&reviewCheckId=" + java.net.URLEncoder.encode(result.getCheckId(), java.nio.charset.StandardCharsets.UTF_8)
+                    + "&subTab=checks";
+            return new AnalysisSummary.CheckSummary(label, url, result.isComplete(),
+                    (int) findings.stream().filter(f -> f.getSeverity() == IssueSeverity.HIGH).count(),
+                    (int) findings.stream().filter(f -> f.getSeverity() == IssueSeverity.MEDIUM).count(),
+                    (int) findings.stream().filter(f -> f.getSeverity() == IssueSeverity.LOW).count(),
+                    (int) findings.stream().filter(f -> f.getSeverity() == IssueSeverity.INFO).count());
+        }).toList();
+    }
+
+    /** Check findings retain individual platform records, but share one PR comment. */
+    public String createReviewChecksMarkdown(CodeAnalysis analysis, Long platformPrEntityId) {
+        List<AnalysisSummary.CheckSummary> summaries;
+        try {
+            summaries = createReviewCheckSummaries(analysis, platformPrEntityId);
+        } catch (RuntimeException unavailable) {
+            log.warn("Preserving previous check summary for analysis {}: {}", analysis.getId(), unavailable.getMessage());
+            return null;
+        }
+        StringBuilder markdown = new StringBuilder();
+        for (var check : summaries) {
+            if (check.total() == 0 && check.complete()) continue;
+            markdown.append("### ").append(check.label()).append("\n\n")
+                    .append(check.total()).append(" open dependency advisories (")
+                    .append(check.high()).append(" high, ").append(check.medium()).append(" medium, ")
+                    .append(check.low()).append(" low).\n\n");
+            if (!check.complete()) markdown.append("Audit coverage is incomplete; showing available and last-known findings.\n\n");
+            markdown.append("[View all findings in CodeCrow](").append(check.url()).append(")\n\n");
+        }
+        return markdown.toString().strip();
     }
 
     public CodeInsightsAnnotation createCodeInsightsAnnotation(

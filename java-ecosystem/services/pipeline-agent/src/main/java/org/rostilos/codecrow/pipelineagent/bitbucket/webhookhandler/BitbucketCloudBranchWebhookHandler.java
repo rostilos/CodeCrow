@@ -78,7 +78,6 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
 
         if ("pullrequest:fulfilled".equals(eventType)) {
             markPullRequestMerged(payload, project);
-            cleanupPrRagData(payload, project);
         }
         
         try {
@@ -250,27 +249,6 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
             }
         } catch (Exception e) {
             log.warn("Failed to mark Bitbucket PR state for project {}: {}", project.getId(), e.getMessage());
-        }
-    }
-
-    private void cleanupPrRagData(WebhookPayload payload, Project project) {
-        if (ragOperationsService == null) {
-            return;
-        }
-        try {
-            Long prNumber = parsePullRequestNumber(payload.pullRequestId());
-            if (prNumber == null) {
-                return;
-            }
-            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber.intValue());
-            if (deleted) {
-                log.info("Cleaned up PR #{} RAG data for project {} on merge", prNumber, project.getId());
-            } else {
-                log.info("PR #{} RAG cleanup did not complete for project {}; "
-                        + "the RAG client recorded the failure detail", prNumber, project.getId());
-            }
-        } catch (Exception e) {
-            log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 

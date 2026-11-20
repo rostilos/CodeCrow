@@ -12,6 +12,27 @@ import static org.mockito.Mockito.when;
 class VcsClientPullRequestStateTest {
 
     @Test
+    void legacyConstructorUsesBaseCommitAsTargetHeadFallback() {
+        VcsPullRequest pullRequest = new VcsPullRequest(
+                1, "title", null, "feature", "main",
+                "merge-base", "source-head", "open", false, null);
+
+        assertThat(pullRequest.baseCommit()).isEqualTo("merge-base");
+        assertThat(pullRequest.targetHeadCommit()).isEqualTo("merge-base");
+    }
+
+    @Test
+    void targetHeadIsDistinctFromMergeBase() {
+        VcsPullRequest pullRequest = new VcsPullRequest(
+                1, "title", null, "feature", "main",
+                "target-head", "merge-base", "source-head",
+                "open", false, null);
+
+        assertThat(pullRequest.targetHeadCommit()).isEqualTo("target-head");
+        assertThat(pullRequest.baseCommit()).isEqualTo("merge-base");
+    }
+
+    @Test
     void mapsProviderPullRequestStatesAtTheSharedBoundary() throws Exception {
         VcsClient client = mock(VcsClient.class, Answers.CALLS_REAL_METHODS);
 

@@ -1,0 +1,479 @@
+{
+  "scope": "Exact public saved packets and real passing decisions; replay is a host/prompt/schema contract regression, not a new inference-quality test.",
+  "cases": [
+    {
+      "case": "discourse10",
+      "source_capture": "reports/benchmark-quality-20261008/paired/subsumption-precedence-20261009/execution-20261009/live/discourse10-treatment/captures/project-104935-review-10-c32742e412a3450ab704a9c9e5e4b430.json",
+      "source_capture_sha256": "62ba3a7fed36a2240a934b3c8379709563ad1f14a311ef3d4d896d9bfe1ac056",
+      "source_packet_sha256": "25489a70f431b9b02208872a89d376d7d54963f6140744aba5dcb05503a6b8ee",
+      "issues": [
+        {
+          "file": "app/controllers/admin/embeddable_hosts_controller.rb",
+          "line": 10,
+          "severity": "MEDIUM",
+          "category": "ERROR_HANDLING",
+          "title": "Missing IDs crash update and destroy",
+          "reason": "`where(...).first` returns `nil` when the requested host does not exist. `update` passes that value to `save_host`, which immediately calls `host.host=`, while `destroy` calls `host.destroy`; both paths therefore raise `NoMethodError` and return a 500 for stale, deleted, or invalid IDs instead of a controlled not-found response. This is reachable through ordinary CRUD requests and also creates noisy server exceptions.",
+          "suggestedFixDescription": "Look up the record with the application's standard not-found mechanism (for example `find(params[:id])` if `ActiveRecord::RecordNotFound` is centrally rendered as 404), or explicitly render a 404 before calling `save_host`/`destroy` when the lookup returns nil.",
+          "codeSnippet": "save_host(host)",
+          "relatedLocations": [
+            "app/controllers/admin/embeddable_hosts_controller.rb:15"
+          ]
+        },
+        {
+          "file": "app/controllers/embed_controller.rb",
+          "line": 61,
+          "severity": "MEDIUM",
+          "category": "ACCESS_CONTROL",
+          "title": "Configured ports never match referers",
+          "reason": "`ensure_embeddable` now relies exclusively on `EmbeddableHost.host_allowed?`. Exact proposed-tree source in `app/models/embeddable_host.rb:1-18` shows that the model validation explicitly accepts stored values such as `example.com:3000`, while `record_for_host` parses the referer and compares only `uri.host` (which is `example.com`, without the port) against the stored `host`. Consequently, every embed request for a valid configured host-with-port is rejected with `InvalidAccess`, so development/staging deployments and any non-default-port installation cannot use this supported configuration.",
+          "suggestedFixDescription": "Make the lookup preserve an explicitly configured referer port (for example, compare against `uri.host` plus `:port` for non-default ports), while retaining the current hostname-only match for entries without a port. Add a model/controller test for an allowed host configured with a port.",
+          "codeSnippet": "raise Discourse::InvalidAccess.new('invalid referer host') unless EmbeddableHost.host_allowed?(request.referer)",
+          "relatedLocations": [
+            "app/models/embeddable_host.rb:14"
+          ]
+        },
+        {
+          "file": "app/models/embeddable_host.rb",
+          "line": 15,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Canonicalize both sides of host lookup",
+          "reason": "`URI#host` excludes the port, while the validation permits a port and the callback preserves it. Therefore a valid saved value such as `example.com:3000` can never match `record_for_host('http://example.com:3000')`. The comparison also lowercases only the database column; an uppercase hostname returned from the input URI is compared as-is and can fail against the lowercased column. These cases reject explicitly valid configured hosts.",
+          "suggestedFixDescription": "Store and compare one canonical representation. For example, normalize saved values to the parsed lowercase hostname (and deliberately decide whether ports are part of authorization); if ports are retained, compare both `uri.host` and `uri.port`. At minimum lowercase the lookup value before comparing.",
+          "codeSnippet": "where(\"lower(host) = ?\", host).first",
+          "relatedLocations": [
+            "app/models/embeddable_host.rb:2",
+            "app/models/embeddable_host.rb:6"
+          ]
+        },
+        {
+          "file": "app/models/embeddable_host.rb",
+          "line": 6,
+          "severity": "MEDIUM",
+          "category": "ERROR_HANDLING",
+          "title": "Handle blank host before normalization",
+          "reason": "The admin controller assigns the request value directly and calls `save`. If `host` is missing or null, this callback invokes `sub!` on `nil` before the format validator can add an error, turning invalid input into a server error instead of the controller's normal validation response.",
+          "suggestedFixDescription": "Guard normalization when `host` is blank (or normalize with a nil-safe operation), and add a presence validation so blank input reaches `render_json_error` rather than raising.",
+          "codeSnippet": "self.host.sub!(/^https?:\\/\\//, '')",
+          "relatedLocations": [
+            "app/controllers/admin/embeddable_hosts_controller.rb:21"
+          ]
+        },
+        {
+          "file": "lib/topic_retriever.rb",
+          "line": 17,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Configured hosts with ports are rejected",
+          "reason": "`EmbeddableHost` explicitly accepts and retains values such as `example.com:3000`, but `record_for_host` extracts only `URI#host` before querying (`app/models/embeddable_host.rb:15`), yielding `example.com`. Consequently this changed authorization call treats a URL like `https://example.com:3000/article` as invalid even when `example.com:3000` is configured, so retrieval never runs for valid port-specific embed sources.",
+          "suggestedFixDescription": "Make `EmbeddableHost.record_for_host` compare the configured host against a normalized authority that includes the explicit port when present, and add a model or retriever test covering an allowed non-default port.",
+          "codeSnippet": "!EmbeddableHost.host_allowed?(@embed_url)",
+          "relatedLocations": [
+            "app/models/embeddable_host.rb:15",
+            "app/models/embeddable_host.rb:2"
+          ]
+        },
+        {
+          "file": "config/routes.rb",
+          "line": 153,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Restrict routes to implemented actions",
+          "reason": "An unconstrained `resources` declaration creates all seven REST routes, including `index`, `show`, `new`, and `edit`. The exact proposed controller source (`app/controllers/admin/embeddable_hosts_controller.rb`, lines 1\u201335) implements only `create`, `update`, and `destroy`. Requests to the other newly registered admin routes therefore dispatch to nonexistent actions instead of being absent from the API, producing `ActionNotFound` responses and potentially surfacing as server errors.",
+          "suggestedFixDescription": "Declare only the controller's implemented actions: `resources :embeddable_hosts, only: [:create, :update, :destroy], constraints: AdminConstraint.new`.",
+          "codeSnippet": "resources :embeddable_hosts, constraints: AdminConstraint.new",
+          "relatedLocations": [
+            "app/controllers/admin/embeddable_hosts_controller.rb:4"
+          ]
+        },
+        {
+          "file": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 9,
+          "severity": "HIGH",
+          "category": "ERROR_HANDLING",
+          "title": "Missing category row crashes migration",
+          "reason": "The query can legitimately return zero rows when `embed_category` has no persisted override or names a category that no longer exists. Indexing `[0]['id']` then raises before the `category_id == 0` fallback runs, aborting the database migration and therefore deployment. The proposed settings configuration also no longer defines `embed_category`, while `uncategorized_category_id` remains the available fallback (`config/site_settings.yml`, embedding and category-ID sections).",
+          "suggestedFixDescription": "Read the first result defensively and use the uncategorized category ID when no matching row exists. The fallback query should likewise handle a missing row explicitly rather than dereferencing it blindly.",
+          "codeSnippet": "category_id = execute(\"SELECT c.id FROM categories AS c",
+          "relatedLocations": []
+        },
+        {
+          "file": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 2,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Migration cannot be rolled back",
+          "reason": "This `change` migration contains raw `execute` calls for inserts and deletes. Active Record cannot automatically reverse those commands, so rolling back this migration raises an irreversible-migration error instead of removing the new table and restoring the migrated settings. The final deletion also destroys the original setting rows, making a correct rollback require explicit reconstruction.",
+          "suggestedFixDescription": "Replace `change` with explicit `up` and `down` methods. In `down`, reconstruct the legacy settings from `embeddable_hosts` before dropping the table, including an explicit policy for hosts assigned to different categories.",
+          "codeSnippet": "def change",
+          "relatedLocations": []
+        },
+        {
+          "file": "app/assets/javascripts/admin/components/embeddable-host.js.es6",
+          "line": 39,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Save can apply the wrong category",
+          "reason": "`props.category_id` is captured before the asynchronous save, but the success callback reads the mutable `categoryId` again. The category chooser remains enabled while `host.isSaving`, so a user can select category A, save, and then select category B before the request completes. The server stores A, while the component assigns and displays B. A later edit can consequently overwrite the persisted category based on this incorrect client state.",
+          "suggestedFixDescription": "Capture `categoryId` once at the beginning of `save()` and use that same value for both the request and the success callback. Alternatively, disable the category chooser while saving.",
+          "codeSnippet": "host.set('category', Discourse.Category.findById(this.get('categoryId')));",
+          "relatedLocations": [
+            "app/assets/javascripts/admin/templates/components/embeddable-host.hbs:6"
+          ]
+        },
+        {
+          "file": "app/assets/javascripts/admin/controllers/admin-embedding.js.es6",
+          "line": 15,
+          "severity": "LOW",
+          "category": "BUG_RISK",
+          "title": "Cancelled hosts remain in the store",
+          "reason": "`addHost` creates an Ember Data record, while cancelling a new host invokes this action. Removing it only from `embeddable_hosts` does not unload or delete the new record, leaving a dirty unsaved record registered in the store. Repeated add/cancel operations therefore accumulate orphaned records and can affect later store-level record access.",
+          "suggestedFixDescription": "When removing a new host, also unload or delete the record using the Ember Data API supported by this project. Keep the existing collection removal for persisted hosts after successful deletion.",
+          "codeSnippet": "this.get('embedding.embeddable_hosts').removeObject(host);",
+          "relatedLocations": [
+            "app/assets/javascripts/admin/components/embeddable-host.js.es6:53"
+          ]
+        },
+        {
+          "file": "app/assets/javascripts/admin/templates/components/embeddable-host.hbs",
+          "line": 8,
+          "severity": "LOW",
+          "category": "BUG_RISK",
+          "title": "Icon buttons lack accessible names",
+          "reason": "The save, cancel, edit, and delete buttons provide only icons and no `label` or `title`. Unlike other icon-only `d-button` usages that supply a translated title, these controls expose no textual description, so screen-reader users cannot determine their actions.",
+          "suggestedFixDescription": "Add localized `title` or `label` values describing each button's action (save, cancel, edit, and delete).",
+          "codeSnippet": "{{d-button icon=\"check\" action=\"save\" class=\"btn-primary\" disabled=cantSave}}",
+          "relatedLocations": [
+            "app/assets/javascripts/admin/templates/components/embeddable-host.hbs:16",
+            "app/assets/javascripts/admin/templates/components/embeddable-host.hbs:17",
+            "app/assets/javascripts/admin/templates/components/embeddable-host.hbs:9"
+          ]
+        },
+        {
+          "file": "spec/controllers/admin/embeddable_hosts_controller_spec.rb",
+          "line": 5,
+          "severity": "LOW",
+          "category": "TESTING",
+          "title": "Controller actions have no behavioral coverage",
+          "reason": "This sole example only verifies the superclass. The proposed controller has authorization filters plus `create`, `update`, `destroy`, and save-error behavior (exact proposed-tree source at `app/controllers/admin/embeddable_hosts_controller.rb:3-31`), but this spec sends no requests and asserts none of their responses or side effects. Consequently, regressions in permissions, persistence, validation errors, default category assignment, or missing-record handling can pass this suite unchanged.",
+          "suggestedFixDescription": "Replace or supplement the inheritance assertion with focused request examples for non-staff access and for create/update/destroy success and failure paths, including invalid attributes and unknown IDs.",
+          "codeSnippet": "it \"is a subclass of AdminController\" do",
+          "relatedLocations": [
+            "app/controllers/admin/embeddable_hosts_controller.rb:14",
+            "app/controllers/admin/embeddable_hosts_controller.rb:21",
+            "app/controllers/admin/embeddable_hosts_controller.rb:5",
+            "app/controllers/admin/embeddable_hosts_controller.rb:9"
+          ]
+        },
+        {
+          "file": "spec/controllers/admin/embedding_controller_spec.rb",
+          "line": 6,
+          "severity": "LOW",
+          "category": "TESTING",
+          "title": "Controller behavior remains untested",
+          "reason": "This assertion only checks Ruby inheritance. It never sends a request, so the controller's staff-access filters and serialized response contract can regress while this spec continues to pass. Add request examples covering unauthorized access and the successful `show` response, including its `embedding` root and host data.",
+          "suggestedFixDescription": "Replace or supplement the inheritance assertion with request-level examples for a non-staff user and a staff user, asserting the access result and serialized response shape.",
+          "codeSnippet": "expect(Admin::EmbeddingController < Admin::AdminController).to eq(true)",
+          "relatedLocations": [
+            "app/controllers/admin/embedding_controller.rb:3",
+            "app/controllers/admin/embedding_controller.rb:6"
+          ]
+        },
+        {
+          "file": "app/controllers/admin/embeddable_hosts_controller.rb",
+          "line": 10,
+          "severity": "MEDIUM",
+          "category": "ERROR_HANDLING",
+          "title": "Missing hosts cause server errors",
+          "reason": "Both `update` and `destroy` use `.first`, which returns `nil` for an unknown ID. `update` then passes `nil` to `save_host`, where `host.host=` raises `NoMethodError`; `destroy` similarly calls `destroy` on `nil`. Thus authenticated admin requests for stale or nonexistent records return a 500 rather than a controlled 404 response.",
+          "suggestedFixDescription": "Load the host with `find(params[:id])` so the framework's normal record-not-found handling returns a 404, or explicitly render a not-found response when `.first` returns `nil`. Apply the same handling to both update and destroy.",
+          "codeSnippet": "save_host(host)",
+          "relatedLocations": [
+            "app/controllers/admin/embeddable_hosts_controller.rb:15"
+          ]
+        },
+        {
+          "file": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 9,
+          "severity": "MEDIUM",
+          "category": "ERROR_HANDLING",
+          "title": "Missing category crashes migration",
+          "reason": "The query can return zero rows when `embed_category` is absent or its value no longer matches a category name. Indexing `[0]['id']` then calls `[]` on `nil`, aborting the migration before the intended `category_id == 0` fallback runs. The fallback query at line 14 has the same unchecked-row problem, so a missing `uncategorized_category_id` setting also crashes deployment.",
+          "suggestedFixDescription": "Read each query row defensively and fall back when it is absent. If neither category lookup produces an ID, raise a clear migration error before creating or deleting migrated data.",
+          "codeSnippet": "WHERE s.name = 'embed_category'\")[0]['id'].to_i",
+          "relatedLocations": [
+            "db/migrate/20150818190757_create_embeddable_hosts.rb:14"
+          ]
+        },
+        {
+          "file": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 31,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Migration cannot restore deleted settings",
+          "reason": "The migration is declared with `change` but executes raw SQL and permanently deletes the source settings. Rails cannot automatically reverse these `execute` calls, and even a table drop would not recreate the deleted `embeddable_hosts` and `embed_category` values. Rolling back this deployment therefore either raises an irreversible-migration error or leaves the previous application version without its configuration.",
+          "suggestedFixDescription": "Replace `change` with explicit `up` and `down` methods. In `down`, reconstruct and restore both legacy settings from the new table/category records before dropping `embeddable_hosts`, or explicitly preserve the original setting values so rollback is lossless.",
+          "codeSnippet": "execute \"DELETE FROM site_settings WHERE name IN ('embeddable_hosts', 'embed_category')\"",
+          "relatedLocations": [
+            "db/migrate/20150818190757_create_embeddable_hosts.rb:2"
+          ]
+        },
+        {
+          "file": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 27,
+          "severity": "MEDIUM",
+          "category": "BUG_RISK",
+          "title": "Migrated URL-form hosts no longer pass authorization",
+          "reason": "The migration inserts each legacy setting value directly into the new table, bypassing `EmbeddableHost` normalization. Legacy configuration explicitly supported entries such as `http://eviltrout.com`, but `record_for_host` now extracts `eviltrout.com` and compares it directly with the stored value. A migrated row containing the scheme therefore never matches.\nEvidence: PRF024 migrates raw newline-separated setting entries through SQL rather than model callbacks. PRF011 only strips schemes and paths in a `before_validation` callback, which the SQL insert bypasses, and its lookup compares parsed `URI#host` directly with the database column. PRF033 and PRF038 make that lookup authoritative for embed access and retrieval. PRF044 demonstrates that URL-form legacy entries were supported before migration.\nBusiness impact: After deployment, previously authorized embedding sites configured with schemes or paths stop loading comments and importing embedded topics until every affected row is manually rewritten.",
+          "suggestedFixDescription": "Normalize each legacy entry before insertion using the same canonical form as `EmbeddableHost`\u2014at minimum remove the scheme and path and normalize case\u2014or migrate through a migration-local model that runs equivalent validation and normalization. Add an upgrade test covering legacy `http://`, `https://`, and path-form entries.",
+          "codeSnippet": "execute \"INSERT INTO embeddable_hosts (host, category_id, created_at, updated_at) VALUES ('#{h}', #{category_id}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)\"",
+          "relatedLocations": [
+            "app/controllers/embed_controller.rb",
+            "app/models/embeddable_host.rb",
+            "lib/topic_retriever.rb"
+          ],
+          "id": "CROSS_001"
+        }
+      ],
+      "proposal": {
+        "covered_summaries": [],
+        "duplicate_groups": [
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              1,
+              4
+            ],
+            "keeper_index": 2,
+            "merged_reason": "`URI#host` excludes the port even though validation accepts and preserves host values such as `example.com:3000`. The shared `record_for_host` lookup therefore compares `example.com` with `example.com:3000`, causing both embed requests and topic retrieval for otherwise authorized non-default-port sources to be rejected. The lookup also lowercases only the database column, so an uppercase input hostname may fail to match. Store and compare a single canonical representation, deliberately preserving and comparing explicit ports when they are part of authorization while retaining hostname-only matching for entries without a port, and normalize case on both sides. Add coverage for allowed non-default-port hosts through the model or affected callers.",
+            "rationale": "All three findings identify the same helper-level authorization defect: `record_for_host` compares the portless `URI#host` with stored values that may include a port. Indices 1 and 4 are downstream controller and retriever impacts of that same trigger and corrective change. Index 2 is the best keeper because it identifies the shared model cause and covers port-aware canonicalization while retaining its additional case-normalization assertion."
+          },
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              13
+            ],
+            "keeper_index": 0,
+            "merged_reason": "For stale, deleted, invalid, or otherwise unknown IDs, `.first` returns nil. `update` passes nil to `save_host`, which calls `host.host=`, and `destroy` calls `destroy` on nil; authenticated ordinary CRUD requests therefore raise `NoMethodError` and return 500 responses with noisy server exceptions. Use the application's standard record-not-found lookup, such as `find(params[:id])` when centrally rendered as 404, or explicitly return a not-found response in both actions before dereferencing the record.",
+            "rationale": "Both findings describe the identical missing-record paths in `update` and `destroy`: `.first` returns nil, followed by method calls on nil, producing a 500. Their proposed correction is the same controlled not-found handling, and index 0 fully preserves the trigger and impacts."
+          },
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              14
+            ],
+            "keeper_index": 6,
+            "merged_reason": "The `embed_category` query can return no row when the setting is absent, has no persisted override, or names a deleted category. Dereferencing `[0]['id']` then fails before the intended zero-ID fallback and aborts migration and deployment. The fallback lookup for `uncategorized_category_id` is also dereferenced without checking for a row. Read both results defensively, use the uncategorized category when the first lookup is absent, and raise a clear migration error before creating or deleting migrated data if neither lookup yields an ID.",
+            "rationale": "Both findings identify the same migration defect: category lookup results are dereferenced before absence can be handled, aborting deployment. Index 6 covers the primary lookup and explicitly requires defensive handling of the fallback; index 14 contributes the precise fallback failure and desired clear-error behavior."
+          },
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              7
+            ],
+            "keeper_index": 15,
+            "merged_reason": "The migration uses `change` with raw SQL inserts and deletes that Active Record cannot reverse, then permanently deletes the original `embeddable_hosts` and `embed_category` settings. Rollback can therefore raise an irreversible-migration error or leave the previous application version without its configuration. Replace `change` with explicit `up` and `down`; before dropping the new table, restore both legacy settings from its host and category records or preserved originals, with an explicit policy for hosts assigned to different categories so rollback is lossless.",
+            "rationale": "Both findings describe the same irreversible migration caused by using `change` with raw SQL while deleting the source settings. Index 15 most explicitly captures the loss of both legacy settings and the previous-version impact; index 7 adds the need for a policy when new rows have differing categories."
+          }
+        ]
+      },
+      "refinement": {
+        "covered_summaries": [],
+        "duplicate_groups": [
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              1,
+              4
+            ],
+            "keeper_index": 2,
+            "merged_reason": "Validation accepts and preserves values such as `example.com:3000`, but `URI#host` returns only `example.com`, so the shared lookup rejects otherwise authorized non-default-port sources in both embed requests and topic retrieval. The comparison also lowercases only the database column, allowing uppercase input hostnames to fail. Store and compare one canonical representation, preserving and comparing explicit ports when they are part of authorization while retaining hostname-only matching for entries without a port, and normalize case on both sides. Add coverage for allowed non-default-port hosts through the model or affected callers.",
+            "rationale": "All three findings identify the same helper-level port-matching defect: `record_for_host` compares portless `URI#host` against stored hosts that may include a port. Indices 1 and 4 describe downstream controller and retriever impacts of that same trigger and correction. Index 2 is the best keeper because it locates the shared cause and preserves the additional case-normalization assertion."
+          },
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              13
+            ],
+            "keeper_index": 0,
+            "merged_reason": "For stale, deleted, invalid, or otherwise unknown IDs, `.first` returns nil. `update` passes nil to `save_host`, which calls `host.host=`, while `destroy` calls `destroy` on nil; ordinary authenticated CRUD requests therefore produce 500 responses and noisy server exceptions. Use the application's standard record-not-found lookup, such as `find(params[:id])` when centrally rendered as 404, or explicitly return a not-found response in both actions before dereferencing the record.",
+            "rationale": "Both findings describe the identical missing-record failure in `update` and `destroy`: `.first` returns nil and subsequent dereferences raise `NoMethodError`. Index 0 fully covers both paths, their trigger, impact, and corrective handling."
+          },
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              14
+            ],
+            "keeper_index": 6,
+            "merged_reason": "The `embed_category` query can return no row when the setting is absent, lacks a persisted override, or names a deleted category. Dereferencing `[0]['id']` then fails before the intended fallback and aborts migration and deployment. The fallback lookup for `uncategorized_category_id` has the same unchecked-row failure. Read both results defensively, use the uncategorized category when the first lookup is absent, and raise a clear migration error before creating or deleting migrated data if neither lookup yields an ID.",
+            "rationale": "Both findings identify the same migration failure: category query results are dereferenced without checking whether a row exists, aborting deployment before fallback handling can work. Index 6 covers the primary and fallback lookups, while index 14 supplies the explicit clear-error requirement when neither yields an ID."
+          },
+          {
+            "confidence": "HIGH",
+            "duplicate_indices": [
+              7
+            ],
+            "keeper_index": 15,
+            "merged_reason": "The migration uses `change` with raw SQL inserts and deletes that Active Record cannot reverse, then permanently deletes the original `embeddable_hosts` and `embed_category` settings. Rollback can therefore raise an irreversible-migration error or leave the previous application version without its configuration. Replace `change` with explicit `up` and `down`; before dropping the new table, restore both legacy settings from its host and category records or preserved originals, with an explicit policy for hosts assigned to different categories so rollback is lossless.",
+            "rationale": "Both findings describe the same irreversible rollback caused by using `change` with non-reversible raw SQL and deleting the source settings. Index 15 most completely captures loss of both legacy settings and the impact on the previous application version; index 7 adds the need to define how differing per-host categories are reconstructed."
+          }
+        ]
+      },
+      "retained_indices": [
+        0,
+        2,
+        3,
+        5,
+        6,
+        8,
+        9,
+        10,
+        11,
+        12,
+        15,
+        16
+      ],
+      "prompt_sha256": [
+        "8f4fac018f4c25f8cc9d4bedb7eae26af817123653e8ad2c2109d6f4266f370d",
+        "9bd055bbf781d3a242c747ef60f4ed55b68821ba1ab915dc1e3fccd089db1fd4"
+      ],
+      "schema_sha256": "452245b32b17d64849cc2445869840edeb5ec10ba927898072ab1f46cf6bab30"
+    },
+    {
+      "case": "cal11059_distinct",
+      "source_capture": "reports/benchmark-quality-20261008/paired/subsumption-precedence-20261009/execution-20261009/live/cal11059_distinct-treatment/captures/project-106935-review-11059-db387e0f1ecf4c67bcc277928fac90e7.json",
+      "source_capture_sha256": "7cda1ae82e43bd4840b8adb3ad58ea5597a78b90f23fc9cef780b023d555be0b",
+      "source_packet_sha256": "693b05c66f55f212f66f7fccaf1912440d494a26962260b011918075fd9e50dd",
+      "issues": [
+        {
+          "file": "packages/app-store/zoho-bigin/lib/CalendarService.ts",
+          "line": 85,
+          "severity": "HIGH",
+          "category": "BUG_RISK",
+          "title": "Refresh response shape causes token refresh failure",
+          "reason": "When `APP_CREDENTIAL_SHARING_ENABLED`, `refreshOAuthTokens` returns the native `fetch` `Response` object directly (`packages/app-store/_utils/oauth/refreshOAuthTokens.ts:6-14`). This caller still accesses `tokenInfo.data.error` and later `tokenInfo.data.access_token`, but a `Response` has no `data` property. Expired Bigin credentials therefore throw while checking `tokenInfo.data.error` instead of refreshing successfully.",
+          "suggestedFixDescription": "Normalize the shared helper's result to the Axios-like `{ data }` shape expected here, or update this caller to parse the fetch response with `await tokenInfo.json()` before reading the token payload.",
+          "codeSnippet": "const tokenInfo = await refreshOAuthTokens(",
+          "relatedLocations": [
+            "packages/app-store/_utils/oauth/refreshOAuthTokens.ts:6"
+          ]
+        },
+        {
+          "file": "packages/app-store/zoho-bigin/lib/CalendarService.ts",
+          "line": 85,
+          "severity": "MEDIUM",
+          "category": "SECURITY",
+          "title": "One refresh caller sends a credential ID as a user ID",
+          "reason": "One refresh caller sends a credential ID as a user ID\n`refreshOAuthTokens` treats its third argument as the Cal.com `userId` and sends it as `calcomUserId`. Zoho Bigin passes `credentialId`, unlike the other updated callers that pass `credential.userId`.\nEvidence: The helper parameter is named `userId` and serializes it as `calcomUserId` (`PRF002`). Bigin supplies `credentialId` (`PRF040`), while Office 365 video supplies `credential.userId` (`PRF006`), demonstrating inconsistent identifier routing.\nBusiness impact: Credential synchronization can be applied to the wrong account or fail during Bigin token refresh, creating authentication outages and cross-account credential corruption risk.",
+          "suggestedFixDescription": "Pass the owning `userId` to the shared helper, or change the sync contract to explicitly accept and resolve a credential ID. Use distinct parameter names and types so the two identifiers cannot be mixed.",
+          "codeSnippet": "const tokenInfo = await refreshOAuthTokens(",
+          "relatedLocations": [
+            "packages/app-store/_utils/oauth/refreshOAuthTokens.ts",
+            "packages/app-store/office365video/lib/VideoApiAdapter.ts"
+          ],
+          "id": "CROSS_003"
+        }
+      ],
+      "proposal": {
+        "covered_summaries": [],
+        "duplicate_groups": []
+      },
+      "refinement": {
+        "covered_summaries": [],
+        "duplicate_groups": []
+      },
+      "retained_indices": [
+        0,
+        1
+      ],
+      "prompt_sha256": [
+        "fd9bd1770b4a940018a999262f3e5ab76fba70b2336a0de9e9da0c5d160c63a5",
+        "b19a5b062e86d8e3b6101e6e54d771a804a934870b4775e7a4a2a4a2774acd8a"
+      ],
+      "schema_sha256": "452245b32b17d64849cc2445869840edeb5ec10ba927898072ab1f46cf6bab30"
+    },
+    {
+      "case": "keycloak33832_der",
+      "source_capture": "reports/benchmark-quality-20261008/paired/subsumption-precedence-20261009/execution-20261009/live/keycloak33832_der-treatment/captures/project-103809-review-33832-5a233b1a460247bc9abea6e03c0a16a5.json",
+      "source_capture_sha256": "08508e2ca7b16e2b987ea113b929bf10e4cab2ad94594780d190312c06b5016f",
+      "source_packet_sha256": "ae2d05a9609117627dba34992a2f9b63082712265ade4dc03ac4e031ba83d93a",
+      "issues": [
+        {
+          "file": "authz/client/src/main/java/org/keycloak/authorization/client/util/crypto/ASN1Decoder.java",
+          "line": 57,
+          "severity": "MEDIUM",
+          "category": "SECURITY",
+          "title": "Sequence parsing can cross declared boundary",
+          "reason": "The loop only stops when `length <= 0`; it never rejects a child whose encoded size exceeds the sequence's declared content length. For example, a sequence declaring length 2 can contain a 3-byte child, causing the decoder to consume bytes outside the sequence and still return successfully. Malformed ASN.1 can therefore be accepted as a valid sequence and subsequent parsing can operate on data beyond the declared container.",
+          "suggestedFixDescription": "Reject any child whose encoded length exceeds the remaining sequence length, and require the remaining length to reach exactly zero before returning.",
+          "codeSnippet": "length = length - bytes.length;",
+          "relatedLocations": []
+        },
+        {
+          "file": "authz/client/src/main/java/org/keycloak/authorization/client/util/crypto/ASN1Decoder.java",
+          "line": 51,
+          "severity": "MEDIUM",
+          "category": "SECURITY",
+          "title": "Indefinite-length sequences are silently accepted",
+          "reason": "When `readLength()` returns `-1` for an indefinite-length encoding, `while (length > 0)` is skipped and `readSequence()` returns an empty sequence without consuming or validating the end-of-contents marker. This accepts a non-DER encoding as an apparently valid empty sequence and can leave trailing sequence data to be interpreted outside its container.",
+          "suggestedFixDescription": "Reject indefinite-length encodings in this DER decoder, or explicitly parse and validate the end-of-contents marker and nested content boundaries.",
+          "codeSnippet": "int length = readLength();",
+          "relatedLocations": []
+        },
+        {
+          "file": "authz/client/src/main/java/org/keycloak/authorization/client/util/crypto/ASN1Decoder.java",
+          "line": 57,
+          "severity": "MEDIUM",
+          "category": "SECURITY",
+          "title": "Malformed DER can be accepted by the ECDSA signature conversion path",
+          "reason": "Malformed DER can be accepted by the ECDSA signature conversion path\nThe DER decoder is directly used by `AuthzClientCryptoProvider` to parse ECDSA signatures, but `readSequence()` does not enforce that each child stays within the declared sequence length and also returns successfully for indefinite-length sequences. Consequently, malformed or non-DER signature encodings can be converted into concatenated `r||s` values instead of being rejected at the crypto boundary.\nEvidence: `AuthzClientCryptoProvider.asn1derToConcatenatedRS()` calls `ASN1Decoder.readSequence()` and then parses the returned integers, while `readSequence()` subtracts child lengths without rejecting an overrun and skips validation when `readLength()` returns `-1`. The test suite covers only valid round trips.\nBusiness impact: Malformed ECDSA signatures may be accepted by the conversion layer, weakening input validation and potentially causing inconsistent verification behavior across providers.",
+          "suggestedFixDescription": "Make the decoder strict DER: reject indefinite lengths, enforce child boundaries against the declared sequence length, require the remaining length to reach exactly zero, and add malformed-input tests through `asn1derToConcatenatedRS()`.",
+          "codeSnippet": "length = length - bytes.length;",
+          "relatedLocations": [
+            "authz/client/src/main/java/org/keycloak/authorization/client/util/crypto/ASN1Encoder.java",
+            "authz/client/src/main/java/org/keycloak/authorization/client/util/crypto/AuthzClientCryptoProvider.java"
+          ],
+          "id": "CROSS_002"
+        }
+      ],
+      "proposal": {
+        "covered_summaries": [
+          {
+            "confidence": "HIGH",
+            "covered_by_indices": [
+              0,
+              1
+            ],
+            "rationale": "Finding 2 is a bundled cross-file summary of two distinct decoder defects fully covered by findings 0 and 1: child-length overrun beyond a sequence boundary, and acceptance of indefinite-length encodings. Findings 0 and 1 state the respective triggers, malformed-input acceptance, parsing impacts, and corrective changes. Finding 2 adds caller-path context and test guidance but no separate causal defect.",
+            "summary_index": 2
+          }
+        ],
+        "duplicate_groups": []
+      },
+      "refinement": {
+        "covered_summaries": [
+          {
+            "confidence": "HIGH",
+            "covered_by_indices": [
+              0,
+              1
+            ],
+            "rationale": "Finding 2 bundles exactly the two distinct decoder root causes retained separately by findings 0 and 1: child encodings overrunning the declared sequence boundary, and indefinite-length encodings bypassing sequence parsing and validation. Together, findings 0 and 1 preserve the malformed-input triggers, acceptance and trailing-data impacts, and required strict-DER corrections. Finding 2's ECDSA conversion-path details and malformed-input test recommendation are cross-file impact evidence and validation guidance for those same defects, not an additional causal defect.",
+            "summary_index": 2
+          }
+        ],
+        "duplicate_groups": []
+      },
+      "retained_indices": [
+        0,
+        1
+      ],
+      "prompt_sha256": [
+        "ee37cf0562d75eab348c9304abd00f5f4362e481f9712d4c2042c98596a84c6b",
+        "645cde091fa40071764de82e5b6531200babf9e21c2b74b8df5693c2fcb2e170"
+      ],
+      "schema_sha256": "452245b32b17d64849cc2445869840edeb5ec10ba927898072ab1f46cf6bab30"
+    }
+  ]
+}

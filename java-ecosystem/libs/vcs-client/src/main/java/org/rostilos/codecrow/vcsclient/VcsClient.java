@@ -155,6 +155,11 @@ public interface VcsClient {
      */
     String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException;
 
+    /** Resolve the common ancestor of two pinned revisions; unavailable is not an empty repository. */
+    default String getMergeBase(String workspaceId, String repoIdOrSlug, String baseCommit, String headCommit) throws IOException {
+        throw new IOException("Merge-base lookup is unavailable for this provider");
+    }
+
     /**
      * List every regular repository file at a pinned commit snapshot.
      * Symbolic links and submodule/subrepository entries are not regular
@@ -378,16 +383,21 @@ public interface VcsClient {
             String branchOrCommit,
             int maxFileSizeBytes
     ) throws IOException {
-        // Default implementation: sequential fetch with size check
         java.util.Map<String, String> results = new java.util.HashMap<>();
         for (String path : filePaths) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.io.InterruptedIOException("VCS file acquisition cancelled");
+            }
             try {
                 String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
-                if (content != null && content.length() <= maxFileSizeBytes) {
+                if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
                     results.put(path, content);
                 }
             } catch (IOException e) {
-                // Skip files that fail to fetch
+                VcsRateLimitException.rethrowIfRateLimited(e);
+                if (e instanceof java.io.InterruptedIOException) throw e;
+                org.slf4j.LoggerFactory.getLogger(VcsClient.class)
+                        .warn("VCS file content unavailable for {}: {}", path, e.getMessage());
             }
         }
         return results;

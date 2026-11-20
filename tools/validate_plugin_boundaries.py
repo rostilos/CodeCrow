@@ -126,8 +126,8 @@ def validate() -> list[str]:
     language_descriptors = sorted((PLUGIN_ROOT / "languages").glob("*/plugin.json"))
     for descriptor in language_descriptors:
         payload = json.loads(descriptor.read_text(encoding="utf-8"))
-        if "syntax" not in payload["capabilities"]:
-            errors.append(f"language plugin has no syntax capability: {descriptor.relative_to(ROOT)}")
+        if not {"syntax", "index", "graph"}.intersection(payload["capabilities"]):
+            errors.append(f"language plugin has no syntax or indexing capability: {descriptor.relative_to(ROOT)}")
         java_entrypoint = payload["entrypoints"].get("java")
         if java_entrypoint and not (descriptor.parent / "java" / "pom.xml").is_file():
             errors.append(f"Java language plugin has no build module: {descriptor.relative_to(ROOT)}")

@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "post-fix-analysis-run.schema.json",
+  "title": "CodeCrow Magento 2 verified-F analysis run",
+  "description": "Separate B-to-verified-F analysis lane paired to one primary H run. It is never a primary precision/recall/F1 input.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "runId",
+    "startedAt",
+    "completedAt",
+    "corpusId",
+    "corpusDigest",
+    "executionCorpusDigest",
+    "executionCorpusArtifact",
+    "analysisModel",
+    "analysisProvider",
+    "analysisModelRoles",
+    "analysisConfig",
+    "analysisConfigDigest",
+    "replayLockDigest",
+    "replayLockArtifact",
+    "replayAttestationDigest",
+    "replayAttestationArtifact",
+    "runtimeProvenance",
+    "selectedCaseIds",
+    "transport",
+    "findingSemantics",
+    "attemptPolicy",
+    "attemptLedger",
+    "cases",
+    "indexReceiptsBefore",
+    "indexReceiptsAfter",
+    "status",
+    "snapshotRole",
+    "pairedPrimaryRunId",
+    "pairedPrimaryRunDigest",
+    "primaryReplayLockDigest",
+    "postFixReplayPlanDigest",
+    "analysisPairControl",
+    "analysisPairControlDigest",
+    "runDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-post-fix-analysis-run"
+    },
+    "runId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "startedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "completedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "corpusId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executionCorpusArtifact": {
+      "const": "analysis-execution-corpus.json"
+    },
+    "analysisModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysisProvider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysisModelRoles": {
+      "type": "object"
+    },
+    "analysisConfig": {
+      "type": "object"
+    },
+    "analysisConfigDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "replayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "replayLockArtifact": {
+      "const": "post-fix-replay-lock.json"
+    },
+    "replayAttestationDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "replayAttestationArtifact": {
+      "const": "post-fix-replay-attestation.json"
+    },
+    "runtimeProvenance": {
+      "type": "object"
+    },
+    "selectedCaseIds": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "transport": {
+      "enum": [
+        "redis",
+        "http"
+      ]
+    },
+    "findingSemantics": {
+      "const": "java-finalized-transient-first-iteration"
+    },
+    "attemptPolicy": {
+      "type": "object"
+    },
+    "attemptLedger": {
+      "type": "array",
+      "minItems": 50,
+      "items": {
+        "type": "object"
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": {
+        "type": "object"
+      }
+    },
+    "indexReceiptsBefore": {
+      "type": "object"
+    },
+    "indexReceiptsAfter": {
+      "type": "object"
+    },
+    "status": {
+      "const": "completed"
+    },
+    "snapshotRole": {
+      "const": "verified_F"
+    },
+    "pairedPrimaryRunId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "pairedPrimaryRunDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "primaryReplayLockDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "postFixReplayPlanDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "analysisPairControl": {
+      "type": "object"
+    },
+    "analysisPairControlDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "runDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Cross-process coordination for RAG mutations and embedding capacity."""
+"""Cross-process coordination for repository-index mutations."""
 
 from __future__ import annotations
 
@@ -42,17 +42,6 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
-
-_ACQUIRE_PERMIT_SCRIPT = """
-redis.call('zremrangebyscore', KEYS[1], '-inf', ARGV[1])
-if redis.call('zcard', KEYS[1]) < tonumber(ARGV[2]) then
-  redis.call('zadd', KEYS[1], ARGV[3], ARGV[4])
-  redis.call('expire', KEYS[1], ARGV[5])
-  return 1
-end
-return 0
-"""
-
 
 @dataclass
 class MutationLease:
@@ -140,14 +129,7 @@ class MutationLease:
 
 
 class ProjectMutationCoordinator:
-    """Serialize mutations that share one RAG publication resource.
-
-    Legacy indexes share a project-wide collection. Exact generations have an
-    immutable collection target, while a published branch also has one mutable
-    human-readable head alias. ``publication_scope`` serializes only that
-    branch head, so main and develop can build concurrently without allowing
-    two generations of the same branch to race its current alias.
-    """
+    """Serialize mutations of one exact structural generation target."""
 
     def __init__(
         self,
@@ -179,15 +161,12 @@ class ProjectMutationCoordinator:
         collection_target: Optional[str] = None,
         publication_scope: Optional[str] = None,
     ) -> str:
-        # Legacy indexing keeps the historical project-wide key because its
-        # branches share one physical alias. Exact branch generations supply
-        # their distinct collection target, so independent branch snapshots
-        # may proceed concurrently without weakening same-collection safety.
-        resource = (
-            publication_scope
-            or collection_target
-            or "project-shared-collection"
-        )
+        resource = publication_scope or collection_target
+        if not resource:
+            raise ValueError(
+                "mutation coordination requires an exact collection target "
+                "or isolated publication scope"
+            )
         digest = hashlib.sha256(
             f"{workspace}\0{project}\0{resource}".encode("utf-8")
         ).hexdigest()
@@ -203,6 +182,11 @@ class ProjectMutationCoordinator:
         collection_target: Optional[str] = None,
         publication_scope: Optional[str] = None,
     ) -> Iterator[MutationLease]:
+        if not collection_target and not publication_scope:
+            raise ValueError(
+                "mutation coordination requires an exact collection target "
+                "or isolated publication scope"
+            )
         token = uuid.uuid4().hex
         if not self.enabled or self._client is None:
             lease = MutationLease(None, "", "", token, self.lease_seconds, False)
@@ -276,7 +260,7 @@ class ProjectMutationCoordinator:
             operation,
             workspace,
             project,
-            publication_scope or collection_target or "project-shared-collection",
+            publication_scope or collection_target,
             token,
         )
         try:
@@ -296,105 +280,3 @@ class ProjectMutationCoordinator:
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
-
-
-class RedisPermitPool:
-    """Best-effort distributed cap with a process-local fail-open fallback."""
-
-    def __init__(
-        self,
-        redis_url: str,
-        limit: int,
-        *,
-        permit_seconds: int,
-        acquire_timeout_seconds: float = 30.0,
-    ) -> None:
-        self.limit = max(1, limit)
-        self.permit_seconds = max(30, permit_seconds)
-        self.acquire_timeout_seconds = max(0.1, acquire_timeout_seconds)
-        self._local = threading.BoundedSemaphore(self.limit)
-        self._client = redis.Redis.from_url(
-            redis_url,
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-            health_check_interval=30,
-        )
-        self._disabled_until = 0.0
-        self._distributed_unavailable = False
-        self._state_lock = threading.Lock()
-        self._key = "codecrow:rag:openrouter:index:permits"
-
-    @contextmanager
-    def permit(self) -> Iterator[None]:
-        self._local.acquire()
-        token = uuid.uuid4().hex
-        distributed = False
-        try:
-            distributed = self._acquire_distributed(token)
-            yield
-        finally:
-            if distributed:
-                try:
-                    self._client.zrem(self._key, token)
-                except Exception as exception:
-                    self._record_distributed_failure(exception)
-            self._local.release()
-
-    def _acquire_distributed(self, token: str) -> bool:
-        with self._state_lock:
-            if time.monotonic() < self._disabled_until:
-                return False
-        deadline = time.monotonic() + self.acquire_timeout_seconds
-        wait_reported = False
-        while True:
-            now = time.time()
-            try:
-                acquired = self._client.eval(
-                    _ACQUIRE_PERMIT_SCRIPT,
-                    1,
-                    self._key,
-                    now,
-                    self.limit,
-                    now + self.permit_seconds,
-                    token,
-                    self.permit_seconds,
-                )
-                if acquired:
-                    self._record_distributed_recovery()
-                    return True
-            except Exception as exception:
-                with self._state_lock:
-                    self._disabled_until = time.monotonic() + 60
-                self._record_distributed_failure(exception)
-                return False
-            if time.monotonic() >= deadline:
-                log = logger.info if not wait_reported else logger.debug
-                log(
-                    "Waiting for distributed OpenRouter capacity after %.1fs",
-                    self.acquire_timeout_seconds,
-                )
-                wait_reported = True
-                deadline = time.monotonic() + self.acquire_timeout_seconds
-            time.sleep(0.05)
-
-    def _record_distributed_failure(self, exception: BaseException) -> None:
-        with self._state_lock:
-            first_failure = not self._distributed_unavailable
-            self._distributed_unavailable = True
-        log = logger.warning if first_failure else logger.debug
-        log(
-            "Distributed OpenRouter capacity limit unavailable; using "
-            "process-local cap: %s",
-            exception,
-        )
-
-    def _record_distributed_recovery(self) -> None:
-        with self._state_lock:
-            recovered = self._distributed_unavailable
-            self._distributed_unavailable = False
-        if recovered:
-            logger.info("Distributed OpenRouter capacity limit recovered")
-
-    def close(self) -> None:
-        self._client.close()

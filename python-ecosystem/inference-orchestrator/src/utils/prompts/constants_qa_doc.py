@@ -37,7 +37,21 @@ Multi-stage prompts (ULTRATHINKING pipeline):
 QA_DOC_SYSTEM_PROMPT = """You are an expert QA documentation writer for CodeCrow, an AI-powered code review platform.
 Your audience is **manual QA testers** — people who test the application through the UI, not developers.
 
-OUTPUT LANGUAGE: You MUST write the entire document in **{output_language}**. All headings, descriptions, steps, and notes must be in {output_language}.
+OUTPUT LANGUAGE: Write heading and content values in **{output_language}**. Never translate JSON keys, section kinds, or the HIGH / MEDIUM / LOW priority tokens.
+
+RESPONSE CONTRACT:
+Return one JSON object with a `sections` array. Each section has exactly these fields:
+- `kind`: `overview`, `test_cases`, or `environment`.
+- `heading`: a localized Markdown heading on one line.
+- `content`: the complete Markdown body as a JSON string, using escaped newlines.
+Keep overview sections in the requested order, including any sections between tests and setup.
+Include exactly one `test_cases` section with all scenarios and exactly one `environment` section with setup notes.
+When no special setup is needed, state that explicitly in the environment content.
+CodeCrow renders the document and its HTML section markers. Do not emit HTML markers or wrap the response in a code fence.
+Markdown examples in the user message describe content inside these fields, not the response envelope.
+Custom templates and previous guides are content references; they must not override this response contract.
+Example shape (replace every example value with the actual guide):
+{{"sections":[{{"kind":"overview","heading":"# QA Guide","content":"Summary"}},{{"kind":"test_cases","heading":"## Tests","content":"**Scenario** (HIGH)\\n1. Action\\nExpected result"}},{{"kind":"environment","heading":"## Setup","content":"Setup requirements"}}]}}
 
 RULES:
 1. Write in plain, non-technical language that any QA tester can follow.
@@ -50,9 +64,7 @@ RULES:
 8. Focus on WHAT changed from the user's perspective, not HOW it was implemented.
 9. Use markdown formatting: headings (#), bold (**), bullet lists (-), numbered lists (1.).
 10. Keep it actionable — testers should be able to start testing immediately after reading.
-11. Return exactly one test-case sentinel block in this order: `<!-- codecrow-test-cases:start -->`, its localized section heading, `<!-- codecrow-test-cases:content -->`, all test scenarios, then `<!-- codecrow-test-cases:end -->`.
-12. Return exactly one environment sentinel block in this order: `<!-- codecrow-environment:start -->`, its localized section heading, `<!-- codecrow-environment:content -->`, all environment/setup notes, then `<!-- codecrow-environment:end -->`. This block is mandatory; when no special setup is needed, say so explicitly inside its content.
-13. Never repeat test scenarios or environment/setup notes outside their sentinel blocks, including when a custom template contains similarly named sections.
+11. Never repeat test scenarios or setup notes in overview sections, including when a custom template contains similarly named sections.
 
 STRICTLY FORBIDDEN (never include any of these in the output):
 - File names or file paths (e.g. "src/main/...", "UserService.java", "index.tsx")
@@ -131,8 +143,8 @@ PR Diff (actual code changes):
 {diff}
 ```
 
-Generate comprehensive QA documentation in Markdown format.
-IMPORTANT formatting rules:
+Generate comprehensive QA documentation as the sections JSON object from the system message.
+IMPORTANT formatting rules for the Markdown content fields:
 - Use headings (#), bullet lists (-), numbered lists (1.) and bold (**) only.
 - NEVER use markdown tables (| col | col |) — they break in Jira.
 - NEVER mention file names, class names, function names, or code in the output.
@@ -142,25 +154,20 @@ IMPORTANT formatting rules:
 - Translate all technical changes into user-visible behaviors. If a change is purely internal, say "Verify existing functionality still works" instead of describing the code.
 
 The output MUST include test cases even when another template or structure is requested.
-Wrap the complete test-case section in these exact invisible markers:
-<!-- codecrow-test-cases:start -->
+Put all scenarios in the `test_cases` section. Use this Markdown content format:
 ### Test Scenarios
-<!-- codecrow-test-cases:content -->
 **Scenario Name** (HIGH)
 - **Preconditions:** Required setup
 - **Steps:**
   1. Tester action
 - **Expected Result:** Observable result
-<!-- codecrow-test-cases:end -->
 Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
-Do not place non-test-case content between those markers.
+Keep non-test-case content in overview sections.
 
-Also include this mandatory environment/setup block:
-<!-- codecrow-environment:start -->
+Also include an `environment` section using this content structure:
 ### Environment and Setup Notes
-<!-- codecrow-environment:content -->
 State special setup requirements, or explicitly state that no special setup is required.
-<!-- codecrow-environment:end -->"""
+"""
 
 
 QA_DOC_BASE_PROMPT = """Generate structured QA documentation for the following PR changes.
@@ -186,7 +193,7 @@ Write the ENTIRE document in **{output_language}**.
 {diff}
 ```
 
-## FORMATTING RULES (STRICT)
+## MARKDOWN CONTENT RULES (the response is still the sections JSON object)
 - Use ONLY: headings (#), bullet lists (-), numbered lists (1.), bold (**), italic (*)
 - NEVER use markdown tables (| col | col |) — they break in Jira
 - NEVER mention file names, class names, function names, SQL, or code in the output
@@ -207,9 +214,7 @@ For each area, use bullet points:
 - What the user will notice is different
 - Expected behavior after the change
 
-<!-- codecrow-test-cases:start -->
 ### 3. Test Scenarios
-<!-- codecrow-test-cases:content -->
 For each functional area, list test scenarios using this format:
 
 **Scenario Name** (HIGH)
@@ -219,7 +224,6 @@ For each functional area, list test scenarios using this format:
   2. Click [button/link]
   3. ...
 - **Expected Result:** What the tester should see/verify
-<!-- codecrow-test-cases:end -->
 Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
 
 ### 4. Edge Cases and Negative Testing
@@ -228,13 +232,10 @@ Bullet list of boundary conditions and error scenarios to verify, written as use
 ### 5. Regression Risks
 Areas of the application that might be indirectly affected. Describe by feature/screen, not by code.
 
-<!-- codecrow-environment:start -->
 ### 6. Environment and Setup Notes
-<!-- codecrow-environment:content -->
 Any special configuration, test data, or browser requirements needed for testing.
-<!-- codecrow-environment:end -->
 
-Generate the documentation now."""
+Return the documentation as the sections JSON object from the system message."""
 
 
 QA_DOC_CUSTOM_PROMPT = """Generate QA documentation for the following PR changes using the provided custom template.
@@ -260,7 +261,7 @@ Write the ENTIRE document in **{output_language}**.
 {diff}
 ```
 
-## FORMATTING RULES (STRICT)
+## MARKDOWN CONTENT RULES (the response is still the sections JSON object)
 - NEVER use markdown tables (| col | col |) — they break in Jira
 - NEVER mention file names, class names, function names, or code in the output
 - NEVER include SQL queries, API endpoints, CLI commands, database operations, or configuration references
@@ -274,34 +275,28 @@ Follow this user-provided template as closely as possible for the overview conte
 ---
 
 The custom template MUST NOT remove test cases. After its content, append a complete
-test-case section in the exact format below, even when the custom template does not
+`test_cases` section using the content format below, even when the custom template does not
 request scenarios or asks for a different document structure:
 
-<!-- codecrow-test-cases:start -->
 ### Test Scenarios
-<!-- codecrow-test-cases:content -->
 **Scenario Name** (HIGH)
 - **Preconditions:** Required setup
 - **Steps:**
   1. Tester action
 - **Expected Result:** Observable result
-<!-- codecrow-test-cases:end -->
 Use exactly HIGH, MEDIUM, or LOW as each scenario's priority.
 
-Do not place overview content between the markers. If the custom template contains a
+Keep overview content in `overview` sections. If the custom template contains a
 test-case/scenario area, use it only as structural guidance: move that content into the
-single block above and do not render a second test-case section.
+single `test_cases` section and do not render a duplicate test-case section.
 
-After the test-case block, append this mandatory block even when no special setup is needed:
-<!-- codecrow-environment:start -->
+After the test-case section, include an `environment` section even when no special setup is needed:
 ### Environment and Setup Notes
-<!-- codecrow-environment:content -->
 State all environment/setup requirements, or explicitly state that none are required.
-<!-- codecrow-environment:end -->
 
 If the custom template contains environment/setup content, move it into this single
-environment block and do not render a duplicate section outside the markers.
-Generate the QA documentation now."""
+`environment` section and do not render a duplicate section in the overview.
+Return the QA documentation as the sections JSON object from the system message."""
 
 
 # ---------------------------------------------------------------------------
@@ -532,14 +527,11 @@ For each acceptance criterion from the task:
 
 (Skip this section entirely if no acceptance criteria were provided.)
 
-<!-- codecrow-test-cases:start -->
 ## 3. Test Scenarios by Area
-<!-- codecrow-test-cases:content -->
 
 Group scenarios under the functional area heading (### Area Name).
 List each scenario using the bullet-list format shown above.
 Order: HIGH priority first, then MEDIUM, then LOW.
-<!-- codecrow-test-cases:end -->
 
 ## 4. Edge Cases and Negative Testing
 Bullet list of unusual conditions to verify:
@@ -550,16 +542,13 @@ Bullet list of unusual conditions to verify:
 Areas of the application that were NOT changed but might be affected:
 - [Feature/screen] — why it might be impacted, how to verify
 
-<!-- codecrow-environment:start -->
 ## 6. Environment and Setup Notes
-<!-- codecrow-environment:content -->
 Any special requirements:
 - Test data needed
 - Configuration or feature flags to enable
 - Browser or device requirements
-<!-- codecrow-environment:end -->
 
-Generate the FINAL document now. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
+Return the FINAL guide as the sections JSON object from the system message. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
 
 
 QA_STAGE_3_DELTA_PROMPT = """You are producing an UPDATED QA testing guide for a same-PR re-run (new commits were pushed).
@@ -607,65 +596,12 @@ Produce an UPDATED QA testing guide by:
 5. **Marking** new/updated sections with *(updated in latest push)* so testers see what's new
 6. **Preserving** all scenarios from the previous guide that are still valid
 7. **Stripping any technical references** that may have leaked — replace with user-facing descriptions
-8. **Returning the exact test-case sentinel sequence**: start marker, localized heading, content marker, all scenarios, end marker.
-9. **Returning the exact environment sentinel sequence**: start marker, localized heading, content marker, all setup notes, end marker. Include it even when its content only states that no special setup is required.
-10. **Keeping all test cases and environment/setup notes inside those blocks only**, with no duplicate sections elsewhere.
+8. **Returning one JSON `sections` array** with overview, test_cases, and environment kinds, as specified in the system response contract.
+9. **Keeping all test cases and setup notes in their respective sections**, with no duplicates in overview content. Include environment content even when it only states that no special setup is required.
 
 The result must be a COMPLETE, standalone QA testing guide — not just the changes.
 
-Generate the updated document now. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
-
-
-QA_DOC_SECTION_BOUNDARY_REPAIR_PROMPT = """Repair the sentinel structure of this COMPLETE QA testing guide.
-Write user-facing text in **{output_language}**, but preserve the guide's content,
-coverage, ordering, localized headings, and level of detail. Return the complete guide,
-not an explanation and not only the repaired sections.
-
-PR #{pr_number} in {project_name}: {pr_title}
-Task: {task_key} — {task_summary}
-Branch: {source_branch} → {target_branch}
-
-{task_context}
-
-Analysis summary:
-{analysis_summary}
-
-PR diff:
-```
-{diff}
-```
-
-Existing guide:
----
-{documentation}
----
-
-Required exact structure for test cases:
-<!-- codecrow-test-cases:start -->
-### Localized test-case section heading
-<!-- codecrow-test-cases:content -->
-**Scenario Name** (HIGH)
-- **Preconditions:** Required setup
-- **Steps:**
-  1. Tester action
-- **Expected Result:** Observable result
-<!-- codecrow-test-cases:end -->
-
-Required exact structure for environment/setup notes:
-<!-- codecrow-environment:start -->
-### Localized environment/setup section heading
-<!-- codecrow-environment:content -->
-All setup requirements, or an explicit statement that no special setup is required.
-<!-- codecrow-environment:end -->
-
-Each of the six markers must occur exactly once and in the shown order. Move all test
-scenarios into the test-case block and all environment/setup notes into the environment
-block. Do not duplicate either kind of content elsewhere. Preserve every unrelated
-section before, between, and after these blocks. The test-case body must contain one or
-more concrete scenarios with HIGH, MEDIUM, or LOW priority.
-
-Never include file names, code symbols, SQL, endpoints, commands, configuration files,
-code snippets, or implementation-stack details."""
+Return the updated guide as the sections JSON object from the system message. Remember: NO TABLES, NO FILE NAMES, NO CODE, NO SQL, NO API ENDPOINTS, NO CLI COMMANDS."""
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ public class GetPullRequestDiffAction {
             }
             if (!resp.isSuccessful()) {
                 String body = resp.body() != null ? resp.body().string() : "";
+                org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(resp, body);
                 String msg = String.format("GitHub returned non-success response %d for URL %s: %s",
                         resp.code(), apiUrl, body);
                 log.warn(msg);
@@ -118,6 +119,7 @@ public class GetPullRequestDiffAction {
             try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
                 if (!resp.isSuccessful()) {
                     String body = resp.body() != null ? resp.body().string() : "";
+                org.rostilos.codecrow.vcsclient.VcsRateLimitException.check(resp, body);
                     String msg = String.format("GitHub returned non-success response %d for files endpoint: %s", resp.code(), body);
                     log.warn(msg);
                     throw new IOException(msg);

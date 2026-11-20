@@ -18,6 +18,10 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-plugin-contracts</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
             <exclusions>

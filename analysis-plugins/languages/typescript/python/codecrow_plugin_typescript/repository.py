@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
 from typing import Mapping
 
@@ -15,14 +16,14 @@ from codecrow_plugins import (
 )
 
 
-TYPESCRIPT_EXTENSIONS = (".cts", ".mts", ".ts")
+TYPESCRIPT_EXTENSIONS = (".cts", ".mts", ".ts", ".tsx")
 _IMPORT_FROM = re.compile(
     r"^\s*import\s+(?:type\s+)?(?P<clause>.*?)\s+from\s+"
     r"(?P<quote>['\"])(?P<module>[^'\"]+)(?P=quote)",
     re.DOTALL,
 )
 _EXPORT_DECLARATION = re.compile(
-    r"^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?"
+    r"^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?"
     r"(?:class|interface|type|enum|function|const|let|var)\s+"
     r"([A-Za-z_$][A-Za-z0-9_$]*)"
 )
@@ -40,6 +41,15 @@ def module_for_path(path: str) -> str:
 
 def _named(node, field: str):
     return node.child_by_field_name(field)
+
+
+def _enclosing_class_name(document: TreeSitterDocument, node) -> str:
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "class_declaration":
+            return document.text(_named(parent, "name"))
+        parent = parent.parent
+    return ""
 
 
 def _import_bindings(
@@ -107,7 +117,7 @@ def analyze_typescript_artifact(
     document = TreeSitterDocument.parse(
         artifact.content,
         "tree_sitter_typescript",
-        "language_typescript",
+        "language_tsx" if artifact.path.casefold().endswith(".tsx") else "language_typescript",
     )
     module = module_for_path(artifact.path)
     facts: set[GraphFact] = {
@@ -122,24 +132,57 @@ def analyze_typescript_artifact(
     exports: set[str] = set()
     imports: set[ImportBinding] = set()
     calls: set[ImportedCall] = set()
+    for node in document.root.named_children:
+        if node.type != "comment":
+            break
+        text = document.text(node)
+        # shortcut: entity-escaped directive names remain unknown; support them with compiler-compatible decoding.
+        if not text.startswith("///") or not text.rstrip().endswith("/>") or "\n" in text or "&" in text:
+            continue
+        try:
+            directive = ET.fromstring(text[3:].strip())
+        except ET.ParseError:
+            continue
+        name = directive.get("types")
+        if directive.tag == "reference" and isinstance(name, str) and name.strip():
+            facts.add(GraphFact("typescript-type-reference", module, "declares-dependency", name,
+                artifact.path, document.line(node), attributes=(("reference", "types"),)))
     for node in document.walk():
         line = document.line(node)
         if node.type == "import_statement":
             statement = document.text(node)
             parsed = _import_bindings(statement, line=line)
+            source = _named(node, "source")
+            # Module-only imports still establish a dependency without a local symbol.
+            # shortcut: escaped specifiers stay unknown until JS literal decoding is shared.
+            if (not parsed and not node.has_error and source is not None and source.type == "string"
+                    and all(child.type == "string_fragment" for child in source.named_children)):
+                specifier = "".join(document.text(child) for child in source.named_children)
+                if specifier:
+                    parsed = (ImportBinding(specifier, "", "", line),)
             imports.update(parsed)
             for binding in parsed:
                 facts.add(GraphFact(
                     "typescript-import",
                     module,
                     "imports",
-                    f"{binding.module}::{binding.imported}",
+                    f"{binding.module}::{binding.imported}" if binding.imported else binding.module,
                     artifact.path,
                     line,
                     attributes=(("local", binding.local),),
                 ))
         elif node.type == "export_statement":
             statement = document.text(node)
+            source = _named(node, "source")
+            # Re-exports depend on a module without introducing a local binding.
+            # shortcut: escaped specifiers stay unknown until JS literal decoding is shared.
+            if (source is not None and source.type == "string"
+                    and all(child.type == "string_fragment" for child in source.named_children)):
+                specifier = "".join(document.text(child) for child in source.named_children)
+                if specifier:
+                    imports.add(ImportBinding(specifier, "", "", line))
+                    facts.add(GraphFact("typescript-import", module, "imports", specifier,
+                        artifact.path, line, attributes=(("reexport", "true"),)))
             declaration = _EXPORT_DECLARATION.match(statement)
             if declaration:
                 exported = declaration.group(1)
@@ -221,6 +264,19 @@ def analyze_typescript_artifact(
             function = _named(node, "function")
             if function is None:
                 continue
+            if function.type == "import":
+                arguments = _named(node, "arguments")
+                argument = next((child for child in arguments.named_children
+                    if child.type != "comment"), None) if arguments else None
+                # shortcut: escaped specifiers stay unresolved; add JS decoding when they need module evidence.
+                if (argument is not None and argument.type in {"string", "template_string"}
+                        and all(child.type == "string_fragment" for child in argument.named_children)):
+                    imported_module = "".join(document.text(child) for child in argument.named_children)
+                    if imported_module:
+                        imports.add(ImportBinding(imported_module, "", "", line))
+                        facts.add(GraphFact("typescript-import", module, "imports", imported_module,
+                            artifact.path, line, attributes=(("dynamic", "true"),)))
+                continue
             if function.type == "identifier":
                 local = document.text(function)
                 member = ""
@@ -233,11 +289,16 @@ def analyze_typescript_artifact(
                 continue
             if local:
                 calls.add(ImportedCall(local, member, line))
+                target = f"{local}.{member}".rstrip(".")
+                if local == "this" and member:
+                    class_name = _enclosing_class_name(document, node)
+                    if class_name:
+                        target = f"{class_name}.{member}"
                 facts.add(GraphFact(
                     "typescript-call",
                     module,
                     "calls",
-                    f"{local}.{member}".rstrip("."),
+                    target,
                     artifact.path,
                     line,
                 ))
@@ -294,17 +355,21 @@ def resolve_import(
             f"{joined}{extension}"
             for extension in TYPESCRIPT_EXTENSIONS
         )
+        # A directory index is a fallback after file lookup, not a competing file.
+        file_matches = [candidate for candidate in candidates if candidate in records]
+        if file_matches:
+            return file_matches[0] if len(file_matches) == 1 else ""
         candidates.extend(
             f"{joined}/index{extension}"
             for extension in TYPESCRIPT_EXTENSIONS
         )
     elif suffix in {".js", ".mjs", ".cjs"}:
-        replacement = {
-            ".js": ".ts",
-            ".mjs": ".mts",
-            ".cjs": ".cts",
+        replacements = {
+            ".js": (".ts", ".tsx"),
+            ".mjs": (".mts",),
+            ".cjs": (".cts",),
         }[suffix]
-        candidates.append(joined[: -len(suffix)] + replacement)
+        candidates.extend(joined[: -len(suffix)] + replacement for replacement in replacements)
     matches = [
         candidate
         for candidate in candidates

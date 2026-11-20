@@ -61,6 +61,26 @@ class VcsClientProviderTest {
         );
     }
 
+    @Test
+    void installationQuotaIdentitySurvivesTokenRotationAndConnectionReplacementButStaysTenantScoped() throws Exception {
+        var workspace = new org.rostilos.codecrow.core.model.workspace.Workspace();
+        setId(workspace, 11L);
+        var connection = new VcsConnection();
+        setId(connection, 1L);
+        connection.setWorkspace(workspace);
+        connection.setProviderType(EVcsProvider.GITHUB);
+        connection.setConnectionType(EVcsConnectionType.GITHUB_APP);
+        connection.setInstallationId("145918007");
+        connection.setAccessToken("first-token");
+        String initial = VcsClientProvider.quotaIdentity(connection);
+        setId(connection, 2L);
+        connection.setAccessToken("refreshed-token");
+        assertThat(VcsClientProvider.quotaIdentity(connection)).isEqualTo(initial);
+        setId(workspace, 12L);
+        assertThat(VcsClientProvider.quotaIdentity(connection)).isNotEqualTo(initial);
+        assertThat(initial).hasSize(64).doesNotContain("145918007", "first-token");
+    }
+
     // ── needsTokenRefresh ────────────────────────────────────────────────
 
     @Nested

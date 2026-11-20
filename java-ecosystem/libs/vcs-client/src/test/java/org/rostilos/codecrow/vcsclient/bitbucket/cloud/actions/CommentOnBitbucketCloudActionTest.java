@@ -188,6 +188,18 @@ class CommentOnBitbucketCloudActionTest {
     // ── postInlineComment ────────────────────────────────────────────────
 
     @Test
+    void markerLookupFollowsPagesAndIgnoresDeletedComments() throws Exception {
+        ArgumentCaptor<Request> requests = ArgumentCaptor.forClass(Request.class);
+        when(httpClient.newCall(requests.capture())).thenReturn(call);
+        when(call.execute()).thenAnswer(inv -> jsonResponse(requests.getValue(), 200,
+                requests.getValue().url().queryParameter("page") == null
+                        ? "{\"values\":[{\"id\":500,\"deleted\":true,\"content\":{\"raw\":\"[codecrow-review-checks]: #\"}}],\"next\":\"https://api.bitbucket.org/2.0/repositories/my-workspace/my-repo/pullrequests/42/comments?page=2\"}"
+                        : "{\"values\":[{\"id\":700,\"content\":{\"raw\":\"[codecrow-review-checks]: #\"}}]}"));
+        assertThat(action.findCommentByMarker("<!-- codecrow-review-checks -->")).isEqualTo("700");
+        verify(httpClient, times(2)).newCall(any());
+    }
+
+    @Test
     void postInlineComment_shouldSendDestinationLineAnchor() throws Exception {
         ArgumentCaptor<Request> captor = ArgumentCaptor.forClass(Request.class);
         when(httpClient.newCall(captor.capture())).thenReturn(call);
@@ -331,4 +343,16 @@ class CommentOnBitbucketCloudActionTest {
         request.body().writeTo(buffer);
         return mapper.readTree(buffer.readUtf8());
     }
+
+    @Test void deletedSourceCommentUsesOnlyFromLine() throws Exception {
+        ArgumentCaptor<Request> request=ArgumentCaptor.forClass(Request.class);
+        when(httpClient.newCall(request.capture())).thenReturn(call);
+        when(call.execute()).thenAnswer(inv->jsonResponse(request.getValue(),201,"{\"id\":\"88\"}"));
+        action.postInlineComment("deleted.java",10,"Finding",
+                org.rostilos.codecrow.core.model.codeanalysis.IssueAnchorSide.BASE);
+        okio.Buffer buffer=new okio.Buffer(); request.getValue().body().writeTo(buffer);
+        JsonNode inline=mapper.readTree(buffer.readUtf8()).path("inline");
+        assertThat(inline.path("from").asInt()).isEqualTo(10); assertThat(inline.has("to")).isFalse();
+    }
+
 }

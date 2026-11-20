@@ -135,15 +135,14 @@ public class WebhookAsyncProcessor {
         String placeholderCommentId = null;
         Project project = null;
         
-        try {
+        try (var vcsContext = new org.rostilos.codecrow.vcsclient.VcsRequestContext(
+                projectId, job.getExternalId().toString(), "webhook")) {
+            if (job.getJobType() == JobType.QA_DOC_COMMAND && !jobService.claimQaJobForExecution(job)) return;
+            if (job.getJobType() != JobType.QA_DOC_COMMAND && !jobService.claimWebhookJobForExecution(job)) return;
             // Load project in a short read-only transaction
             // All lazy associations are eagerly initialized before the transaction closes
             project = self.loadAndInitializeProject(projectId);
             
-            log.info("Calling jobService.startJob for job {}", job.getExternalId());
-            jobService.startJob(job);
-            log.info("jobService.startJob completed for job {}", job.getExternalId());
-
             if (job.getJobType() == JobType.BRANCH_ANALYSIS
                     || job.getJobType() == JobType.PR_ANALYSIS) {
                 BranchAnalysisGateService.GateResult gateResult =
@@ -154,7 +153,6 @@ public class WebhookAsyncProcessor {
                 if (gateResult == BranchAnalysisGateService.GateResult.SUPERSEDED) {
                     String reason = "Superseded by a newer branch analysis job for " + job.getBranchName();
                     log.info("Skipping branch job {}: {}", job.getExternalId(), reason);
-                    cleanupSupersededMerge(payload, project);
                     jobService.skipJob(job, reason);
                     return;
                 }
@@ -319,20 +317,6 @@ public class WebhookAsyncProcessor {
         }
     }
 
-    private void cleanupSupersededMerge(WebhookPayload payload, Project project) {
-        if (!WebhookEventClassifier.isPullRequestMerge(payload)
-                || payload.pullRequestId() == null) {
-            return;
-        }
-        try {
-            ragOperationsService.deletePrFiles(
-                    project, Integer.parseInt(payload.pullRequestId()));
-        } catch (Exception e) {
-            log.warn("Failed to clean PR RAG data for superseded merge job (project={}, PR={}): {}",
-                    project.getId(), payload.pullRequestId(), e.getMessage());
-        }
-    }
-    
     /**
      * Initialize lazy associations that will be needed during webhook processing.
      * Must be called within an active Hibernate session (i.e., inside a @Transactional method).

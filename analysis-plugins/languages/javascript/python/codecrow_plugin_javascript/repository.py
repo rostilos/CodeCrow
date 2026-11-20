@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import logging
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ from codecrow_plugins import (
     RepositorySnapshot,
     TreeSitterDocument,
 )
+
+from .package_exports import package_declaration_packets
 
 
 JAVASCRIPT_EXTENSIONS = (".cjs", ".js", ".jsx", ".mjs")
@@ -879,6 +882,8 @@ class JavascriptRepositorySession:
     plugin_id: str
     revision: str
     _records: dict[str, JavascriptFileRecord] = field(default_factory=dict)
+    _paths: set[str] = field(default_factory=set)
+    _packages: dict[str, dict] = field(default_factory=dict)
 
     @classmethod
     def restore(
@@ -902,17 +907,33 @@ class JavascriptRepositorySession:
             base64.b64decode(snapshot.content.encode("ascii"))
         )
         payload = json.loads(raw.decode("utf-8"))
-        if not isinstance(payload, list):
-            raise ValueError("JavaScript repository snapshot must be a list")
+        if isinstance(payload, list):
+            logging.getLogger(__name__).warning(
+                "JavaScript snapshot has no package export inventory; aliases require a repository refresh"
+            )
+            payload = {"components": payload, "paths": [], "packages": {}}
+        if not isinstance(payload, dict):
+            raise ValueError("JavaScript repository snapshot must contain repository records")
         records = {
             record.path: record
-            for item in payload
+            for item in payload["components"]
             if isinstance(item, dict)
             for record in (_record_from_json(item),)
         }
-        return cls(plugin_id, revision, records)
+        return cls(plugin_id, revision, records, set(payload["paths"]), payload["packages"])
 
     def ingest(self, artifacts: tuple[FileArtifact, ...]) -> None:
+        for artifact in artifacts:
+            self._packages.pop(artifact.path, None)
+            if artifact.deleted:
+                self._paths.discard(artifact.path)
+                continue
+            self._paths.add(artifact.path)
+            if artifact.path.rsplit("/", 1)[-1] == "package.json":
+                manifest = json.loads(artifact.content)
+                if not isinstance(manifest, dict):
+                    raise ValueError("package.json must contain an object")
+                self._packages[artifact.path] = {key: manifest[key] for key in ("name", "exports") if key in manifest}
         selected = tuple(
             artifact
             for artifact in artifacts
@@ -927,10 +948,10 @@ class JavascriptRepositorySession:
 
     def _snapshot(self) -> RepositorySnapshot:
         raw = json.dumps(
-            [
+            {"components": [
                 _record_to_json(record)
                 for record in sorted(self._records.values())
-            ],
+            ], "paths": sorted(self._paths), "packages": self._packages},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -1051,6 +1072,7 @@ class JavascriptRepositorySession:
 
     def finish(self, dependencies: RepositoryAnalysis):
         return PluginOutcome.handled(RepositoryAnalysis(
-            packets=self._packets(),
+            packets=tuple(sorted((*self._packets(), *package_declaration_packets(
+                self.plugin_id, self._packages, self._paths)))),
             snapshots=(self._snapshot(),),
         ))

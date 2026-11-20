@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequest
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceReviewer;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
@@ -44,6 +45,10 @@ import org.rostilos.codecrow.core.dto.pullrequest.PullRequestDTO;
 @IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/pull-requests")
 public class PullRequestController {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rostilos.codecrow.core.service.ProjectFeaturePolicy featurePolicy =
+            new org.rostilos.codecrow.core.service.ProjectFeaturePolicy();
+
 
     private static final Logger log = LoggerFactory.getLogger(PullRequestController.class);
 
@@ -119,6 +124,7 @@ public class PullRequestController {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
 
+        featurePolicy.requireQaDocumentation(project);
         return ResponseEntity.ok(
                 qaDocDocumentService.findLatestDocument(project.getId(), prNumber)
                         .map(QaDocDocumentResponse::fromDocument)
@@ -345,7 +351,7 @@ public class PullRequestController {
      * counts are refreshed and persisted.
      */
     @PutMapping("/branches/issues/{issueId}/status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<IssueStatusUpdateResponse> updateBranchIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -424,7 +430,7 @@ public class PullRequestController {
      * {@code CodeAnalysisIssue} records are intentionally <b>NOT</b> mutated.
      */
     @PutMapping("/branches/issues/bulk-status")
-    @HasOwnerOrAdminRights
+    @IsWorkspaceReviewer
     public ResponseEntity<Map<String, Object>> bulkUpdateBranchIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

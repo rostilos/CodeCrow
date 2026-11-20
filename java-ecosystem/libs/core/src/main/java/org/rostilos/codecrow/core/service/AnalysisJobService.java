@@ -4,7 +4,6 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.user.User;
 
 import java.util.Map;
 
@@ -15,42 +14,12 @@ import java.util.Map;
  */
 public interface AnalysisJobService {
 
-    /**
-     * Create a job for RAG initial indexing.
-     * @param project The project to index
-     * @param triggeredBy The user who triggered the job (can be null for automated jobs)
-     * @return The created job
-     */
-    Job createRagIndexJob(Project project, User triggeredBy);
-
-    /**
-     * Create a job for RAG indexing with configurable parameters.
-     * @param project The project to index
-     * @param isInitial true for initial indexing, false for incremental update
-     * @param triggerSource The source that triggered the job
-     * @return The created job
-     */
-    Job createRagIndexJob(Project project, boolean isInitial, JobTriggerSource triggerSource);
-
-    /**
-     * Create a branch-bound RAG indexing job. Hosts that persist jobs should
-     * override this method so the branch and revision are durable before the
-     * worker starts; the default keeps non-persistent host implementations
-     * source-compatible.
-     */
-    default Job createRagIndexJob(
+    /** Create a durable repository-index build bound to one branch revision. */
+    Job createRepositoryIndexBuildJob(
             Project project,
-            boolean isInitial,
             JobTriggerSource triggerSource,
             String branchName,
-            String commitHash) {
-        Job job = createRagIndexJob(project, isInitial, triggerSource);
-        if (job != null) {
-            job.setBranchName(branchName);
-            job.setCommitHash(commitHash);
-        }
-        return job;
-    }
+            String revision);
 
     /**
      * Start a job.

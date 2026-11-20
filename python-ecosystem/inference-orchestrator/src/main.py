@@ -21,9 +21,13 @@ try:
 except Exception as _dotenv_err:
     print(f"[ENV-BOOT] ERROR loading .env: {_dotenv_err}", flush=True)
 
+# mcp-use enables outbound anonymous telemetry unless told otherwise. Keep
+# CodeCrow runtimes private by default while allowing an explicit operator
+# opt-in before any application module imports mcp-use.
+_os.environ.setdefault("MCP_USE_ANONYMIZED_TELEMETRY", "false")
+
 # ── New Relic APM — must be initialized before any other app imports ─────
 _nr_config = _os.environ.get('NEW_RELIC_CONFIG_FILE')
-print(f"[NR-BOOT] NEW_RELIC_CONFIG_FILE = {_nr_config!r}", flush=True)
 if _nr_config:
     _nr_exists = _os.path.exists(_nr_config)
     print(f"[NR-BOOT] Config file exists: {_nr_exists}", flush=True)
@@ -35,8 +39,6 @@ if _nr_config:
             print("[NR-BOOT] newrelic.agent.initialize() completed successfully", flush=True)
         except Exception as _nr_err:
             print(f"[NR-BOOT] ERROR during initialization: {_nr_err}", flush=True)
-else:
-    print("[NR-BOOT] Skipping — no config file env var set", flush=True)
 # ─────────────────────────────────────────────────────────────────────────
 
 import os

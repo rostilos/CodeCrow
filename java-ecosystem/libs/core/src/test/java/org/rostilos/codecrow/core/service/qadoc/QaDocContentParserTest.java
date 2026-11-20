@@ -1,11 +1,55 @@
 package org.rostilos.codecrow.core.service.qadoc;
 
 import org.junit.jupiter.api.Test;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class QaDocContentParserTest {
+
+    @Test
+    void storedFreeformScenariosKeepTheirExistingProgressIndex() {
+        String markdown = """
+                <!-- codecrow-test-cases:start -->
+                ## Tests
+                <!-- codecrow-test-cases:content -->
+                **First scenario (HIGH)**
+                Confirm first result.
+                **Second scenario (LOW)**
+                Confirm second result.
+                <!-- codecrow-test-cases:end -->
+                """;
+        assertThat(QaDocContentParser.parse(markdown).testCases()).singleElement()
+                .satisfies(test -> assertThat(test.descriptionMarkdown())
+                        .contains("Confirm first result.", "Confirm second result."));
+        assertThat(QaDocContentParser.parseMarkedTestCases(markdown))
+                .isEqualTo(QaDocContentParser.parse(markdown).testCases());
+    }
+
+    @Test
+    void sharesTheSameRecoveryAndDisclosureFixturesAsInference() throws Exception {
+        try (var stream = getClass().getResourceAsStream("/qa-document-format.json")) {
+            for (var fixture : new ObjectMapper().readTree(stream)) {
+                String markdown = fixture.get("markdown").asText();
+                boolean shareable = fixture.get("shareable").asBoolean();
+                assertThat(QaDocContentParser.hasCompleteShareableSections(markdown))
+                        .as(fixture.get("name").asText()).isEqualTo(shareable);
+                if (shareable) {
+                    var content = QaDocContentParser.parse(markdown);
+                    assertThat(content.environmentMarkdown()).isEqualTo("Use the QA account.");
+                    assertThat(content.overviewMarkdown()).contains("Verify saved baskets.")
+                            .doesNotContain("Confirm the order appears.", "Use the QA account.");
+                    assertThat(QaDocContentParser.parseMarkedTestCases(markdown)).singleElement()
+                            .satisfies(test -> assertThat(test.descriptionMarkdown())
+                                    .contains("Confirm the order appears."));
+                    assertThat(QaDocContentParser.replaceShareableSections(markdown, "test-link", "setup-link"))
+                            .contains("test-link", "setup-link", "Verify saved baskets.")
+                            .doesNotContain("Confirm the order appears.", "Use the QA account.");
+                }
+            }
+        }
+    }
 
     @Test
     void separatesExactSentinelBlocksWithoutInterpretingLocalizedHeadings() {
@@ -74,20 +118,21 @@ class QaDocContentParserTest {
     }
 
     @Test
-    void publicParsingRequiresEveryExactTestCaseSentinelAndAStructuredScenario() {
+    void publicParsingPreservesReadableContentInsideExplicitBoundaries() {
         assertThat(QaDocContentParser.parseMarkedTestCases("""
                 <!-- codecrow-test-cases:start -->
                 ### Test Scenarios
                 **Missing content sentinel** (HIGH)
                 <!-- codecrow-test-cases:end -->
-                """)).isEmpty();
+                """)).singleElement().satisfies(test -> assertThat(test.title()).isEqualTo("Missing content sentinel"));
         assertThat(QaDocContentParser.parseMarkedTestCases("""
                 <!-- codecrow-test-cases:start -->
                 ### Test Scenarios
                 <!-- codecrow-test-cases:content -->
                 General notes without a structured scenario.
                 <!-- codecrow-test-cases:end -->
-                """)).isEmpty();
+                """)).singleElement().satisfies(test -> assertThat(test.descriptionMarkdown())
+                        .isEqualTo("General notes without a structured scenario."));
         assertThat(QaDocContentParser.parseMarkedTestCases("""
                 **Unmarked scenario** (HIGH)
                 - **Expected Result:** It works

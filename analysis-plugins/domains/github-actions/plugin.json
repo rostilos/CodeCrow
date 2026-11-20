@@ -1,0 +1,20 @@
+{
+  "id": "github-actions",
+  "kind": "domain",
+  "requires": [],
+  "capabilities": ["graph", "index"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [{
+      "filesAll": [],
+      "filesAny": [],
+      "pathPatternsAll": [],
+      "pathPatternsAny": [".github/workflows/*.yaml", ".github/workflows/*.yml"],
+      "contentMarkers": []
+    }]
+  },
+  "entrypoints": {"python": "codecrow_plugin_github_actions:create_plugin"}
+}

@@ -5,6 +5,8 @@ public enum RagBranchIndexGenerationStatus {
     BUILDING,
     ACTIVE,
     SUPERSEDED,
+    RETIRING,
+    RETIRED,
     FAILED
 }
 

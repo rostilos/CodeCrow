@@ -16,6 +16,10 @@ public interface QaDocDocumentRepository extends JpaRepository<QaDocDocument, Lo
 
     Optional<QaDocDocument> findByProjectIdAndPrNumber(Long projectId, Long prNumber);
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT q FROM QaDocDocument q WHERE q.project.id = :projectId AND q.prNumber = :prNumber")
+    Optional<QaDocDocument> findForUpdate(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
+
     List<QaDocDocument> findByProjectIdAndTaskIdOrderByGeneratedAtDesc(Long projectId, String taskId);
 
     List<QaDocDocument> findByProjectIdAndTaskIdOrderByGeneratedAtDesc(

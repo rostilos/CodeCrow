@@ -1,12 +1,14 @@
 package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import org.rostilos.codecrow.core.model.qadoc.QaDocDocument;
+import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.core.service.qadoc.QaDocContentParser;
 import org.rostilos.codecrow.core.service.qadoc.QaDocPublicShareResource;
 import org.rostilos.codecrow.publicshare.api.IssuedPublicShare;
 import org.rostilos.codecrow.publicshare.service.PublicShareLinkService;
 import org.springframework.stereotype.Service;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /** QA-doc adapter over the purpose-neutral public-share credential service. */
 @Service
@@ -48,6 +50,18 @@ public class QaDocPublicPreviewService {
                         withTab(normalizedPreviewUrl, "test-cases"),
                         withTab(normalizedPreviewUrl, "environment")
                 );
+    }
+
+    public String buildPrivateTaskComment(Project project, Long prNumber) {
+        String url = UriComponentsBuilder.fromUriString(siteSettingsProvider.getBaseUrlSettings().frontendUrl())
+                .path("/dashboard/{workspaceSlug}/projects/{projectNamespace}")
+                .queryParam("prNumber", prNumber)
+                .queryParam("subTab", "qa-doc")
+                .buildAndExpand(project.getWorkspace().getSlug(), project.getNamespace())
+                .encode().toUriString();
+        return QaAutoDocListener.COMMENT_MARKER + "\n\n"
+                + "QA documentation was saved, but its section formatting does not support a public preview.\n\n"
+                + "[View QA documentation in CodeCrow (sign-in required)](" + url + ")";
     }
 
     private static String withTab(String previewUrl, String tab) {

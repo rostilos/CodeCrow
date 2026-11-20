@@ -99,14 +99,8 @@ public class BranchCommitService {
         // ── Same commit: nothing to do ───────────────────────────────────
         if (lastKnownHead.equals(commitHash)) {
             // Check if this commit is already analyzed
-            boolean multiBranch = project.getConfiguration() != null
-                    && project.getConfiguration().ragConfig() != null
-                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
-            boolean analyzed = multiBranch
-                    ? analyzedCommitService.isAnalyzed(
-                            project.getId(), targetBranchName, commitHash)
-                    : analyzedCommitService.isAnalyzed(
-                            project.getId(), commitHash);
+            boolean analyzed = analyzedCommitService.isAnalyzed(
+                    project.getId(), targetBranchName, commitHash);
             if (analyzed) {
                 log.info("HEAD commit {} is already analyzed — skipping", shortHash(commitHash));
                 return CommitRangeContext.skip();
@@ -182,14 +176,8 @@ public class BranchCommitService {
             }
 
             // Subtract already-analyzed commits
-            boolean multiBranch = project.getConfiguration() != null
-                    && project.getConfiguration().ragConfig() != null
-                    && project.getConfiguration().ragConfig().isMultiBranchEnabled();
-            List<String> unanalyzed = multiBranch
-                    ? analyzedCommitService.filterUnanalyzed(
-                            project.getId(), targetBranchName, commitsSinceLastHead)
-                    : analyzedCommitService.filterUnanalyzed(
-                            project.getId(), commitsSinceLastHead);
+            List<String> unanalyzed = analyzedCommitService.filterUnanalyzed(
+                    project.getId(), targetBranchName, commitsSinceLastHead);
 
             if (unanalyzed.isEmpty()) {
                 log.info("All {} commits since lastKnownHead are already analyzed — skipping",

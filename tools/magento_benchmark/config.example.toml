@@ -1,0 +1,86 @@
+[github]
+repository = "magento/magento2"
+default_branch = "2.4-develop"
+token_env = "GITHUB_TOKEN"
+cache_dir = ".cache/github"
+
+[corpus]
+required_cases = 50
+small_min = 3
+small_max = 10
+medium_min = 11
+medium_max = 30
+large_min = 31
+large_max = 80
+
+[analysis]
+# Redis is the production analysis transport. "http" remains available only as
+# an explicit compatibility smoke-test transport.
+transport = "redis"
+endpoint = "http://127.0.0.1:8015/review"
+rag_endpoint = "http://127.0.0.1:8004"
+finalizer_endpoint = "http://127.0.0.1:8081/api/internal/analysis/benchmark-finalize"
+redis_container = "codecrow-redis"
+analysis_container = "codecrow-inference-orchestrator"
+rag_container = "codecrow-rag-pipeline"
+finalizer_container = "codecrow-web-application"
+redis_db = 1
+redis_queue = "codecrow:analysis:jobs"
+service_secret_env = "CODECROW_SERVICE_SECRET"
+provider = "openrouter"
+model = "google/gemini-3-flash-preview"
+# Exact provider-reported model expected from every completed analysis call.
+# When omitted it defaults to the selected model. `--analysis-model` updates
+# this expectation unless `--expected-analysis-response-model` is also passed.
+expected_response_model = "google/gemini-3-flash-preview"
+api_key_env = "OPENROUTER_API_KEY"
+base_url = ""
+project_id = 123
+# These two values must exactly match replay-lock.json forkRepository.
+project_vcs_workspace = "your-magento-benchmark-org"
+project_vcs_repo_slug = "magento2-benchmark"
+project_workspace = "Magento Benchmark"
+project_namespace = "magento2-core-review"
+rag_workspace = "Magento Benchmark"
+rag_project = "magento2-core-review"
+timeout_seconds = 7200
+# One attempt is safest for a preregistered paper run. Increase only before the
+# run when the protocol permits explicit `--resume` retries; every attempt is
+# retained and the configured cap is digest-bound.
+max_case_attempts = 1
+# Exploratory runs may leave this false. Paper runs require it and must enable
+# REVIEW_QUALITY_CAPTURE_* for this project in the inference container.
+require_model_call_evidence = false
+quality_capture_container_dir = "/app/logs/review-quality-captures"
+require_exact_index = true
+require_retrieval_evidence = true
+# Set true to require a fresh `verify-replay` attestation. It is also required
+# automatically whenever require_runtime_provenance enables frozen paper mode.
+require_replay_attestation = false
+# A paper run accepts only a live observation collected within this window
+# before the run starts. Paper-readiness currently caps the window at one hour.
+replay_attestation_max_age_seconds = 3600
+# Set true for frozen paper runs. The runner then refuses to proceed unless it
+# has a bound live replay attestation and can record immutable IDs for the
+# inference, RAG, and Java product-finalizer containers.
+require_runtime_provenance = false
+required_repository_plugins = ["php", "magento"]
+
+[analysis.custom_parameters]
+temperature = 0
+
+[judge]
+# Any OpenAI-compatible chat-completions endpoint can be used.
+base_url = "https://openrouter.ai/api/v1"
+model = "google/gemini-3-flash-preview"
+# Set this to the exact immutable model identifier returned by the provider
+# when it differs from the requested routing alias above.
+expected_response_model = "google/gemini-3-flash-preview"
+api_key_env = "OPENROUTER_API_KEY"
+temperature = 0
+repeats = 3
+timeout_seconds = 300
+max_retries = 4
+max_structured_retries = 3
+max_prompt_characters = 400000
+validate_unmatched_findings = true

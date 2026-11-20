@@ -10,11 +10,52 @@ from api.routers.review import review_endpoint
 
 
 def _streaming_request(service_name, service):
+    async def receive():
+        await asyncio.Future()
     state = SimpleNamespace(**{service_name: service})
     return SimpleNamespace(
+        receive=receive,
         headers={"accept": "application/x-ndjson"},
         app=SimpleNamespace(state=state),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,service_name,method", [
+    (review_endpoint, "review_service", "process_review_request"),
+    (ask_endpoint, "command_service", "process_ask"),
+    (summarize_endpoint, "command_service", "process_summarize"),
+])
+async def test_json_disconnect_stops_paid_processing(endpoint, service_name, method):
+    from fastapi import HTTPException
+    started, disconnected, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def process(_request):
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
+
+    async def receive():
+        await disconnected.wait()
+        return {"type": "http.disconnect"}
+
+    service = SimpleNamespace(**{method: AsyncMock(side_effect=process)})
+    request = _streaming_request(service_name, service)
+    request.headers = {}
+    request.receive = receive
+    task = asyncio.create_task(endpoint(MagicMock(), request))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        disconnected.set()
+        with pytest.raises(HTTPException) as error:
+            await asyncio.wait_for(task, 1)
+        assert error.value.status_code == 499
+        assert stopped.is_set()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def _assert_disconnect_cancels_runner(response, cancelled):
@@ -72,6 +113,32 @@ async def test_review_stream_emits_one_terminal_service_error():
     events = await _collect_stream_events(response)
     assert events[-1] == {"type": "error", "message": "provider failed"}
     assert sum(event["type"] in {"error", "final"} for event in events) == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_review_http_preserves_partial_coverage_in_a_successful_response(streaming):
+    result = {
+        "status": "partial", "comment": "Reviewed with unavailable dependency source",
+        "issues": [], "reviewedHunkIds": ["changed-part"],
+        "unresolvedScopes": {"vendor-class": "Vendor declaration unavailable"},
+        "diagnostics": ["Unavailable dependency source cannot establish a defect or safety"],
+    }
+    service = MagicMock()
+    service.process_review_request = AsyncMock(return_value={"result": result})
+    request = _streaming_request("review_service", service)
+    if not streaming:
+        request.headers = {"accept": "application/json"}
+
+    response = await review_endpoint(MagicMock(), request)
+
+    if streaming:
+        events = await _collect_stream_events(response)
+        assert events[-1] == {"type": "final", "result": result}
+        assert sum(event["type"] in {"error", "final"} for event in events) == 1
+    else:
+        assert response.result == result
+        assert response.error is None
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -133,3 +200,60 @@ async def test_command_stream_emits_one_terminal_service_error(
     events = await _collect_stream_events(response)
     assert events[-1] == {"type": "error", "message": "provider failed"}
     assert sum(event["type"] in {"error", "final"} for event in events) == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_idle_stream_heartbeats_preserve_progress_and_terminal_order():
+    from api.event_stream import service_event_stream
+
+    release = asyncio.Event()
+
+    async def process(emit):
+        await release.wait()
+        emit({"type": "status", "state": "reviewing"})
+        return {"issues": []}
+
+    stream = service_event_stream(process, queued_message="queued", heartbeat_seconds=0.01)
+    assert json.loads(await anext(stream))["state"] == "queued"
+    assert json.loads(await asyncio.wait_for(anext(stream), 1))["state"] == "heartbeat"
+    release.set()
+    events = [json.loads(line) async for line in stream]
+    assert events == [
+        {"type": "status", "state": "reviewing"},
+        {"type": "final", "result": {"issues": []}},
+    ]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_disconnect_after_idle_heartbeat_cancels_and_joins_processor():
+    from api.event_stream import service_event_stream
+
+    cancelled = asyncio.Event()
+
+    async def process(_emit):
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    stream = service_event_stream(process, queued_message="queued", heartbeat_seconds=0.01)
+    await anext(stream)
+    assert json.loads(await anext(stream))["state"] == "heartbeat"
+    await stream.aclose()
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_completion_does_not_wait_for_heartbeat_interval():
+    from api.event_stream import service_event_stream
+
+    async def process(_emit):
+        return "done"
+
+    async def collect():
+        return [json.loads(line) async for line in service_event_stream(
+            process, queued_message="queued", heartbeat_seconds=3600,
+        )]
+
+    events = await asyncio.wait_for(collect(), 1)
+    assert events[-1] == {"type": "final", "result": "done"}

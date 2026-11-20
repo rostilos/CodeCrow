@@ -199,6 +199,13 @@
             </plugin>
             <plugin>
                 <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>library-for-host-composition</id>
+                        <goals><goal>jar</goal></goals>
+                        <configuration><classifier>library</classifier></configuration>
+                    </execution>
+                </executions>
                 <configuration>
                     <archive>
                         <manifestEntries>

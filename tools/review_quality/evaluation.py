@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import ceil
+from math import ceil, isfinite
+import hashlib
+import json
 from statistics import median
 from typing import Any, Iterable, Mapping
 
@@ -21,9 +23,25 @@ def _non_negative_int(value: Any, field: str) -> int:
 
 
 def _non_negative_number(value: Any, field: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not isfinite(value) or value < 0:
         raise ValueError(f"{field} must be a non-negative number")
     return float(value)
+
+
+def _optional_number(payload: Mapping[str, Any], field: str, *, integer: bool = False):
+    value = payload.get(field)
+    if value is None:
+        return None
+    return (_non_negative_int if integer else _non_negative_number)(value, field)
+
+
+def _complete_sum(values: Iterable[int | float | None]):
+    items = tuple(values)
+    return None if any(item is None for item in items) else sum(items)
+
+
+def _difference(value, baseline):
+    return None if value is None or baseline is None else round(value - baseline, 8)
 
 
 @dataclass(frozen=True)
@@ -39,13 +57,18 @@ class CaseResult:
     reviewable_hunks: int
     terminal_hunks: int
     changed_lines: int
-    model_calls: int
-    input_tokens: int
-    output_tokens: int
-    cost: float
+    model_calls: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cost: float | None
+    completion_status: str
+    wall_time_seconds: float | None
+    provenance: Mapping[str, str]
 
     @classmethod
     def parse(cls, payload: Mapping[str, Any]) -> "CaseResult":
+        if not isinstance(payload, Mapping):
+            raise ValueError("each case must be an object")
         case_id = payload.get("caseId")
         mode = payload.get("mode")
         if not isinstance(case_id, str) or not case_id:
@@ -70,10 +93,19 @@ class CaseResult:
             payload.get("changedLines"),
             "changedLines",
         )
-        model_calls = _non_negative_int(payload.get("modelCalls", 0), "modelCalls")
-        input_tokens = _non_negative_int(payload.get("inputTokens", 0), "inputTokens")
-        output_tokens = _non_negative_int(payload.get("outputTokens", 0), "outputTokens")
-        cost = _non_negative_number(payload.get("cost", 0), "cost")
+        model_calls = _optional_number(payload, "modelCalls", integer=True)
+        input_tokens = _optional_number(payload, "inputTokens", integer=True)
+        output_tokens = _optional_number(payload, "outputTokens", integer=True)
+        cost = _optional_number(payload, "cost")
+        completion_status = payload.get("completionStatus", "unknown")
+        if completion_status not in {"complete", "partial", "failed", "missing", "unknown"}:
+            raise ValueError("completionStatus must be complete, partial, failed, missing or unknown")
+        provenance = payload.get("provenance", {})
+        if not isinstance(provenance, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) or not v
+            for k, v in provenance.items()
+        ):
+            raise ValueError("provenance must contain non-empty string values")
         if changed_lines == 0 and any(
             (model_calls, input_tokens, output_tokens, cost)
         ):
@@ -97,6 +129,9 @@ class CaseResult:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost=cost,
+            completion_status=completion_status,
+            wall_time_seconds=_optional_number(payload, "wallTimeSeconds"),
+            provenance=provenance,
         )
 
 
@@ -110,15 +145,22 @@ class ModeMetrics:
     abstentions: int
     precision: float
     recall: float
+    f1: float
+    f2: float
     coverage: float
     changed_lines: int
-    model_calls: int
-    input_tokens: int
-    output_tokens: int
-    cost: float
-    cost_per_changed_kloc: float
-    median_cost_per_changed_kloc: float
-    p95_cost_per_changed_kloc: float
+    model_calls: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cost: float | None
+    cost_per_changed_kloc: float | None
+    median_cost_per_changed_kloc: float | None
+    p95_cost_per_changed_kloc: float | None
+    completion_counts: Mapping[str, int]
+    usage_known_cases: Mapping[str, int]
+    wall_time_seconds: float | None
+    median_wall_time_seconds: float | None
+    p95_wall_time_seconds: float | None
 
 
 @dataclass(frozen=True)
@@ -127,13 +169,16 @@ class PairedDelta:
     baseline: str
     precision: float
     recall: float
-    model_calls: int
-    input_tokens: int
-    output_tokens: int
-    cost: float
-    cost_per_changed_kloc: float
-    median_cost_per_changed_kloc: float
-    p95_cost_per_changed_kloc: float
+    f1: float
+    f2: float
+    model_calls: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cost: float | None
+    cost_per_changed_kloc: float | None
+    median_cost_per_changed_kloc: float | None
+    p95_cost_per_changed_kloc: float | None
+    wall_time_seconds: float | None
 
 
 @dataclass(frozen=True)
@@ -144,10 +189,12 @@ class EvaluationReport:
     corpus_coverage: Mapping[str, Any]
     language_strata: Mapping[str, tuple[ModeMetrics, ...]]
     framework_strata: Mapping[str, tuple[ModeMetrics, ...]]
+    evidence: Mapping[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "baseline": self.baseline,
+            "evidence": dict(self.evidence),
             "modes": [asdict(metrics) for metrics in self.modes],
             "pairedDeltas": [asdict(delta) for delta in self.paired_deltas],
             "corpusCoverage": dict(self.corpus_coverage),
@@ -166,7 +213,9 @@ def _ratio(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 0.0
 
 
-def _cost_per_changed_kloc(cost: float, changed_lines: int) -> float:
+def _cost_per_changed_kloc(cost: float | None, changed_lines: int) -> float | None:
+    if cost is None:
+        return None
     return round((cost * 1000) / changed_lines, 8) if changed_lines else 0.0
 
 
@@ -185,12 +234,16 @@ def _aggregate(mode: str, cases: Iterable[CaseResult]) -> ModeMetrics:
     terminal = sum(case.terminal_hunks for case in values)
     reviewable = sum(case.reviewable_hunks for case in values)
     changed_lines = sum(case.changed_lines for case in values)
-    cost = round(sum(case.cost for case in values), 8)
+    cost = _complete_sum(case.cost for case in values)
+    cost = round(cost, 8) if cost is not None else None
     case_costs_per_kloc = [
         _cost_per_changed_kloc(case.cost, case.changed_lines)
         for case in values
-        if case.changed_lines
+        if case.changed_lines and case.cost is not None
     ]
+    times = [case.wall_time_seconds for case in values if case.wall_time_seconds is not None]
+    cost_complete = all(case.cost is not None for case in values)
+    time_complete = len(times) == len(values)
     return ModeMetrics(
         mode=mode,
         cases=len(values),
@@ -200,21 +253,30 @@ def _aggregate(mode: str, cases: Iterable[CaseResult]) -> ModeMetrics:
         abstentions=sum(len(case.abstained) for case in values),
         precision=_ratio(true_positives, true_positives + false_positives),
         recall=_ratio(true_positives, true_positives + false_negatives),
+        f1=_ratio(2 * true_positives, 2 * true_positives + false_positives + false_negatives),
+        f2=_ratio(5 * true_positives, 5 * true_positives + false_positives + 4 * false_negatives),
         coverage=_ratio(terminal, reviewable),
         changed_lines=changed_lines,
-        model_calls=sum(case.model_calls for case in values),
-        input_tokens=sum(case.input_tokens for case in values),
-        output_tokens=sum(case.output_tokens for case in values),
+        model_calls=_complete_sum(case.model_calls for case in values),
+        input_tokens=_complete_sum(case.input_tokens for case in values),
+        output_tokens=_complete_sum(case.output_tokens for case in values),
         cost=cost,
         cost_per_changed_kloc=_cost_per_changed_kloc(cost, changed_lines),
         median_cost_per_changed_kloc=round(
             median(case_costs_per_kloc) if case_costs_per_kloc else 0.0,
             8,
-        ),
+        ) if cost_complete else None,
         p95_cost_per_changed_kloc=round(
             _percentile_95(case_costs_per_kloc),
             8,
-        ),
+        ) if cost_complete else None,
+        completion_counts={status: sum(case.completion_status == status for case in values)
+                           for status in ("complete", "partial", "failed", "missing", "unknown")},
+        usage_known_cases={name: sum(getattr(case, name) is not None for case in values)
+                           for name in ("model_calls", "input_tokens", "output_tokens", "cost", "wall_time_seconds")},
+        wall_time_seconds=sum(times) if time_complete else None,
+        median_wall_time_seconds=median(times) if time_complete and times else None,
+        p95_wall_time_seconds=_percentile_95(times) if time_complete and times else None,
     )
 
 
@@ -284,6 +346,8 @@ def evaluate_dataset(payload: Mapping[str, Any]) -> EvaluationReport:
                 raise ValueError(f"mode {mode!r} changes languages for case {case_id!r}")
             if case.frameworks != reference.frameworks:
                 raise ValueError(f"mode {mode!r} changes frameworks for case {case_id!r}")
+            if case.provenance != reference.provenance:
+                raise ValueError(f"mode {mode!r} changes provenance for case {case_id!r}")
 
     metrics = tuple(_aggregate(mode, grouped[mode]) for mode in sorted(grouped))
     by_mode = {item.mode: item for item in metrics}
@@ -294,25 +358,16 @@ def evaluate_dataset(payload: Mapping[str, Any]) -> EvaluationReport:
             baseline=baseline,
             precision=by_mode[mode].precision - base.precision,
             recall=by_mode[mode].recall - base.recall,
-            model_calls=by_mode[mode].model_calls - base.model_calls,
-            input_tokens=by_mode[mode].input_tokens - base.input_tokens,
-            output_tokens=by_mode[mode].output_tokens - base.output_tokens,
-            cost=round(by_mode[mode].cost - base.cost, 8),
-            cost_per_changed_kloc=round(
-                by_mode[mode].cost_per_changed_kloc
-                - base.cost_per_changed_kloc,
-                8,
-            ),
-            median_cost_per_changed_kloc=round(
-                by_mode[mode].median_cost_per_changed_kloc
-                - base.median_cost_per_changed_kloc,
-                8,
-            ),
-            p95_cost_per_changed_kloc=round(
-                by_mode[mode].p95_cost_per_changed_kloc
-                - base.p95_cost_per_changed_kloc,
-                8,
-            ),
+            f1=by_mode[mode].f1 - base.f1,
+            f2=by_mode[mode].f2 - base.f2,
+            model_calls=_difference(by_mode[mode].model_calls, base.model_calls),
+            input_tokens=_difference(by_mode[mode].input_tokens, base.input_tokens),
+            output_tokens=_difference(by_mode[mode].output_tokens, base.output_tokens),
+            cost=_difference(by_mode[mode].cost, base.cost),
+            cost_per_changed_kloc=_difference(by_mode[mode].cost_per_changed_kloc, base.cost_per_changed_kloc),
+            median_cost_per_changed_kloc=_difference(by_mode[mode].median_cost_per_changed_kloc, base.median_cost_per_changed_kloc),
+            p95_cost_per_changed_kloc=_difference(by_mode[mode].p95_cost_per_changed_kloc, base.p95_cost_per_changed_kloc),
+            wall_time_seconds=_difference(by_mode[mode].wall_time_seconds, base.wall_time_seconds),
         )
         for mode in sorted(grouped)
         if mode != baseline
@@ -330,6 +385,16 @@ def evaluate_dataset(payload: Mapping[str, Any]) -> EvaluationReport:
     })
     return EvaluationReport(
         baseline=baseline,
+        evidence={
+            "datasetSha256": hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
+            "allReviewsComplete": all(case.completion_status == "complete" for case in cases),
+            "completionPolicy": "All supplied cases contribute to TP/FP/FN; missing predictions count as misses. Failed, partial, missing and unknown jobs are reported separately and are not clean negatives.",
+            "zeroDenominatorPolicy": "Precision, recall, F1 and F2 are 0 when their denominator is 0.",
+            "provenanceCases": sum(bool(case.provenance) for case in baseline_cases),
+            "caseProvenance": {case.case_id: dict(case.provenance) for case in baseline_cases},
+            "scope": payload.get("scope", "adjudicated-input-reduction"),
+            "limitations": "Offline reduction of supplied labels, not independent adjudication. Declared provenance is paired but external artifacts are not verified. Missing usage stays null; no prices are estimated. No confidence intervals are computed.",
+        },
         modes=metrics,
         paired_deltas=deltas,
         corpus_coverage={

@@ -16,4 +16,3 @@ __all__ = [
     "is_code_file",
     "LANGUAGE_MAP"
 ]
-

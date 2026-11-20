@@ -4,7 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 /**
  * Hard, pre-analysis spending limits. Null values inherit from the parent
- * scope (project -> workspace -> deployment defaults).
+ * scope (project -> workspace -> deployment). Unset deployment limits are unbounded;
+ * downstream prompt batching still applies.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AnalysisLimitsConfig(

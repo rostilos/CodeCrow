@@ -381,7 +381,7 @@ end
     assert unknown.value.code == "rails-unknown-fact-kind"
 
 
-def test_rails_direct_indexing_and_review_contributions_are_bounded():
+def test_rails_direct_indexing_and_review_preserve_every_record():
     routes = "\n".join(
         f'  get "item-{index}", to: "items#show"'
         for index in range(300)
@@ -390,8 +390,14 @@ def test_rails_direct_indexing_and_review_contributions_are_bounded():
         "config/routes.rb",
         "Rails.application.routes.draw do\n" + routes + "\nend\n",
     )
-    review = _plugin().review(tuple(f"app/models/model_{index}.rb" for index in range(100)))
+    review_paths = tuple(
+        f"app/models/model_{index:03d}.rb" for index in range(100)
+    )
+    review = _plugin().review(review_paths)
 
-    assert len(facts) == 160
+    assert len(facts) == 300
     assert {fact.kind for fact in facts} == {"rails-route"}
-    assert len(review.value.evidence_requests) == 40
+    assert any(fact.target == "GET /item-299" for fact in facts)
+    assert tuple(
+        request.identifier for request in review.value.evidence_requests
+    ) == review_paths

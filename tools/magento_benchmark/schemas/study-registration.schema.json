@@ -1,0 +1,428 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "study-registration.schema.json",
+  "title": "CodeCrow Magento 2 preregistered study",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "studyId",
+    "registeredAt",
+    "analysisPlans",
+    "judgePlans",
+    "endpoints",
+    "bootstrap",
+    "executionPolicy",
+    "comparisonControls",
+    "postFixPlan",
+    "judgeEvaluationPlan",
+    "allowedClaims",
+    "prohibitedClaims",
+    "executionCorpusDigest",
+    "corpus",
+    "sealedCommitment",
+    "registrationDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "codecrow-magento2-study-registration"
+    },
+    "studyId": {
+      "$ref": "#/$defs/safeId"
+    },
+    "registeredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executionCorpusDigest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "analysisPlans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/analysisPlan"
+      }
+    },
+    "judgePlans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/judgePlan"
+      }
+    },
+    "endpoints": {
+      "type": "object"
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "iterations",
+        "seed",
+        "confidenceLevel"
+      ],
+      "properties": {
+        "method": {
+          "const": "paired_pull_request_cluster_percentile"
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 10000
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confidenceLevel": {
+          "const": 0.95
+        }
+      }
+    },
+    "executionPolicy": {
+      "type": "object"
+    },
+    "comparisonControls": {
+      "type": "array",
+      "minItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "postFixPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "snapshot",
+        "endpoint",
+        "sameBaseAndControls",
+        "executionArtifactRequired",
+        "analysisBeforeUnseal",
+        "judgingAfterUnseal",
+        "scope",
+        "outcomeDenominator",
+        "analysisPairs",
+        "judgmentPairs",
+        "promptVersion",
+        "promptDigest"
+      ],
+      "properties": {
+        "required": {
+          "const": true
+        },
+        "snapshot": {
+          "const": "verified_F"
+        },
+        "endpoint": {
+          "const": "per_gold_same_root_cause_disappearance"
+        },
+        "sameBaseAndControls": {
+          "const": true
+        },
+        "executionArtifactRequired": {
+          "const": true
+        },
+        "analysisBeforeUnseal": {
+          "const": true
+        },
+        "judgingAfterUnseal": {
+          "const": true
+        },
+        "scope": {
+          "const": "all_registered_cases_and_primary_matched_gold"
+        },
+        "outcomeDenominator": {
+          "const": "primary_H_true_positive_gold_only"
+        },
+        "analysisPairs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/postFixAnalysisPair"
+          }
+        },
+        "judgmentPairs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/postFixJudgmentPair"
+          }
+        },
+        "promptVersion": {
+          "const": "magento2-verified-f-root-cause-control-2026-07-29"
+        },
+        "promptDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "judgeEvaluationPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "caseIds",
+        "subjectPolicy",
+        "minimumIndependentRaters",
+        "agreementMetric",
+        "minimumAgreement",
+        "disagreementResolution",
+        "modelIdentityBlinded"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "development_calibration",
+            "blinded_human_audit"
+          ]
+        },
+        "caseIds": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "subjectPolicy": {
+          "const": "all_pair_and_novel_decisions_for_every_planned_judgment_and_case"
+        },
+        "minimumIndependentRaters": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "agreementMetric": {
+          "const": "percent_pairwise_agreement"
+        },
+        "minimumAgreement": {
+          "type": "number",
+          "minimum": 0.7,
+          "maximum": 1
+        },
+        "disagreementResolution": {
+          "const": "independent_adjudicator"
+        },
+        "modelIdentityBlinded": {
+          "const": true
+        }
+      }
+    },
+    "allowedClaims": {
+      "$ref": "#/$defs/textList"
+    },
+    "prohibitedClaims": {
+      "$ref": "#/$defs/textList"
+    },
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusId",
+        "corpusDigest",
+        "caseCount",
+        "partitionCounts",
+        "partitionPolicy"
+      ],
+      "properties": {
+        "corpusId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "corpusDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "caseCount": {
+          "const": 50
+        },
+        "partitionCounts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "sealed"
+          ],
+          "properties": {
+            "development": {
+              "const": 30
+            },
+            "sealed": {
+              "const": 20
+            }
+          }
+        },
+        "partitionPolicy": {
+          "const": "deterministic_label_blind_stratified_by_size_band"
+        }
+      }
+    },
+    "sealedCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "registrationDigest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "textList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "analysisPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "model",
+        "provider",
+        "config",
+        "configDigest"
+      ],
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config": {
+          "type": "object"
+        },
+        "configDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "postFixAnalysisPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primaryAnalysisRunId",
+        "postFixAnalysisRunId"
+      ],
+      "properties": {
+        "primaryAnalysisRunId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "postFixAnalysisRunId": {
+          "$ref": "#/$defs/safeId"
+        }
+      }
+    },
+    "postFixJudgmentPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primaryJudgmentId",
+        "primaryAnalysisRunId",
+        "postFixAnalysisRunId",
+        "postFixJudgmentId",
+        "expectedResponseModel",
+        "promptVersion",
+        "promptDigest"
+      ],
+      "properties": {
+        "primaryJudgmentId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "primaryAnalysisRunId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "postFixAnalysisRunId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "postFixJudgmentId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "expectedResponseModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "promptVersion": {
+          "const": "magento2-verified-f-root-cause-control-2026-07-29"
+        },
+        "promptDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "judgePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "judgmentId",
+        "analysisRunId",
+        "model",
+        "expectedResponseModel",
+        "promptVersion",
+        "promptDigest",
+        "config",
+        "configDigest"
+      ],
+      "properties": {
+        "judgmentId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "analysisRunId": {
+          "$ref": "#/$defs/safeId"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expectedResponseModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "promptVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "promptDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "config": {
+          "type": "object"
+        },
+        "configDigest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

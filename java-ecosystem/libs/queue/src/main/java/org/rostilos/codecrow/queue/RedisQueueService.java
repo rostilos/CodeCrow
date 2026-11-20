@@ -9,6 +9,9 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class RedisQueueService {
 
+    public static final String JOB_OWNER_KEY_PREFIX = "codecrow:inference:owner:";
+    public static final long JOB_OWNER_TTL_SECONDS = 60;
+
     private final StringRedisTemplate redisTemplate;
 
     public RedisQueueService(@Qualifier("queueRedisTemplate") StringRedisTemplate redisTemplate) {
@@ -41,5 +44,13 @@ public class RedisQueueService {
 
     public void deleteKey(String key) {
         redisTemplate.delete(key);
+    }
+
+    public void startJobLease(String key) {
+        redisTemplate.opsForValue().set(key, "active", JOB_OWNER_TTL_SECONDS, TimeUnit.SECONDS);
+    }
+
+    public boolean renewJobLease(String key) {
+        return Boolean.TRUE.equals(redisTemplate.expire(key, JOB_OWNER_TTL_SECONDS, TimeUnit.SECONDS));
     }
 }

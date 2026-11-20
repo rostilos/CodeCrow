@@ -41,12 +41,19 @@ async def test_qa_doc_with_all_fields(client, auth_headers):
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_qa_doc_service_error(client, auth_headers):
-    """Service raises → exception propagates (no try/except in endpoint)."""
+    """Service failures return diagnostic metadata without exposing provider text."""
     mock_svc = AsyncMock()
     mock_svc.generate = AsyncMock(side_effect=Exception("LLM unavailable"))
     with patch("api.routers.qa_documentation.QaDocumentationService", return_value=mock_svc):
-        with pytest.raises(Exception, match="LLM unavailable"):
-            await client.post("/qa-documentation", json=_full_qa_payload(), headers=auth_headers)
+        response = await client.post("/qa-documentation", json=_full_qa_payload(), headers=auth_headers)
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error"] == "qa_generation_failed"
+    assert detail["error_id"]
+    assert detail["error_type"] == "Exception"
+    assert detail["upstream_status"] is None
+    assert "LLM unavailable" not in response.text
+    mock_svc.generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio(loop_scope="function")

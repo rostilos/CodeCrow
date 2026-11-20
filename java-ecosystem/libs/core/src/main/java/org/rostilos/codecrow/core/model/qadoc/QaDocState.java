@@ -14,8 +14,8 @@ import java.util.stream.Collectors;
  * <p>
  * Replaces the insecure Jira-comment-marker–based tracking with a
  * server-side record that stores the last analyzed commit hash and the
- * set of documented PR numbers. This enables secure delta-diff computation
- * for same-PR re-runs without trusting externally-editable Jira comments.
+ * set of documented PR numbers. Per-PR document commits provide delta baselines;
+ * task-level state records successful handoff without trusting editable Jira comments.
  */
 @Entity
 @Table(
@@ -50,7 +50,7 @@ public class QaDocState {
 
     /**
      * The commit hash from the last successful QA doc generation.
-     * Used to compute delta diffs for same-PR re-runs.
+     * Task-level handoff metadata; delta baselines come from each PR document.
      */
     @Column(name = "last_commit_hash", length = 40)
     private String lastCommitHash;

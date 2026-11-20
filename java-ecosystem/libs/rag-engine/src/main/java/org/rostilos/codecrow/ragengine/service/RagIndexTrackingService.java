@@ -59,54 +59,11 @@ public class RagIndexTrackingService {
             status.setStatus(RagIndexingStatus.INDEXING);
             status.setIndexedBranch(branchName);
             status.setIndexedCommitHash(commitHash);
-            status.setCollectionName(generateCollectionName(project));
             status.setActiveJobId(activeJobId);
         }
 
         status = ragIndexStatusRepository.save(status);
         log.info("Marked RAG indexing as STARTED for project {} (branch: {})", project.getName(), branchName);
-        return status;
-    }
-
-    @Transactional
-    public RagIndexStatus markIndexingCompleted(Project project, String branchName, String commitHash,
-            Integer filesIndexed, Integer chunkCount) {
-        return markIndexingCompleted(
-                project, branchName, commitHash, filesIndexed, chunkCount, null);
-    }
-
-    @Transactional
-    public RagIndexStatus markIndexingCompleted(
-            Project project,
-            String branchName,
-            String commitHash,
-            Integer filesIndexed,
-            Integer chunkCount,
-            Long expectedActiveJobId) {
-        RagIndexStatus status = ragIndexStatusRepository.findByProjectIdForUpdate(project.getId())
-                .orElseThrow(
-                        () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
-
-        if (!ownsStatus(status, expectedActiveJobId, "complete full indexing")) {
-            return status;
-        }
-
-        status.setStatus(RagIndexingStatus.INDEXED);
-        status.setIndexedBranch(branchName);
-        status.setIndexedCommitHash(commitHash);
-        status.setTotalFilesIndexed(filesIndexed);
-        if (chunkCount != null) {
-            status.setChunkCount(chunkCount);
-        }
-        status.setLastIndexedAt(OffsetDateTime.now());
-        status.setErrorMessage(null);
-        status.setActiveJobId(null);
-        // Reset failed incremental count on successful full index
-        status.resetFailedIncrementalCount();
-
-        status = ragIndexStatusRepository.save(status);
-        log.info("Marked RAG indexing as COMPLETED for project {} ({} files, {} chunks)", project.getName(),
-                filesIndexed, chunkCount);
         return status;
     }
 
@@ -139,7 +96,6 @@ public class RagIndexTrackingService {
             status.setProjectName(project.getName());
             status.setStatus(RagIndexingStatus.FAILED);
             status.setErrorMessage(errorMessage);
-            status.setCollectionName(generateCollectionName(project));
             status.setActiveJobId(null);
         }
 
@@ -149,8 +105,8 @@ public class RagIndexTrackingService {
     }
 
     /**
-     * Refresh the observable activity timestamp for a live full or incremental
-     * index without changing its terminal state or published index metadata.
+     * Refresh the observable activity timestamp for a live repository-index
+     * build without changing its terminal state or published index metadata.
      *
      * @return {@code true} when a live status was refreshed, otherwise
      *         {@code false} when the record is absent or already terminal
@@ -264,7 +220,6 @@ public class RagIndexTrackingService {
             status.setProject(project);
             status.setWorkspaceName(project.getWorkspace().getName());
             status.setProjectName(project.getName());
-            status.setCollectionName(generateCollectionName(project));
         }
 
         status.setStatus(RagIndexingStatus.INDEXED);
@@ -279,7 +234,6 @@ public class RagIndexTrackingService {
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
         status.setActiveJobId(null);
-        status.resetFailedIncrementalCount();
         ragIndexStatusRepository.save(status);
         return true;
     }
@@ -305,7 +259,6 @@ public class RagIndexTrackingService {
                     created.setProject(project);
                     created.setWorkspaceName(project.getWorkspace().getName());
                     created.setProjectName(project.getName());
-                    created.setCollectionName(generateCollectionName(project));
                     return created;
                 });
         status.setStatus(RagIndexingStatus.INDEXED);
@@ -320,115 +273,22 @@ public class RagIndexTrackingService {
         if (activatedAt != null) {
             status.setLastIndexedAt(activatedAt);
         } else if (status.getLastIndexedAt() == null) {
-            // Legacy generations may predate activation timestamps. Preserve
-            // an existing completed checkpoint; only initialize a missing one.
+            // Preserve an existing completed checkpoint; only initialize a
+            // missing activation timestamp.
             status.setLastIndexedAt(OffsetDateTime.now());
         }
         status.setErrorMessage(null);
         status.setActiveJobId(null);
-        status.resetFailedIncrementalCount();
         ragIndexStatusRepository.save(status);
     }
 
-    /**
-     * Marks an incremental update as completed.
-     * Updates totalFilesIndexed by adding addedFiles count and subtracting
-     * deletedFiles count.
-     */
     @Transactional
-    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
-            Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount) {
-        return markUpdatingCompleted(
-                project, branchName, commitHash, addedFilesCount, deletedFilesCount,
-                chunkCount, true, null);
+    public RagIndexStatus markGenerationRefreshFailed(Project project, String errorMessage) {
+        return markGenerationRefreshFailed(project, errorMessage, null);
     }
 
     @Transactional
-    public RagIndexStatus markUpdatingCompleted(
-            Project project,
-            String branchName,
-            String commitHash,
-            Integer addedFilesCount,
-            Integer deletedFilesCount,
-            Integer chunkCount,
-            Long expectedActiveJobId) {
-        return markUpdatingCompleted(
-                project, branchName, commitHash, addedFilesCount, deletedFilesCount,
-                chunkCount, true, expectedActiveJobId);
-    }
-
-    /**
-     * Completes an update while advancing the project-level checkpoint only
-     * for the configured base branch. Non-base branches have their own
-     * {@code RagBranchIndex} checkpoint.
-     */
-    @Transactional
-    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
-            Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount,
-            boolean advanceProjectCheckpoint) {
-        return markUpdatingCompleted(
-                project, branchName, commitHash, addedFilesCount, deletedFilesCount,
-                chunkCount, advanceProjectCheckpoint, null);
-    }
-
-    @Transactional
-    public RagIndexStatus markUpdatingCompleted(
-            Project project,
-            String branchName,
-            String commitHash,
-            Integer addedFilesCount,
-            Integer deletedFilesCount,
-            Integer chunkCount,
-            boolean advanceProjectCheckpoint,
-            Long expectedActiveJobId) {
-        RagIndexStatus status = ragIndexStatusRepository.findByProjectIdForUpdate(project.getId())
-                .orElseThrow(
-                        () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
-
-        if (!ownsStatus(status, expectedActiveJobId, "complete incremental indexing")) {
-            return status;
-        }
-
-        status.setStatus(RagIndexingStatus.INDEXED);
-        if (advanceProjectCheckpoint) {
-            status.setIndexedBranch(branchName);
-            status.setIndexedCommitHash(commitHash);
-        }
-
-        if (addedFilesCount != null && deletedFilesCount != null && status.getTotalFilesIndexed() != null) {
-            int newTotal = status.getTotalFilesIndexed() + addedFilesCount - deletedFilesCount;
-            status.setTotalFilesIndexed(Math.max(0, newTotal)); // ensure no negative count
-        }
-
-        if (chunkCount != null) {
-            status.setChunkCount(chunkCount);
-        }
-
-        status.setLastIndexedAt(OffsetDateTime.now());
-        status.setErrorMessage(null);
-        status.setActiveJobId(null);
-        // Reset failed incremental count on successful update
-        status.resetFailedIncrementalCount();
-
-        status = ragIndexStatusRepository.save(status);
-        log.info("Marked RAG updating as COMPLETED for project {} (added {}, deleted {}, chunks {}, "
-                        + "project checkpoint advanced={})",
-                project.getName(), addedFilesCount, deletedFilesCount, chunkCount,
-                advanceProjectCheckpoint);
-        return status;
-    }
-
-    /**
-     * Mark an incremental update as failed and increment the failure counter.
-     * This is used to track repeated failures and suggest full reindex.
-     */
-    @Transactional
-    public RagIndexStatus markIncrementalUpdateFailed(Project project, String errorMessage) {
-        return markIncrementalUpdateFailed(project, errorMessage, null);
-    }
-
-    @Transactional
-    public RagIndexStatus markIncrementalUpdateFailed(
+    public RagIndexStatus markGenerationRefreshFailed(
             Project project,
             String errorMessage,
             Long expectedActiveJobId) {
@@ -436,35 +296,20 @@ public class RagIndexTrackingService {
                 .orElseThrow(
                         () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
-        if (!ownsStatus(status, expectedActiveJobId, "fail incremental indexing")) {
+        if (!ownsStatus(status, expectedActiveJobId, "fail repository index refresh")) {
             return status;
         }
 
         // Restore the usable terminal state and retain the last completed
         // branch/commit checkpoint. The attempted commit is never published.
         status.setStatus(RagIndexingStatus.INDEXED);
-        status.setErrorMessage("Incremental update failed: " + errorMessage);
-        status.incrementFailedIncrementalCount();
+        status.setErrorMessage("Repository index refresh failed: " + errorMessage);
         status.setActiveJobId(null);
 
         status = ragIndexStatusRepository.save(status);
-        log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}",
-                project.getName(), status.getFailedIncrementalCount(), errorMessage);
+        log.warn("Repository index refresh failed for project {}; retaining the active generation: {}",
+                project.getName(), errorMessage);
         return status;
-    }
-
-    /**
-     * Quiet, owner-guarded repair used by the periodic legacy-job recovery
-     * scan. The scheduler owns degraded/recovered log transitions, preventing
-     * the same database outage from producing one warning per scan and job.
-     */
-    @Transactional
-    public boolean recoverAbandonedIncrementalUpdate(
-            Long projectId,
-            Long expectedActiveJobId,
-            String errorMessage) {
-        return ragIndexStatusRepository.recoverAbandonedIncrementalUpdate(
-                projectId, expectedActiveJobId, errorMessage) == 1;
     }
 
     @Transactional(readOnly = true)
@@ -478,12 +323,6 @@ public class RagIndexTrackingService {
         RagIndexStatus status = statusOpt.get();
         return status.getStatus() != RagIndexingStatus.INDEXING &&
                 status.getStatus() != RagIndexingStatus.UPDATING;
-    }
-
-    private String generateCollectionName(Project project) {
-        String workspace = project.getWorkspace().getName().replaceAll("[^a-zA-Z0-9_-]", "_");
-        String projectName = project.getName().replaceAll("[^a-zA-Z0-9_-]", "_");
-        return String.format("%s_%s", workspace, projectName).toLowerCase();
     }
 
     private boolean ownsStatus(

@@ -1,0 +1,965 @@
+{
+  "provenance": {
+    "source": "Actual Grafana PR79265 MEDIUM2 initial getMinimalReviewContext response, reconstructed from pinned immutable graph before response packing.",
+    "capture_sha256": "0cd3e7f4d8564c63a5a3800173a91c52c75aa9b2982669a1ebe1004e4533865f",
+    "generation_manifest": "5e9841e45ca4b46d96646b94a52cba0126b8e44c3440d24334df6f0ac3faab79",
+    "token_budget": 5000,
+    "recorded_failure": "Navigation reduction fit 19998 bytes; final coverage fields added50 bytes, triggering fallback to80 source characters."
+  },
+  "response": {
+    "status": "ready",
+    "operation": "minimal_review_context",
+    "snapshot": {
+      "kind": "proposed_tree",
+      "branch": "main",
+      "revision": "bbd8c507cdf56f6b884373809e0b24abd4a2353d",
+      "generationManifestSha256": "5e9841e45ca4b46d96646b94a52cba0126b8e44c3440d24334df6f0ac3faab79",
+      "baseRevision": "50f4e78a39914711d0d231a501ba215becf17ebc",
+      "baseCollectionTarget": "cc_http_g_e8cd944401d645889086a1a735307747",
+      "baseGenerationManifestSha256": "3f2b046f16cbd5f01fb9b0cc978e70cb62722f3798b27aabc3d639cfe101995f",
+      "sourceRevision": "bbd8c507cdf56f6b884373809e0b24abd4a2353d",
+      "targetSourceTreeSha256": "f750349bc099124d6f6560d8369dd7d70b7df162da41d5ee83bef20277224bf5",
+      "overlaySha256": "88604e35c6e3c78e6e42a217b44d7e1766634352272a1eaf0c12fc636e9682e5"
+    },
+    "question": "Review the post-change ProvideAnonymousDeviceService wiring and TagDevice error propagation for concrete caller contract, service lifecycle, and failure-state defects. Identify exact callers/tests and relevant source windows.",
+    "focusPaths": [
+      "pkg/services/anonymous/anonimpl/impl.go"
+    ],
+    "focusSymbols": [
+      "ProvideAnonymousDeviceService",
+      "AnonDeviceService.TagDevice",
+      "AnonDeviceService.tagDeviceUI"
+    ],
+    "summary": "20 structural unit(s) and 20 relation(s) selected for the review task.",
+    "nodes": [
+      {
+        "unitId": "unit:440bdf2a8eb52c9fa98cd707d7b884fa414fff95f6e5947f343aa0798fa699bd",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "file",
+        "name": "impl.go",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go",
+        "startLine": 1,
+        "endLine": 183,
+        "language": "go",
+        "recordType": "structural_file"
+      },
+      {
+        "unitId": "unit:78c0c9a8985ff10c3c12b74b80e58b750d508d4a083a4d5b572e810641d2e2e6",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "simplified",
+        "name": "impl.go",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:1-183:impl.go",
+        "startLine": 1,
+        "endLine": 183,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:90532fed14c743744b365d5f3b6d00d2861737e8b19ed7a77dbdb200bb58f60d",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "const",
+        "name": "impl.go",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:25-25:impl.go",
+        "startLine": 25,
+        "endLine": 25,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:90532fed14c743744b365d5f3b6d00d2861737e8b19ed7a77dbdb200bb58f60d"
+      },
+      {
+        "unitId": "unit:7737bbb4ddf7d29adc3a0bfd33615aaa2146198e339897ea03521dc4b931bd10",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "const",
+        "name": "impl.go",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:26-26:impl.go",
+        "startLine": 26,
+        "endLine": 26,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:7737bbb4ddf7d29adc3a0bfd33615aaa2146198e339897ea03521dc4b931bd10"
+      },
+      {
+        "unitId": "unit:33ad862c766eb239ea2f693fd76148c9b02f03cd9b8bba69747225382905eb3e",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "const",
+        "name": "impl.go",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:27-27:impl.go",
+        "startLine": 27,
+        "endLine": 27,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:33ad862c766eb239ea2f693fd76148c9b02f03cd9b8bba69747225382905eb3e"
+      },
+      {
+        "unitId": "unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "type",
+        "name": "AnonDeviceService",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:29-34:AnonDeviceService",
+        "startLine": 29,
+        "endLine": 34,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189"
+      },
+      {
+        "unitId": "unit:9292935782820097acbd648b0f1edec6814479c79071780336ed79d294e841a8",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "function",
+        "name": "ProvideAnonymousDeviceService",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:36-65:ProvideAnonymousDeviceService",
+        "startLine": 36,
+        "endLine": 65,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:6032aeaef118c89a2a9eba8faa2d8a8d9a58a50f309a18103bf091b8a2f0010c",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "usageStatFn",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:67-78:usageStatFn",
+        "startLine": 67,
+        "endLine": 78,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:5e3c47157e89ee074e84087fae9661b085a5556185b67a9f80d437bb8a020183",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "tagDeviceUI",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:80-98:tagDeviceUI",
+        "startLine": 80,
+        "endLine": 98,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:f4e42df271d2acb09edd38c60d97b435c6944206a67e8e5434da8985b46bb779",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "untagDevice",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:100-115:untagDevice",
+        "startLine": 100,
+        "endLine": 115,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:9cc1e01219379ff30dc322636282f52a7c9ad2e8f31c18261a71d33e9eb25f27",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "TagDevice",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:118-151:TagDevice",
+        "startLine": 118,
+        "endLine": 151,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:2e342f346c4f3366add1f6e04515f5f59f43eee8bcd722c715641c3f966c09bd",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "ListDevices",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:154-156:ListDevices",
+        "startLine": 154,
+        "endLine": 156,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:956da726af8e75fb9d2f88f6b5b38806630bd239cbcd08c35b4d5d013aa8ce6c",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "CountDevices",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:159-161:CountDevices",
+        "startLine": 159,
+        "endLine": 161,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:ea4aa2cd933e7306da5bfcf674270a084e6a35c66dcc06e0b46d14b5ccbbc77b",
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "kind": "method",
+        "name": "Run",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl.go:163-182:Run",
+        "startLine": 163,
+        "endLine": 182,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:112317110d201ed7dd83ebf6badd5b49846c4a2fb9eb3497a3fdbcc9a8e8f75f",
+        "path": "pkg/services/anonymous/anonimpl/impl_test.go",
+        "kind": "function",
+        "name": "TestIntegrationAnonDeviceService_localCacheSafety",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl_test.go:149-179:TestIntegrationAnonDeviceService_localCacheSafety",
+        "startLine": 149,
+        "endLine": 179,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:ddcc7ba998f01bfab90e5249ed6b6415ebcb831bae9588104b36d0464365ed59",
+        "path": "pkg/services/anonymous/anonimpl/impl_test.go",
+        "kind": "function",
+        "name": "TestIntegrationDeviceService_tag",
+        "qualifiedName": "pkg/services/anonymous/anonimpl/impl_test.go:23-146:TestIntegrationDeviceService_tag",
+        "startLine": 23,
+        "endLine": 146,
+        "language": "go",
+        "recordType": "source_unit"
+      },
+      {
+        "unitId": "unit:fda738be31077c21882cc98a38eae7b7ae93c4422b3b89f7e8961a76109fde07",
+        "path": "packages/grafana-schema/src/raw/dashboard/x/dashboard_types.gen.ts",
+        "kind": "interface",
+        "name": "GridPos",
+        "qualifiedName": "packages/grafana-schema/src/raw/dashboard/x/dashboard_types.gen.ts:401-422:GridPos",
+        "startLine": 401,
+        "endLine": 422,
+        "language": "typescript",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:fda738be31077c21882cc98a38eae7b7ae93c4422b3b89f7e8961a76109fde07"
+      },
+      {
+        "unitId": "unit:93fba83fd21ffea465c6eff00d9143500dc6b052f693355c98cdd9bf3d56f602",
+        "path": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+        "kind": "type",
+        "name": "GridPos",
+        "qualifiedName": "pkg/kinds/dashboard/dashboard_spec_gen.go:447-462:GridPos",
+        "startLine": 447,
+        "endLine": 462,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:93fba83fd21ffea465c6eff00d9143500dc6b052f693355c98cdd9bf3d56f602"
+      },
+      {
+        "unitId": "unit:1c331762ba2e8ebd17b9801ce05dd305129b578bc91c7d170fcd89ab5c687697",
+        "path": "pkg/services/authn/identity.go",
+        "kind": "type",
+        "name": "Identity",
+        "qualifiedName": "pkg/services/authn/identity.go:38-87:Identity",
+        "startLine": 38,
+        "endLine": 87,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:1c331762ba2e8ebd17b9801ce05dd305129b578bc91c7d170fcd89ab5c687697"
+      },
+      {
+        "unitId": "unit:777b60b99c2eccb435267cd8482462882f1c53a49974eccefe15659f63157efc",
+        "path": "pkg/services/auth/identity/requester.go",
+        "kind": "type",
+        "name": "Requester",
+        "qualifiedName": "pkg/services/auth/identity/requester.go:22-68:Requester",
+        "startLine": 22,
+        "endLine": 68,
+        "language": "go",
+        "recordType": "source_unit",
+        "sourceEvidenceId": "source:unit:777b60b99c2eccb435267cd8482462882f1c53a49974eccefe15659f63157efc"
+      }
+    ],
+    "edges": [
+      {
+        "evidenceId": "relation:4570fdc7d7f4d4043a6f304f23f0411a4fc5eb1d303d21768835098cb19acb23",
+        "kind": "go-package",
+        "source": "pkg/services/anonymous/anonimpl/impl.go",
+        "target": "anonimpl",
+        "sourceUnitId": "unit:440bdf2a8eb52c9fa98cd707d7b884fa414fff95f6e5947f343aa0798fa699bd",
+        "relation": "declares",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 1,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 0
+      },
+      {
+        "evidenceId": "relation:a30c1c5c7b8192e23e5d0b6a6cfed6ac06d759176c65b6f7a2f0cfd554e3e98c",
+        "kind": "go-import",
+        "source": "anonimpl",
+        "target": "context",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 4,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 0
+      },
+      {
+        "evidenceId": "relation:71f63e7d6258d3a412531d5edb5f9b8ccba2d3365f137f01925fe4c3b8c9fe4c",
+        "kind": "go-import",
+        "source": "anonimpl",
+        "target": "net/http",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 5,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 0
+      },
+      {
+        "evidenceId": "relation:b5fd64fc9568a32ae3219b6e803323c331d41c2e6a0f5a2209d7c8b489f5a897",
+        "kind": "go-import",
+        "source": "anonimpl",
+        "target": "time",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 6,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 0
+      },
+      {
+        "evidenceId": "relation:cb15ddcb170cf70f347fcbd2a3db76c0aa15dcba0784fc11be2870a37083fbd7",
+        "kind": "go-import",
+        "source": "anonimpl",
+        "target": "github.com/grafana/grafana/pkg/api/routing",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 8,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 0
+      },
+      {
+        "evidenceId": "relation:6a47dbc95c720dc6aedcbdd58f0763288a37cd7650f87f93f1b306def536b4b9",
+        "kind": "go-import",
+        "source": "anonimpl",
+        "target": "github.com/grafana/grafana/pkg/infra/db",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 9,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 0
+      },
+      {
+        "evidenceId": "relation:4a8decaf6aede5cb16e9a4f65624962dbda5a35bb5efe6a9c91048c1c66479e9",
+        "kind": "CONTAINS",
+        "source": "pkg/services/anonymous/anonimpl/impl.go",
+        "target": "pkg/services/anonymous/anonimpl/impl.go:1",
+        "sourceUnitId": "unit:440bdf2a8eb52c9fa98cd707d7b884fa414fff95f6e5947f343aa0798fa699bd",
+        "targetUnitId": "unit:78c0c9a8985ff10c3c12b74b80e58b750d508d4a083a4d5b572e810641d2e2e6",
+        "relation": "contains",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 1,
+          "extractor": "structural-index",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:4c0e2a9e48ebf3ac44e0f1ddf662fdd957fc2ab91b9dac59bed4ee89470bbe3c",
+        "kind": "IMPORTS",
+        "source": "pkg/services/anonymous/anonimpl/impl.go",
+        "target": "import (\n\t\"context\"\n\t\"net/http\"\n\t\"time\"\n\n\t\"github.com/grafana/grafana/pkg/api/routing\"\n\t\"github.com/grafana/grafana/pkg/infra/db\"\n\t\"github.com/grafana/grafana/pkg/infra/localcache\"\n\t\"github.com/grafana/grafana/pkg/infra/log\"\n\t\"github.com/grafana/grafana/pkg/infra/network\"\n\t\"github.com/grafana/grafana/pkg/infra/serverlock\"\n\t\"github.com/grafana/grafana/pkg/infra/usagestats\"\n\t\"github.com/grafana/grafana/pkg/services/accesscontrol\"\n\t\"github.com/grafana/grafana/pkg/services/anonymous\"\n\t\"github.com/grafana/grafana/pkg/services/anonymous/anonimpl/anonstore\"\n\t\"github.com/grafana/grafana/pkg/services/anonymous/anonimpl/api\"\n\t\"github.com/grafana/grafana/pkg/services/authn\"\n\t\"github.com/grafana/grafana/pkg/services/org\"\n\t\"github.com/grafana/grafana/pkg/setting\"\n\t\"github.com/grafana/grafana/pkg/web\"\n)",
+        "sourceUnitId": "unit:440bdf2a8eb52c9fa98cd707d7b884fa414fff95f6e5947f343aa0798fa699bd",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl.go",
+          "line": 3,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl.go"
+        ],
+        "attributes": {
+          "endByte": 818,
+          "importScope": "file",
+          "startByte": 18
+        },
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:9c6b111820da2f5784d713a57a94a9392df5978dc2f9144843904ca02ffcaa21",
+        "kind": "REFERENCES",
+        "source": "ProvideBackgroundServiceRegistry",
+        "target": "AnonDeviceService",
+        "sourceUnitId": "unit:618a48c93eccf795b5e0cface180404a35bf1f98440e426fa8d3252645b7061d",
+        "targetUnitId": "unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189",
+        "relation": "references",
+        "origin": {
+          "path": "pkg/registry/backgroundsvcs/background_services.go",
+          "line": 47,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/registry/backgroundsvcs/background_services.go"
+        ],
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:67aebdcc4c0e600a9895b39dcd2f32816943b4bc3977597c18e5b951672631d4",
+        "kind": "IMPORTS",
+        "source": "pkg/services/anonymous/anonimpl/impl_test.go",
+        "target": "import (\n\t\"context\"\n\t\"net/http\"\n\t\"testing\"\n\t\"time\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n\n\t\"github.com/grafana/grafana/pkg/api/routing\"\n\t\"github.com/grafana/grafana/pkg/infra/db\"\n\t\"github.com/grafana/grafana/pkg/infra/usagestats\"\n\t\"github.com/grafana/grafana/pkg/services/accesscontrol/actest\"\n\t\"github.com/grafana/grafana/pkg/services/anonymous\"\n\t\"github.com/grafana/grafana/pkg/services/anonymous/anonimpl/anonstore\"\n\t\"github.com/grafana/grafana/pkg/services/authn/authntest\"\n\t\"github.com/grafana/grafana/pkg/services/org/orgtest\"\n\t\"github.com/grafana/grafana/pkg/setting\"\n)",
+        "sourceUnitId": "unit:05a4f023a3f76b4a37b0efd86f4798cce865c751d5b4f3367edc2ba5bd551f70",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl_test.go",
+          "line": 3,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl_test.go"
+        ],
+        "attributes": {
+          "endByte": 634,
+          "importScope": "file",
+          "startByte": 18
+        },
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:7b198d44d70de74ca3bb011c027c433a1c859b4e4b2708b47d91af92b2cd569e",
+        "kind": "REFERENCES",
+        "source": "GridPos",
+        "target": "GridPos",
+        "sourceUnitId": "unit:fda738be31077c21882cc98a38eae7b7ae93c4422b3b89f7e8961a76109fde07",
+        "relation": "references",
+        "origin": {
+          "path": "packages/grafana-schema/src/raw/dashboard/x/dashboard_types.gen.ts",
+          "line": 401,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "packages/grafana-schema/src/raw/dashboard/x/dashboard_types.gen.ts"
+        ],
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:9ab831b7526920c6f386683305785339bc368cf607c4f8a975600b0fa6384c47",
+        "kind": "IMPORTS",
+        "source": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+        "target": "import (\n\t\"time\"\n)",
+        "sourceUnitId": "unit:2fb0a2d1dda31a495200e7e0236837d622779e484746b5d51d93ed9ceb989352",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+          "line": 12,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/kinds/dashboard/dashboard_spec_gen.go"
+        ],
+        "attributes": {
+          "endByte": 232,
+          "importScope": "file",
+          "startByte": 214
+        },
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:31d1c3afc866294d7f55c56966dbe496dc0d2b3c1c139512e96b582fc3e7966f",
+        "kind": "IMPORTS",
+        "source": "pkg/services/authn/identity.go",
+        "target": "import (\n\t\"fmt\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n\n\t\"golang.org/x/oauth2\"\n\n\t\"github.com/grafana/grafana/pkg/models/roletype\"\n\t\"github.com/grafana/grafana/pkg/models/usertoken\"\n\t\"github.com/grafana/grafana/pkg/services/auth/identity\"\n\t\"github.com/grafana/grafana/pkg/services/login\"\n\t\"github.com/grafana/grafana/pkg/services/org\"\n\t\"github.com/grafana/grafana/pkg/services/user\"\n)",
+        "sourceUnitId": "unit:157cb478d5731b99d5a7fb01f50610c4cceddf80d6086ef1c737be156ef5c571",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/services/authn/identity.go",
+          "line": 3,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/services/authn/identity.go"
+        ],
+        "attributes": {
+          "endByte": 389,
+          "importScope": "file",
+          "startByte": 15
+        },
+        "depth": 1
+      },
+      {
+        "evidenceId": "relation:f186c8f26a1fde231af850095b643e6bfebe3ad1e62c446b04a94f909f56061b",
+        "kind": "IMPORTS",
+        "source": "pkg/registry/backgroundsvcs/background_services.go",
+        "target": "import (\n\t\"github.com/grafana/grafana/pkg/api\"\n\t\"github.com/grafana/grafana/pkg/infra/metrics\"\n\t\"github.com/grafana/grafana/pkg/infra/remotecache\"\n\t\"github.com/grafana/grafana/pkg/infra/tracing\"\n\tuss \"github.com/grafana/grafana/pkg/infra/usagestats/service\"\n\t\"github.com/grafana/grafana/pkg/infra/usagestats/statscollector\"\n\t\"github.com/grafana/grafana/pkg/registry\"\n\tapiregistry \"github.com/grafana/grafana/pkg/registry/apis\"\n\t\"github.com/grafana/grafana/pkg/services/alerting\"\n\t\"github.com/grafana/grafana/pkg/services/anonymous/anonimpl\"\n\t\"github.com/grafana/grafana/pkg/services/auth\"\n\t\"github.com/grafana/grafana/pkg/services/cleanup\"\n\t\"github.com/grafana/grafana/pkg/services/dashboardsnapshots\"\n\tgrafanaapiserver \"github.com/grafana/grafana/pkg/services/grafana-apiserver\"\n\t\"github.com/grafana/grafana/pkg/services/grpcserver\"\n\t\"github.com/grafana/grafana/pkg/services/guardian\"\n\tldapapi \"github.com/grafana/grafana/pkg/services/ldap/api\"\n\t\"github.com/grafana/grafana/pkg/services/live\"\n\t\"github.com/grafana/grafana/pkg/services/live/pushhttp\"\n\t\"github.com/grafana/grafana/pkg/services/loginattempt/loginattemptimpl\"\n\t\"github.com/grafana/grafana/pkg/services/ngalert\"\n\t\"github.com/grafana/grafana/pkg/services/notifications\"\n\tplugindashboardsservice \"github.com/grafana/grafana/pkg/services/plugindashboards/service\"\n\t\"github.com/grafana/grafana/pkg/services/pluginsintegration/angulardetectorsprovider\"\n\t\"github.com/grafana/grafana/pkg/services/pluginsintegration/keyretriever/dynamic\"\n\tpluginStore \"github.com/grafana/grafana/pkg/services/pluginsintegration/pluginstore\"\n\t\"github.com/grafana/grafana/pkg/services/provisioning\"\n\tpublicdashboardsmetric \"github.com/grafana/grafana/pkg/services/publicdashboards/metric\"\n\t\"github.com/grafana/grafana/pkg/services/rendering\"\n\t\"github.com/grafana/grafana/pkg/services/searchV2\"\n\tsecretsMigrations \"github.com/grafana/grafana/pkg/services/secrets/kvstore/migrations\"\n\tsecretsManager \"github.com/grafana/grafana/pkg/services/secrets/manager\"\n\t\"github.com/grafana/grafana/pkg/services/serviceaccounts\"\n\tsamanager \"github.com/grafana/grafana/pkg/services/serviceaccounts/manager\"\n\t\"github.com/grafana/grafana/pkg/services/ssosettings\"\n\t\"github.com/grafana/grafana/pkg/services/store\"\n\t\"github.com/grafana/grafana/pkg/services/store/entity\"\n\t\"github.com/grafana/grafana/pkg/services/store/sanitizer\"\n\t\"github.com/grafana/grafana/pkg/services/supportbundles/supportbundlesimpl\"\n\t\"github.com/grafana/grafana/pkg/services/team/teamapi\"\n\t\"github.com/grafana/grafana/pkg/services/updatechecker\"\n)",
+        "sourceUnitId": "unit:b93f753355366cb51e7fb6f8826ba5f95e53cb9e606a63deb0b07221c6943c6e",
+        "relation": "imports",
+        "origin": {
+          "path": "pkg/registry/backgroundsvcs/background_services.go",
+          "line": 3,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/registry/backgroundsvcs/background_services.go"
+        ],
+        "attributes": {
+          "endByte": 2563,
+          "importScope": "file",
+          "startByte": 24
+        },
+        "depth": 2
+      },
+      {
+        "evidenceId": "relation:02875c30cae08a6264dadbc6c1fb186798793d812bcf85d9123d4f0dd45a2d1c",
+        "kind": "REFERENCES",
+        "source": "ProvideBackgroundServiceRegistry",
+        "target": "ServiceAccountsService",
+        "sourceUnitId": "unit:618a48c93eccf795b5e0cface180404a35bf1f98440e426fa8d3252645b7061d",
+        "targetUnitId": "unit:56debe694d835cb61cace04512a7202ad6c941dc0b6574b9a1c9fae9de14aac0",
+        "relation": "references",
+        "origin": {
+          "path": "pkg/registry/backgroundsvcs/background_services.go",
+          "line": 47,
+          "extractor": "tree-sitter",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/registry/backgroundsvcs/background_services.go"
+        ],
+        "depth": 2
+      },
+      {
+        "evidenceId": "relation:2f75fb87ea907f674032c183545f094a834b2b0736c76f6fc042b71751b532de",
+        "kind": "CONTAINS",
+        "source": "pkg/services/anonymous/anonimpl/impl_test.go",
+        "target": "pkg/services/anonymous/anonimpl/impl_test.go:1",
+        "sourceUnitId": "unit:05a4f023a3f76b4a37b0efd86f4798cce865c751d5b4f3367edc2ba5bd551f70",
+        "targetUnitId": "unit:259b5a96b2a8285ed6d9d855be8b13ca6764ad278b3d17f598a741be4829760b",
+        "relation": "contains",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl_test.go",
+          "line": 1,
+          "extractor": "structural-index",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl_test.go"
+        ],
+        "depth": 2
+      },
+      {
+        "evidenceId": "relation:7bea0161a52439d20574b9467844039a94018d0af5d770172d9acde2ea9a1ffe",
+        "kind": "go-package",
+        "source": "pkg/services/anonymous/anonimpl/impl_test.go",
+        "target": "anonimpl",
+        "sourceUnitId": "unit:05a4f023a3f76b4a37b0efd86f4798cce865c751d5b4f3367edc2ba5bd551f70",
+        "relation": "declares",
+        "origin": {
+          "path": "pkg/services/anonymous/anonimpl/impl_test.go",
+          "line": 1,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/anonymous/anonimpl/impl_test.go"
+        ],
+        "depth": 2
+      },
+      {
+        "evidenceId": "relation:beba742df9b56c107cc40300758c748243be8c0f081288b0157d47f5e320d4e3",
+        "kind": "CONTAINS",
+        "source": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+        "target": "pkg/kinds/dashboard/dashboard_spec_gen.go:1",
+        "sourceUnitId": "unit:2fb0a2d1dda31a495200e7e0236837d622779e484746b5d51d93ed9ceb989352",
+        "targetUnitId": "unit:a7413aefcd79401b7ef56237cf039b709699101037bfe4f417bc9b6e42d15bf5",
+        "relation": "contains",
+        "origin": {
+          "path": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+          "line": 1,
+          "extractor": "structural-index",
+          "plugin": null,
+          "plugins": []
+        },
+        "relatedPaths": [
+          "pkg/kinds/dashboard/dashboard_spec_gen.go"
+        ],
+        "depth": 2
+      },
+      {
+        "evidenceId": "relation:29e3372fe4e6a095d05ed2f02be0455c06e7eb1da7b574abc3858634a0cb12bf",
+        "kind": "go-package",
+        "source": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+        "target": "dashboard",
+        "sourceUnitId": "unit:2fb0a2d1dda31a495200e7e0236837d622779e484746b5d51d93ed9ceb989352",
+        "relation": "declares",
+        "origin": {
+          "path": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+          "line": 10,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/kinds/dashboard/dashboard_spec_gen.go"
+        ],
+        "depth": 2
+      },
+      {
+        "evidenceId": "relation:56f5ed686ec37f206f3e84bc8c37b8a43be1fa9eafb343e128ff94657834e358",
+        "kind": "go-package",
+        "source": "pkg/services/authn/identity.go",
+        "target": "authn",
+        "sourceUnitId": "unit:157cb478d5731b99d5a7fb01f50610c4cceddf80d6086ef1c737be156ef5c571",
+        "relation": "declares",
+        "origin": {
+          "path": "pkg/services/authn/identity.go",
+          "line": 1,
+          "extractor": "plugin",
+          "plugin": "go",
+          "plugins": [
+            "go"
+          ]
+        },
+        "relatedPaths": [
+          "pkg/services/authn/identity.go"
+        ],
+        "depth": 2
+      }
+    ],
+    "sourceWindows": [
+      {
+        "evidenceId": "source:unit:fda738be31077c21882cc98a38eae7b7ae93c4422b3b89f7e8961a76109fde07",
+        "unitId": "unit:fda738be31077c21882cc98a38eae7b7ae93c4422b3b89f7e8961a76109fde07",
+        "selectedUnitIds": [
+          "unit:fda738be31077c21882cc98a38eae7b7ae93c4422b3b89f7e8961a76109fde07"
+        ],
+        "path": "packages/grafana-schema/src/raw/dashboard/x/dashboard_types.gen.ts",
+        "startLine": 401,
+        "endLine": 422,
+        "content": "interface GridPos {\n  /**\n   * Panel height. The height is the number of rows from the top edge of the panel.\n   */\n  h: number;\n  /**\n   * Whether the panel is fixed within the grid. If true, the panel will not be affected by other panels' interactions\n   */\n  static?: boolean;\n  /**\n   * Panel width. The width is the number of columns from the left edge of the panel.\n   */\n  w: number;\n  /**\n   * Panel x. The x coordinate is the number of columns from the left edge of the grid\n   */\n  x: number;\n  /**\n   * Panel y. The y coordinate is the number of rows from the top edge of the grid\n   */\n  y: number;\n}",
+        "contentSha256": "692c82bc438b2225b165f6edb30d1dbec7a845d1e1210274cae4e1d05ec73f30",
+        "changedFile": false,
+        "truncated": false,
+        "relationEvidenceIds": [
+          "relation:7b198d44d70de74ca3bb011c027c433a1c859b4e4b2708b47d91af92b2cd569e"
+        ]
+      },
+      {
+        "evidenceId": "source:unit:93fba83fd21ffea465c6eff00d9143500dc6b052f693355c98cdd9bf3d56f602",
+        "unitId": "unit:93fba83fd21ffea465c6eff00d9143500dc6b052f693355c98cdd9bf3d56f602",
+        "selectedUnitIds": [
+          "unit:93fba83fd21ffea465c6eff00d9143500dc6b052f693355c98cdd9bf3d56f602"
+        ],
+        "path": "pkg/kinds/dashboard/dashboard_spec_gen.go",
+        "startLine": 447,
+        "endLine": 462,
+        "content": "type GridPos struct {\n\t// Panel height. The height is the number of rows from the top edge of the panel.\n\tH int `json:\"h\"`\n\n\t// Whether the panel is fixed within the grid. If true, the panel will not be affected by other panels' interactions\n\tStatic *bool `json:\"static,omitempty\"`\n\n\t// Panel width. The width is the number of columns from the left edge of the panel.\n\tW int `json:\"w\"`\n\n\t// Panel x. The x coordinate is the number of columns from the left edge of the grid\n\tX int `json:\"x\"`\n\n\t// Panel y. The y coordinate is the number of rows from the top edge of the grid\n\tY int `json:\"y\"`\n}",
+        "contentSha256": "f353a65ed65c9ac126679d0a980511c0a242bc85c1521840f3bb0b97aa0ecef6",
+        "changedFile": false,
+        "truncated": false,
+        "relationEvidenceIds": []
+      },
+      {
+        "evidenceId": "source:unit:1c331762ba2e8ebd17b9801ce05dd305129b578bc91c7d170fcd89ab5c687697",
+        "unitId": "unit:1c331762ba2e8ebd17b9801ce05dd305129b578bc91c7d170fcd89ab5c687697",
+        "selectedUnitIds": [
+          "unit:1c331762ba2e8ebd17b9801ce05dd305129b578bc91c7d170fcd89ab5c687697"
+        ],
+        "path": "pkg/services/authn/identity.go",
+        "startLine": 38,
+        "endLine": 87,
+        "content": "type Identity struct {\n\t// OrgID is the active organization for the entity.\n\tOrgID int64\n\t// OrgName is the name of the active organization.\n\tOrgName string\n\t// OrgRoles is the list of organizations the entity is a member of and their roles.\n\tOrgRoles map[int64]org.RoleType\n\t// ID is the unique identifier for the entity in the Grafana database.\n\t// It is in the format <namespace>:<id> where namespace is one of the\n\t// Namespace* constants. For example, \"user:1\" or \"api-key:1\".\n\t// If the entity is not found in the DB or this entity is non-persistent, this field will be empty.\n\tID string\n\t// Login is the shorthand identifier of the entity. Should be unique.\n\tLogin string\n\t// Name is the display name of the entity. It is not guaranteed to be unique.\n\tName string\n\t// Email is the email address of the entity. Should be unique.\n\tEmail string\n\t// IsGrafanaAdmin is true if the entity is a Grafana admin.\n\tIsGrafanaAdmin *bool\n\t// AuthenticatedBy is the name of the authentication client that was used to authenticate the current Identity.\n\t// For example, \"password\", \"apikey\", \"auth_ldap\" or \"auth_azuread\".\n\tAuthenticatedBy string\n\t// AuthId is the unique identifier for the entity in the external system.\n\t// Empty if the identity is provided by Grafana.\n\tAuthID string\n\t// IsDisabled is true if the entity is disabled.\n\tIsDisabled bool\n\t// HelpFlags1 is the help flags for the entity.\n\tHelpFlags1 user.HelpFlags1\n\t// LastSeenAt is the time when the entity was last seen.\n\tLastSeenAt time.Time\n\t// Teams is the list of teams the entity is a member of.\n\tTeams []int64\n\t// idP Groups that the entity is a member of. This is only populated if the\n\t// identity provider supports groups.\n\tGroups []string\n\t// OAuthToken is the OAuth token used to authenticate the entity.\n\tOAuthToken *oauth2.Token\n\t// SessionToken is the session token used to authenticate the entity.\n\tSessionToken *usertoken.UserToken\n\t// ClientParams are hints for the auth service on how to handle the identity.\n\t// Set by the authenticating client.\n\tClientParams ClientParams\n\t// Permissions is the list of permissions the entity has.\n\tPermissions map[int64]map[string][]string\n\t// IDToken is a signed token representing the identity that can be forwarded to plugins and external services.\n\t// Will only be set when featuremgmt.FlagIdForwarding is enabled.\n\tIDToken string\n}",
+        "contentSha256": "03204b5b1c61ac29074ec225b3504fc4bfb7bee840fac821ee973fb7350ee3ee",
+        "changedFile": false,
+        "truncated": false,
+        "relationEvidenceIds": []
+      },
+      {
+        "evidenceId": "source:unit:777b60b99c2eccb435267cd8482462882f1c53a49974eccefe15659f63157efc",
+        "unitId": "unit:777b60b99c2eccb435267cd8482462882f1c53a49974eccefe15659f63157efc",
+        "selectedUnitIds": [
+          "unit:777b60b99c2eccb435267cd8482462882f1c53a49974eccefe15659f63157efc"
+        ],
+        "path": "pkg/services/auth/identity/requester.go",
+        "startLine": 22,
+        "endLine": 68,
+        "content": "type Requester interface {\n\t// GetDisplayName returns the display name of the active entity.\n\t// The display name is the name if it is set, otherwise the login or email.\n\tGetDisplayName() string\n\t// GetEmail returns the email of the active entity.\n\t// Can be empty.\n\tGetEmail() string\n\t// GetIsGrafanaAdmin returns true if the user is a server admin\n\tGetIsGrafanaAdmin() bool\n\t// GetLogin returns the login of the active entity\n\t// Can be empty.\n\tGetLogin() string\n\t// GetNamespacedID returns the namespace and ID of the active entity.\n\t// The namespace is one of the constants defined in pkg/services/auth/identity.\n\tGetNamespacedID() (namespace string, identifier string)\n\t// GetOrgID returns the ID of the active organization\n\tGetOrgID() int64\n\t// GetOrgRole returns the role of the active entity in the active organization.\n\tGetOrgRole() roletype.RoleType\n\t// GetPermissions returns the permissions of the active entity.\n\tGetPermissions() map[string][]string\n\t// DEPRECATED: GetTeams returns the teams the entity is a member of.\n\t// Retrieve the teams from the team service instead of using this method.\n\tGetTeams() []int64\n\t// DEPRECATED: GetOrgName returns the name of the active organization.\n\t// Retrieve the organization name from the organization service instead of using this method.\n\tGetOrgName() string\n\n\t// IsNil returns true if the identity is nil\n\t// FIXME: remove this method once all services are using an interface\n\tIsNil() bool\n\n\t// Legacy\n\n\t// HasRole returns true if the active entity has the given role in the active organization.\n\tHasRole(role roletype.RoleType) bool\n\t// GetCacheKey returns a unique key for the entity.\n\t// Add an extra prefix to avoid collisions with other caches\n\tGetCacheKey() string\n\t// HasUniqueId returns true if the entity has a unique id\n\tHasUniqueId() bool\n\t// AuthenticatedBy returns the authentication method used to authenticate the entity.\n\tGetAuthenticatedBy() string\n\t// GetIDToken returns a signed token representing the identity that can be forwarded to plugins and external services.\n\t// Will only be set when featuremgmt.FlagIdForwarding is enabled.\n\tGetIDToken() string\n}",
+        "contentSha256": "358167b6dcd0546db98ead56a5302369134a1b7010be063b53ee94b8ccfb045a",
+        "changedFile": false,
+        "truncated": false,
+        "relationEvidenceIds": []
+      },
+      {
+        "evidenceId": "source:unit:90532fed14c743744b365d5f3b6d00d2861737e8b19ed7a77dbdb200bb58f60d",
+        "unitId": "unit:90532fed14c743744b365d5f3b6d00d2861737e8b19ed7a77dbdb200bb58f60d",
+        "selectedUnitIds": [
+          "unit:90532fed14c743744b365d5f3b6d00d2861737e8b19ed7a77dbdb200bb58f60d"
+        ],
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "startLine": 25,
+        "endLine": 25,
+        "content": "const thirtyDays = 30 * 24 * time.Hour",
+        "contentSha256": "22ffb184a0acb80dab84bf8375c0ec101b787a7abcac89ecb5fab4a7b5808643",
+        "changedFile": true,
+        "truncated": false,
+        "relationEvidenceIds": []
+      },
+      {
+        "evidenceId": "source:unit:7737bbb4ddf7d29adc3a0bfd33615aaa2146198e339897ea03521dc4b931bd10",
+        "unitId": "unit:7737bbb4ddf7d29adc3a0bfd33615aaa2146198e339897ea03521dc4b931bd10",
+        "selectedUnitIds": [
+          "unit:7737bbb4ddf7d29adc3a0bfd33615aaa2146198e339897ea03521dc4b931bd10"
+        ],
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "startLine": 26,
+        "endLine": 26,
+        "content": "const deviceIDHeader = \"X-Grafana-Device-Id\"",
+        "contentSha256": "c3587653c4809ed3e0d2c9566f7a297abd2f599ddec92554a4085e2189b6c513",
+        "changedFile": true,
+        "truncated": false,
+        "relationEvidenceIds": []
+      },
+      {
+        "evidenceId": "source:unit:33ad862c766eb239ea2f693fd76148c9b02f03cd9b8bba69747225382905eb3e",
+        "unitId": "unit:33ad862c766eb239ea2f693fd76148c9b02f03cd9b8bba69747225382905eb3e",
+        "selectedUnitIds": [
+          "unit:33ad862c766eb239ea2f693fd76148c9b02f03cd9b8bba69747225382905eb3e"
+        ],
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "startLine": 27,
+        "endLine": 27,
+        "content": "const keepFor = time.Hour * 24 * 61",
+        "contentSha256": "ec684c1193dce0b9f48e3aec348a89f0c3840196293584d32394cee45e390dc0",
+        "changedFile": true,
+        "truncated": false,
+        "relationEvidenceIds": []
+      },
+      {
+        "evidenceId": "source:unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189",
+        "unitId": "unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189",
+        "selectedUnitIds": [
+          "unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189"
+        ],
+        "path": "pkg/services/anonymous/anonimpl/impl.go",
+        "startLine": 29,
+        "endLine": 34,
+        "content": "type AnonDeviceService struct {\n\tlog        log.Logger\n\tlocalCache *localcache.CacheService\n\tanonStore  anonstore.AnonStore\n\tserverLock *serverlock.ServerLockService\n}",
+        "contentSha256": "dede40b3c2095f680bdfad1846c0baf580de7cd24582d0ad9af06884abc88a13",
+        "changedFile": true,
+        "truncated": false,
+        "relationEvidenceIds": [
+          "relation:9c6b111820da2f5784d713a57a94a9392df5978dc2f9144843904ca02ffcaa21"
+        ]
+      }
+    ],
+    "coverage": {
+      "state": "bounded",
+      "truncated": true,
+      "returnedNodes": 20,
+      "returnedRelations": 20,
+      "depthReached": 2,
+      "relationsByDepth": {
+        "0": 6,
+        "1": 7,
+        "2": 7
+      },
+      "sourceIncluded": true,
+      "partialReasons": [
+        "focus_relation_limit",
+        "graph_relation_limit",
+        "source_window_limit"
+      ],
+      "source": {
+        "state": "bounded",
+        "truncated": true,
+        "availableSourceUnits": 18,
+        "returnedSourceUnits": 8,
+        "omittedSourceUnits": 10,
+        "truncatedSourceWindows": 0,
+        "omittedUnitIds": [
+          "unit:9292935782820097acbd648b0f1edec6814479c79071780336ed79d294e841a8",
+          "unit:6032aeaef118c89a2a9eba8faa2d8a8d9a58a50f309a18103bf091b8a2f0010c",
+          "unit:5e3c47157e89ee074e84087fae9661b085a5556185b67a9f80d437bb8a020183",
+          "unit:f4e42df271d2acb09edd38c60d97b435c6944206a67e8e5434da8985b46bb779",
+          "unit:9cc1e01219379ff30dc322636282f52a7c9ad2e8f31c18261a71d33e9eb25f27",
+          "unit:2e342f346c4f3366add1f6e04515f5f59f43eee8bcd722c715641c3f966c09bd",
+          "unit:956da726af8e75fb9d2f88f6b5b38806630bd239cbcd08c35b4d5d013aa8ce6c",
+          "unit:ea4aa2cd933e7306da5bfcf674270a084e6a35c66dcc06e0b46d14b5ccbbc77b",
+          "unit:112317110d201ed7dd83ebf6badd5b49846c4a2fb9eb3497a3fdbcc9a8e8f75f",
+          "unit:ddcc7ba998f01bfab90e5249ed6b6415ebcb831bae9588104b36d0464365ed59"
+        ],
+        "maxSourceWindows": 8,
+        "maxSourceCharacters": 12000,
+        "returnedSourceCharacters": 5972
+      }
+    },
+    "nextOperations": [
+      "queryCodeGraph",
+      "getImpactRadius",
+      "traverseCodeGraph",
+      "getStructuralUnit"
+    ],
+    "continuations": [
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:440bdf2a8eb52c9fa98cd707d7b884fa414fff95f6e5947f343aa0798fa699bd",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:78c0c9a8985ff10c3c12b74b80e58b750d508d4a083a4d5b572e810641d2e2e6",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:90532fed14c743744b365d5f3b6d00d2861737e8b19ed7a77dbdb200bb58f60d",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:7737bbb4ddf7d29adc3a0bfd33615aaa2146198e339897ea03521dc4b931bd10",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:33ad862c766eb239ea2f693fd76148c9b02f03cd9b8bba69747225382905eb3e",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:1a6c647ac19df83cdb02aeffd651d1ff01efaa252697111ee74bfd95cd42c189",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:9292935782820097acbd648b0f1edec6814479c79071780336ed79d294e841a8",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:6032aeaef118c89a2a9eba8faa2d8a8d9a58a50f309a18103bf091b8a2f0010c",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:5e3c47157e89ee074e84087fae9661b085a5556185b67a9f80d437bb8a020183",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      },
+      {
+        "tool": "queryCodeGraph",
+        "arguments": {
+          "pattern": "relations_of",
+          "target": "unit:f4e42df271d2acb09edd38c60d97b435c6944206a67e8e5434da8985b46bb779",
+          "cursor": 1,
+          "maxResults": 20,
+          "detailLevel": "standard"
+        }
+      }
+    ]
+  }
+}

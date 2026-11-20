@@ -78,22 +78,13 @@ public interface IProjectService {
 
         Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
                         List<String> includePatterns,
-                        List<String> excludePatterns, Boolean multiBranchEnabled, Integer branchRetentionDays,
-                        List<String> indexedBranches, Boolean transientBranchIndexesEnabled);
-
-        Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
-                        List<String> includePatterns,
-                        List<String> excludePatterns, Boolean multiBranchEnabled, Integer branchRetentionDays);
-
-        Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
-                        List<String> includePatterns,
-                        List<String> excludePatterns);
+                        List<String> excludePatterns, List<String> branchPatterns);
 
         Project updateAnalysisSettings(Long workspaceId, Long projectId, Boolean prAnalysisEnabled,
                         Boolean branchAnalysisEnabled, InstallationMethod installationMethod,
                         Integer maxAnalysisTokenLimit,
                         Boolean useMcpTools,
-                        Boolean taskContextAnalysisEnabled);
+                        Boolean taskContextAnalysisEnabled, java.util.Map<String, Boolean> reviewChecks);
 
         Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId);
 

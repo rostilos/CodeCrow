@@ -91,6 +91,8 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 .thenReturn(Optional.of("it-lock"));
         when(analysisLockService.maintainLockLease(anyString(), anyInt())).thenReturn(lockLease);
         when(lockLease.confirmOwnership()).thenReturn(true);
+        when(analysisLockService.withOwnedLocks(any(), any())).thenAnswer(inv ->
+                transactionTemplate.execute(status -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get()));
         when(analysisLockService.isLocked(anyLong(), anyString(), any())).thenReturn(false);
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);
@@ -108,6 +110,18 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
         when(aiAnalysisClient.performAnalysis(any(AiAnalysisRequest.class), any()))
                 .thenAnswer(inv -> aiResponse(((AiAnalysisRequest) inv.getArgument(0)).getCurrentCommitHash()));
+        var branchRequest = mock(AiAnalysisRequest.class);
+        when(vcsAiClientService.buildAiAnalysisRequestsForBranchReconciliation(any(), any(), anyList(), any(), any()))
+                .thenAnswer(inv -> {
+                    when(branchRequest.getPreviousCodeAnalysisIssues()).thenReturn(inv.getArgument(2));
+                    return List.of(branchRequest);
+                });
+        org.mockito.Mockito.doAnswer(inv -> Map.of("issues", branchRequest.getPreviousCodeAnalysisIssues().stream()
+                .map(issue -> Map.<String, Object>of("issueId", issue.id(), "isResolved", false,
+                        "resolutionReason", "The secret is still leaked by the surviving call.",
+                        "filePath", "src/App.java", "lineNumber", 6, "endLineNumber", 6,
+                        "codeSnippet", "leakedSecret();")).toList()))
+                .when(aiAnalysisClient).performAnalysis(org.mockito.ArgumentMatchers.eq(branchRequest), any());
 
         when(branchCommitService.resolveCommitRange(any(Project.class), any(VcsConnection.class), anyString(), anyString()))
                 .thenAnswer(inv -> CommitRangeContext.firstAnalysis(inv.getArgument(3)));
@@ -186,8 +200,8 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                             if (issues.size() != 1) {
                                 return null;
                             }
-                            BranchIssue issue = issues.get(0);
-                            return "merge-pr3-commit".equals(issue.getLastVerifiedCommit()) ? issues : null;
+                            return "merge-pr3-commit".equals(branch.getLastSuccessfulCommitHash())
+                                    && !branch.isReconciliationPending() ? issues : null;
                         })
                         .orElse(null),
                 java.util.Objects::nonNull);

@@ -3,10 +3,13 @@ package org.rostilos.codecrow.core.persistence.repository.rag;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexGeneration;
 import org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,6 +24,46 @@ public interface RagBranchIndexGenerationRepository extends JpaRepository<RagBra
         RagBranchIndexGenerationStatus getStatus();
     }
 
+    interface RetirementCandidate extends CleanupGenerationCandidate {
+        String getWorkspaceName();
+        String getProjectNamespace();
+        String getBranchName();
+    }
+
+    @Query("""
+            SELECT g.id AS generationId, g.collectionName AS collectionName,
+                   g.revision AS revision, g.manifestDigest AS manifestDigest,
+                   g.status AS status, b.project.workspace.name AS workspaceName,
+                   b.project.namespace AS projectNamespace, b.branchName AS branchName
+            FROM RagBranchIndexGeneration g JOIN g.branchIndex b
+            WHERE b.cleanupClaimToken IS NULL
+              AND (b.activeGeneration IS NULL OR b.activeGeneration.id <> g.id)
+              AND g.manifestDigest IS NOT NULL
+              AND (g.status = org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.RETIRING OR (g.status = org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.SUPERSEDED AND g.supersededAt < :cutoff))
+            ORDER BY g.supersededAt, g.id
+            """)
+    List<RetirementCandidate> findRetirementCandidates(@Param("cutoff") OffsetDateTime cutoff);
+
+    @Modifying
+    @Transactional
+    @Query("""
+            UPDATE RagBranchIndexGeneration g SET g.status = org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.RETIRING
+            WHERE g.id = :id AND g.status = org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.SUPERSEDED AND g.supersededAt < :cutoff
+              AND EXISTS (
+                  SELECT 1 FROM RagBranchIndex b WHERE b.id = g.branchIndex.id
+                    AND b.cleanupClaimToken IS NULL
+                    AND (b.activeGeneration IS NULL OR b.activeGeneration.id <> g.id)
+              )
+            """)
+    int beginRetirement(@Param("id") Long id, @Param("cutoff") OffsetDateTime cutoff);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE RagBranchIndexGeneration g SET g.status = org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.RETIRED WHERE g.id = :id AND g.status = org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.RETIRING")
+    int finishRetirement(@Param("id") Long id);
+
+    boolean existsByCollectionName(String collectionName);
+
     Optional<RagBranchIndexGeneration> findFirstByBranchIndexIdAndRevisionAndStatusInOrderByCreatedAtDesc(
             Long branchIndexId,
             String revision,
@@ -32,6 +75,7 @@ public interface RagBranchIndexGenerationRepository extends JpaRepository<RagBra
             + "g.revision AS revision, g.manifestDigest AS manifestDigest, "
             + "g.status AS status "
             + "FROM RagBranchIndexGeneration g WHERE g.branchIndex.id = :branchIndexId "
+            + "AND g.status <> org.rostilos.codecrow.core.model.rag.RagBranchIndexGenerationStatus.RETIRED AND g.manifestDigest IS NOT NULL "
             + "ORDER BY g.createdAt DESC")
     List<CleanupGenerationCandidate> findCleanupCandidatesByBranchIndexId(
             @Param("branchIndexId") Long branchIndexId);
@@ -47,15 +91,4 @@ public interface RagBranchIndexGenerationRepository extends JpaRepository<RagBra
             @Param("revision") String revision,
             @Param("statuses") List<RagBranchIndexGenerationStatus> statuses);
 
-    /**
-     * Physical targets that may still contain a project's PR overlays. Both
-     * active and superseded published generations are relevant: a generation
-     * can be superseded between review indexing and the close webhook.
-     */
-    @Query("SELECT DISTINCT g.collectionName FROM RagBranchIndexGeneration g "
-            + "JOIN g.branchIndex b WHERE b.project.id = :projectId "
-            + "AND g.status IN :statuses")
-    List<String> findCollectionNamesByProjectIdAndStatusIn(
-            @Param("projectId") Long projectId,
-            @Param("statuses") List<RagBranchIndexGenerationStatus> statuses);
 }

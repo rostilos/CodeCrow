@@ -29,7 +29,13 @@ import java.util.NoSuchElementException;
 public class GlobalExceptionHandler {
     
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
-    
+
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ErrorMessageResponse> handleResponseStatus(org.springframework.web.server.ResponseStatusException ex) {
+        return ResponseEntity.status(ex.getStatusCode())
+                .body(new ErrorMessageResponse(ex.getReason(), HttpStatus.valueOf(ex.getStatusCode().value())));
+    }
+
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<ErrorMessageResponse> handleSecurityException(SecurityException ex) {
         return ResponseEntity

@@ -41,7 +41,7 @@ class QaDocDocumentServiceTest {
     @DisplayName("upserts latest document for project PR")
     void upsertsLatestDocument() {
         Project project = project(42L);
-        when(qaDocDocumentRepository.findByProjectIdAndPrNumber(42L, 7L))
+        when(qaDocDocumentRepository.findForUpdate(42L, 7L))
                 .thenReturn(Optional.empty());
         when(qaDocDocumentRepository.save(any(QaDocDocument.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -66,7 +66,7 @@ class QaDocDocumentServiceTest {
         QaDocDocument existing = new QaDocDocument(project, 7L);
         existing.replaceContent("PROJ-122", 99L, "old123", "old doc");
 
-        when(qaDocDocumentRepository.findByProjectIdAndPrNumber(42L, 7L))
+        when(qaDocDocumentRepository.findForUpdate(42L, 7L))
                 .thenReturn(Optional.of(existing));
         when(qaDocDocumentRepository.save(any(QaDocDocument.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -79,6 +79,16 @@ class QaDocDocumentServiceTest {
         assertThat(updated.getLastAnalysisId()).isEqualTo(100L);
         assertThat(updated.getCommitHash()).isEqualTo("abc123");
         assertThat(updated.getMarkdownContent()).isEqualTo("new doc");
+    }
+
+    @Test
+    void refusesAnOlderReviewBeforeMutatingThePublishedDocument() {
+        var project = project(42L); var current = new QaDocDocument(project, 7L);
+        current.replaceContent("PROJ-123", 101L, "new-head", "current coverage");
+        when(qaDocDocumentRepository.findForUpdate(42L, 7L)).thenReturn(Optional.of(current));
+        assertThatThrownBy(() -> service.upsertLatestDocument(project, 7L, "PROJ-123", 100L, "old-head", "stale coverage"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(current.getMarkdownContent()).isEqualTo("current coverage");
     }
 
     @Test

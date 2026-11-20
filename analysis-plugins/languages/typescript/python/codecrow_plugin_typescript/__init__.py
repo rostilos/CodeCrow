@@ -23,6 +23,7 @@ from .repository import (
     parse_import_record,
     resolve_import,
 )
+from .configuration import configuration_facts, is_typescript_config
 
 
 _SNAPSHOT_KIND = "typescript-import-graph"
@@ -101,18 +102,23 @@ class TypescriptPlugin:
         ))
 
     def index_file(self, artifact: FileArtifact):
+        is_config = is_typescript_config(artifact.path)
         if (
             artifact.deleted
-            or not artifact.path.casefold().endswith(TYPESCRIPT_EXTENSIONS)
+            or not is_config and not artifact.path.casefold().endswith(TYPESCRIPT_EXTENSIONS)
         ):
             return PluginOutcome.abstained()
         try:
+            if is_config:
+                return PluginOutcome.handled(configuration_facts(artifact))
             analyzed = analyze_typescript_artifact(artifact)
         except Exception as exception:
             return PluginOutcome.failed(PluginDiagnostic(
                 "typescript-parse-failed",
                 f"{type(exception).__name__}: {exception}",
                 self.descriptor.id,
+                path=artifact.path if is_config else None,
+                recoverable=is_config,
             ))
         return PluginOutcome.handled(analyzed[0])
 
@@ -126,7 +132,6 @@ class TypescriptPlugin:
             return PluginOutcome.abstained()
         return PluginOutcome.handled(ReviewContribution(
             rules=(
-                "A typescript-pr-removed-relation is base-to-PR navigation evidence only; require changed-hunk proof of harm.",
                 "Resolve TypeScript relative imports, exported declarations, and imported call targets before reporting a missing symbol or cross-file contract defect.",
                 "Treat exact typescript-module-resolution, typescript-import-binding, and typescript-call-resolution facts as navigation evidence; relationship presence alone is not proof of a defect.",
                 "Use an exact bracketed typescript-* relationship kind as claimKind only when the claim depends on that relationship and cite its Evidence ID; leave claimKind empty for defects proved entirely by changed source.",
@@ -147,11 +152,11 @@ class TypescriptPlugin:
             or not claim.path.casefold().endswith(TYPESCRIPT_EXTENSIONS)
         ):
             return PluginOutcome.abstained()
-        if claim.claim_kind == "typescript-file":
+        if claim.claim_kind in {"typescript-file", "typescript-module-resolution"}:
             return PluginOutcome.handled(ValidationResult(
                 ValidationDecision.INSUFFICIENT_EVIDENCE,
                 "typescript-coarse-evidence-class",
-                "A file-level TypeScript fact cannot prove a concrete relationship claim.",
+                "A TypeScript file or module-path fact cannot establish the presence of an imported member.",
             ))
         if claim.claim_kind not in _RELATION_KINDS:
             return PluginOutcome.handled(ValidationResult(

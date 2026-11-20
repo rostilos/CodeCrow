@@ -35,7 +35,7 @@ class TestParsedFileMetadataDto:
         assert dto.imports == []
         assert dto.extendsClasses == []
         assert dto.implementsInterfaces == []
-        assert dto.semanticNames == []
+        assert dto.symbolNames == []
         assert dto.parentClass is None
 
     def test_from_alias(self):
@@ -44,11 +44,11 @@ class TestParsedFileMetadataDto:
             path="A.java",
             language="java",
             **{"extends": ["Base"], "implements": ["Serializable"],
-               "semantic_names": ["processOrder"], "parent_class": "Base"}
+               "symbol_names": ["processOrder"], "parent_class": "Base"}
         )
         assert dto.extendsClasses == ["Base"]
         assert dto.implementsInterfaces == ["Serializable"]
-        assert dto.semanticNames == ["processOrder"]
+        assert dto.symbolNames == ["processOrder"]
         assert dto.parentClass == "Base"
 
 
@@ -60,7 +60,6 @@ class TestFileRelationshipDto:
             targetFile="b.py",
             relationshipType=RelationshipType.IMPORTS,
         )
-        assert dto.strength == 0
         assert dto.matchedOn is None
 
     def test_with_metadata(self):
@@ -69,10 +68,8 @@ class TestFileRelationshipDto:
             targetFile="b.py",
             relationshipType=RelationshipType.EXTENDS,
             matchedOn="BaseService",
-            strength=5,
         )
         assert dto.matchedOn == "BaseService"
-        assert dto.strength == 5
 
 
 class TestEnrichmentStats:

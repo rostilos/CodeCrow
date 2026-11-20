@@ -107,7 +107,6 @@ def build_task_context(
         If True, parse AC from description and add a dedicated section.
     max_description_length
         Truncate the raw description to this length (AC is separate).
-
     Returns
     -------
     A formatted Markdown block, or an empty string if no context is available.

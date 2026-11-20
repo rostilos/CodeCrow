@@ -12,6 +12,23 @@ import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 
 class AnalysisScopeFilterTest {
+    @Test void imagesAreExcludedFromDiffAndManifestEvenWhenExplicitlyIncluded() {
+        var scope = new org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig(List.of("**"), List.of());
+        for (String extension : org.rostilos.codecrow.plugins.RepositoryFileScope.EXTENSIONS) {
+            String path = "assets/file." + extension.toUpperCase(java.util.Locale.ROOT);
+            assertThat(scope.includes(path)).isFalse();
+            assertThat(AnalysisScopeFilter.filterDiff(section(path), null)).isEmpty();
+        }
+        var paths = new java.util.HashSet<>(List.of("image.svg", "source.py"));
+        AnalysisScopeFilter.retainIncluded(paths, null);
+        assertThat(paths).containsExactly("source.py");
+    }
+    @Test void scopesQuotedPathsWithoutChangingRetainedSourceBytes() {
+        String source = "diff --git \"a/source file.py\" \"b/source file.py\"\r\n+keep\r\n";
+        String image = "diff --git \"a/my icon.SVG\" \"b/my icon.SVG\"\r\n+<svg/>\r\n";
+        assertThat(AnalysisScopeFilter.filterDiff(source + image, null)).isEqualTo(source);
+    }
+
     @Test
     void keepsOnlyIncludedNonExcludedDiffSections() {
         ProjectConfig config = new ProjectConfig();

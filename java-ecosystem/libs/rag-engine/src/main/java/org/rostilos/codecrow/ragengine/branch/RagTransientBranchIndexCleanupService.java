@@ -6,6 +6,8 @@ import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepos
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -14,7 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
-/** Removes only expired PR-target generations explicitly classified transient. */
+/** Removes inactive non-primary target generations using deployment retention. */
 @Service
 public class RagTransientBranchIndexCleanupService {
     private static final Logger log = LoggerFactory.getLogger(
@@ -23,6 +25,7 @@ public class RagTransientBranchIndexCleanupService {
     private final RagBranchIndexRepository branchRepository;
     private final RagBranchIndexGenerationRepository generationRepository;
     private final RagPipelineClient pipelineClient;
+    private final int retentionDays;
     private final String cleanupOwner = UUID.randomUUID().toString();
     private CleanupState cleanupState = CleanupState.HEALTHY;
 
@@ -30,14 +33,24 @@ public class RagTransientBranchIndexCleanupService {
             RagBranchIndexRepository branchRepository,
             RagBranchIndexGenerationRepository generationRepository,
             RagPipelineClient pipelineClient) {
+        this(branchRepository, generationRepository, pipelineClient, 90);
+    }
+
+    @Autowired
+    public RagTransientBranchIndexCleanupService(
+            RagBranchIndexRepository branchRepository,
+            RagBranchIndexGenerationRepository generationRepository,
+            RagPipelineClient pipelineClient,
+            @Value("${codecrow.rag.branch.retention-days:90}") int retentionDays) {
         this.branchRepository = branchRepository;
         this.generationRepository = generationRepository;
         this.pipelineClient = pipelineClient;
+        this.retentionDays = Math.max(1, retentionDays);
     }
 
     @Scheduled(
-            fixedDelayString = "${codecrow.rag.transient.cleanup-interval-ms:3600000}",
-            initialDelayString = "${codecrow.rag.transient.cleanup-initial-delay-ms:300000}")
+            fixedDelayString = "${codecrow.rag.branch-cleanup.interval-ms:3600000}",
+            initialDelayString = "${codecrow.rag.branch-cleanup.initial-delay-ms:300000}")
     public synchronized void cleanupExpired() {
         OffsetDateTime now = OffsetDateTime.now();
         List<RagBranchIndexRepository.TransientCleanupCandidate> candidates;
@@ -51,12 +64,6 @@ public class RagTransientBranchIndexCleanupService {
 
         int rejectedCandidates = 0;
         for (var index : candidates) {
-            var config = index.getProjectConfiguration() != null
-                    ? index.getProjectConfiguration().ragConfig()
-                    : null;
-            int retentionDays = config != null
-                    ? config.getEffectiveBranchRetentionDays()
-                    : 90;
             OffsetDateTime lastUse = index.getLastAccessedAt() != null
                     ? index.getLastAccessedAt()
                     : index.getUpdatedAt();
@@ -186,7 +193,7 @@ public class RagTransientBranchIndexCleanupService {
                             + " branch=" + index.getBranchName() + "; retrying next run");
                     return;
                 }
-                log.info("Removed expired transient RAG branch index project={}, branch={}",
+                log.info("Removed inactive RAG target-branch index project={}, branch={}",
                         index.getProjectId(), index.getBranchName());
             } else {
                 if (!physicalDeletionStarted && !deletionOutcomeUncertain) {

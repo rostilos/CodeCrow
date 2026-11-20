@@ -151,13 +151,6 @@ def _code_references(config: ServiceConfig) -> set[str]:
                 if name:
                     references.add(name)
 
-    if config.name == "inference-orchestrator":
-        # inference_policy.py constructs these canonical names dynamically.
-        for stage in ("STAGE_0", "STAGE_1", "VERIFICATION", "STAGE_2", "DEDUP", "STAGE_3"):
-            references.add(f"REVIEW_{stage}_MAX_OUTPUT_TOKENS")
-            for size in ("SMALL", "MEDIUM", "LARGE"):
-                references.add(f"REVIEW_{stage}_{size}_MAX_OUTPUT_TOKENS")
-
     return references - IGNORED_INTERNAL_ENV
 
 

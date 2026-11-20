@@ -18,7 +18,7 @@ class TextFileEligibilityTest {
     void retainsFrameworkAndSourceTextWithoutAnAllowlist() {
         assertThat(TextFileEligibility.isTextCandidate("app/etc/di.xml")).isTrue();
         assertThat(TextFileEligibility.isTextCandidate("templates/item.phtml")).isTrue();
-        assertThat(TextFileEligibility.isTextCandidate("web/images/logo.svg")).isTrue();
+        assertThat(TextFileEligibility.isTextCandidate("web/images/logo.svg")).isFalse();
         assertThat(TextFileEligibility.isTextCandidate(".htaccess")).isTrue();
     }
 

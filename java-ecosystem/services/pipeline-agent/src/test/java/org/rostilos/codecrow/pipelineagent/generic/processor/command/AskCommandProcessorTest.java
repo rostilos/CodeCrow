@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler.WebhookResult;
@@ -27,6 +28,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsPullRequestComment;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,6 +51,7 @@ class AskCommandProcessorTest {
     @Mock private TokenEncryptionService tokenEncryptionService;
     @Mock private VcsClientProvider vcsClientProvider;
     @Mock private VcsClient vcsClient;
+    @Mock private RagBranchIndexRepository ragBranchIndexRepository;
 
     private AskCommandProcessor processor;
 
@@ -59,7 +62,8 @@ class AskCommandProcessorTest {
                 new PromptSanitizationService(),
                 aiCommandClient,
                 tokenEncryptionService,
-                vcsClientProvider
+                vcsClientProvider,
+                ragBranchIndexRepository
         );
     }
 
@@ -80,8 +84,6 @@ class AskCommandProcessorTest {
     void shouldPassInlineConversationToAskRequest() throws Exception {
         Project project = createProject();
         WebhookPayload payload = createInlinePayload();
-        when(codeAnalysisService.getCodeAnalysisCache(42L, "abc123", 7L))
-                .thenReturn(Optional.empty());
         when(tokenEncryptionService.decrypt("encrypted-ai-key")).thenReturn("ai-key");
         when(tokenEncryptionService.decrypt("encrypted-vcs-token")).thenReturn("vcs-token");
         when(vcsClientProvider.getClient(any())).thenReturn(vcsClient);
@@ -120,6 +122,51 @@ class AskCommandProcessorTest {
         assertThat(result.data().get("content")).asString()
                 .contains("CodeCrow Answer")
                 .doesNotContain("<!-- codecrow-ask-response -->");
+    }
+
+    @Test
+    @DisplayName("should bound conversation acquisition and the generated VCS response")
+    void shouldBoundLargeConversationAndGeneratedAnswer() throws Exception {
+        Project project = createProject();
+        WebhookPayload payload = createInlinePayload();
+        when(tokenEncryptionService.decrypt("encrypted-ai-key")).thenReturn("ai-key");
+        when(tokenEncryptionService.decrypt("encrypted-vcs-token")).thenReturn("vcs-token");
+        when(vcsClientProvider.getClient(any())).thenReturn(vcsClient);
+
+        List<VcsPullRequestComment> comments = new ArrayList<>();
+        for (int index = 0; index < 30; index++) {
+            String body = "conversation-marker-" + index;
+            if (index == 15) {
+                body += "\n" + "long-record-界".repeat(700) + "TAIL-COMMENT-15";
+            }
+            comments.add(new VcsPullRequestComment(
+                    "comment-" + index, "root-1", "root-1", "reviewer-" + index,
+                    body, "2026-08-01T10:00:00Z"));
+        }
+        comments.add(new VcsPullRequestComment(
+                "question-1", "root-1", "root-1", "reviewer",
+                "/codecrow ask explain this", "2026-08-01T10:01:00Z"));
+        when(vcsClient.getPullRequestCommentThread(
+                anyString(), anyString(), anyLong(), anyString(), anyString(), anyBoolean()))
+                .thenReturn(comments);
+        when(aiCommandClient.ask(any(AskRequest.class), any()))
+                .thenReturn(new AskResult("generated-answer-λ".repeat(5_000) + "TAIL-ANSWER"));
+
+        WebhookResult result = processor.process(
+                payload, project, event -> {}, Map.of("question", "explain this"));
+
+        org.mockito.ArgumentCaptor<AskRequest> captor =
+                org.mockito.ArgumentCaptor.forClass(AskRequest.class);
+        verify(aiCommandClient).ask(captor.capture(), any());
+        assertThat(captor.getValue().analysisContext())
+                .contains("conversation-marker-0", "conversation-marker-29")
+                .doesNotContain(
+                        "Comment by @reviewer-1:\nconversation-marker-1\n",
+                        "TAIL-COMMENT-15");
+        assertThat(result.data().get("content")).asString()
+                .hasSizeLessThanOrEqualTo(65_000)
+                .endsWith("... (truncated)")
+                .doesNotContain("TAIL-ANSWER");
     }
 
     private void assertFallbackResponseWhenAiAnswerIsNotUsable(String aiAnswer) throws Exception {

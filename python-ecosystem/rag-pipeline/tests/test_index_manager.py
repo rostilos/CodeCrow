@@ -1,706 +1,501 @@
-"""
-Tests for rag_pipeline.core.index_manager components —
-CollectionManager, BranchManager, PointOperations, StatsManager, RAGIndexManager.
-"""
+from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
-import threading
-import uuid
-from httpx import Headers
-from qdrant_client.http.exceptions import (
-    ResponseHandlingException,
-    UnexpectedResponse,
+
+from rag_pipeline.core.exact_index import ExactIndexPreconditionError
+from rag_pipeline.core.index_manager.manager import (
+    RAGIndexManager,
+    RepositoryIndexCancelled,
+    _unsafe_delta_plugin_selection_changes,
 )
-from unittest.mock import patch, MagicMock, PropertyMock
-from datetime import datetime
+from rag_pipeline.core.source_tree import (
+    RepositorySourceTreeError,
+    attest_repository_source_tree,
+)
+from rag_pipeline.core.structural_store import StructuralGraphWriter
+from rag_pipeline.models.config import RAGConfig
 
 
-# ─────────────────────────────────────────────────────────────
-# CollectionManager
-# ─────────────────────────────────────────────────────────────
-class TestCollectionManager:
+def _receipt():
+    return {
+        "workspace": "ws",
+        "project": "project",
+        "branch": "main",
+        "repository_revision": "commit",
+        "generation_manifest_sha256": "a" * 64,
+        "source_tree_sha256": "b" * 64,
+        "collection_target": "generation-target",
+        "unit_count": 7,
+    }
 
-    def _make(self, client=None, dim=768):
-        from rag_pipeline.core.index_manager.collection_manager import CollectionManager
-        return CollectionManager(client or MagicMock(), dim)
 
-    def test_init(self):
-        mock_client = MagicMock()
-        cm = self._make(mock_client, 1024)
-        assert cm.client is mock_client
-        assert cm.embedding_dim == 1024
+def test_revision_preflight_reads_the_requested_structural_generation():
+    manager = object.__new__(RAGIndexManager)
+    manager.store = MagicMock()
+    manager.store.read_receipt.return_value = _receipt()
+    manager.index_representation_fingerprint = "sha256:current"
 
-    def test_ensure_collection_exists_creates_new(self):
-        cm = self._make()
-        cm.client.get_collections.return_value.collections = []
-        cm.alias_exists = MagicMock(return_value=False)
+    result = manager.get_revision_preflight(
+        "ws",
+        "project",
+        "main",
+        "commit",
+        collection_target="generation-target",
+    )
 
-        cm.ensure_collection_exists("test_coll")
-        cm.client.create_collection.assert_called_once()
+    manager.store.read_receipt.assert_called_once_with("generation-target")
+    manager.store.open_bound.assert_called_once_with(
+        target="generation-target",
+        workspace="ws",
+        project="project",
+        branch="main",
+        revision="commit",
+        manifest_sha256="a" * 64,
+    )
+    assert result["generation_manifest_sha256"] == "a" * 64
+    assert result["current_index_representation_fingerprint"] == (
+        "sha256:current"
+    )
 
-    def test_ensure_collection_exists_already_exists(self):
-        cm = self._make()
-        mock_coll = MagicMock()
-        mock_coll.name = "test_coll"
-        cm.client.get_collections.return_value.collections = [mock_coll]
-        cm.alias_exists = MagicMock(return_value=False)
 
-        cm.ensure_collection_exists("test_coll")
-        cm.client.create_collection.assert_not_called()
+def test_revision_preflight_does_not_cross_generation_binding():
+    manager = object.__new__(RAGIndexManager)
+    manager.store = MagicMock()
+    manager.store.read_receipt.return_value = _receipt()
+    manager.index_representation_fingerprint = "sha256:current"
 
-    def test_ensure_collection_exists_accepts_concurrent_create(self):
-        cm = self._make()
-        created_collection = MagicMock()
-        created_collection.name = "test_coll"
-        missing = MagicMock()
-        missing.collections = []
-        present = MagicMock()
-        present.collections = [created_collection]
-        cm.client.get_collections.side_effect = [missing, present]
-        cm.client.create_collection.side_effect = UnexpectedResponse(
-            409,
-            "Conflict",
-            b'{"status":{"error":"collection already exists"}}',
-            Headers(),
-        )
-        cm.alias_exists = MagicMock(return_value=False)
-        cm._ensure_payload_indexes = MagicMock()
+    assert manager.get_revision_preflight(
+        "other-workspace",
+        "project",
+        "main",
+        "commit",
+        collection_target="generation-target",
+    ) is None
 
-        cm.ensure_collection_exists("test_coll")
 
-        cm._ensure_payload_indexes.assert_called_once_with("test_coll")
-
-    def test_ensure_collection_exists_does_not_hide_other_conflicts(self):
-        cm = self._make()
-        missing = MagicMock()
-        missing.collections = []
-        cm.client.get_collections.side_effect = [missing, missing]
-        conflict = UnexpectedResponse(
-            409,
-            "Conflict",
-            b'{"status":{"error":"unrelated conflict"}}',
-            Headers(),
-        )
-        cm.client.create_collection.side_effect = conflict
-        cm.alias_exists = MagicMock(return_value=False)
-
-        with pytest.raises(UnexpectedResponse) as exc_info:
-            cm.ensure_collection_exists("test_coll")
-
-        assert exc_info.value is conflict
-
-    def test_ensure_collection_exists_is_alias(self):
-        cm = self._make()
-        cm.alias_exists = MagicMock(return_value=True)
-
-        cm.ensure_collection_exists("alias_name")
-        cm.client.create_collection.assert_not_called()
-
-    def test_create_pending_collection(self):
-        cm = self._make()
-        cm.client.create_collection = MagicMock()
-
-        name = cm.create_pending_collection("base_name")
-        assert name.startswith("base_name_pending_")
-        cm.client.create_collection.assert_called_once()
-
-    def test_create_pending_collection_uses_unique_names(self):
-        cm = self._make()
-        cm._ensure_payload_indexes = MagicMock()
-
-        first = cm.create_pending_collection("base_name")
-        second = cm.create_pending_collection("base_name")
-
-        assert first != second
-
-    def test_atomic_assign_aliases_replaces_all_requested_aliases_in_one_call(self):
-        cm = self._make()
-        old = MagicMock()
-        old.alias_name = "codecrow_ws__project"
-        old.collection_name = "old-primary"
-        cm.client.get_aliases.return_value.aliases = [old]
-
-        cm.atomic_assign_aliases({
-            "codecrow_ws__project": "new-generation",
-            "codecrow_ws__project__develop": "new-generation",
-        })
-
-        cm.client.update_collection_aliases.assert_called_once()
-        operations = cm.client.update_collection_aliases.call_args.kwargs[
-            "change_aliases_operations"
+def test_revision_discovery_verifies_each_tenant_bound_receipt():
+    manager = object.__new__(RAGIndexManager)
+    manager.store = MagicMock()
+    manager.store.repository_generation_receipts.return_value = [
+        _receipt(),
+        {**_receipt(), "collection_target": "invalid-target"},
+    ]
+    manager.get_revision_preflight = MagicMock(
+        side_effect=[
+            {**_receipt(), "document_count": 4},
+            ExactIndexPreconditionError("invalid seal"),
         ]
-        assert len(operations) == 3
-
-    def test_payload_index_failure_does_not_skip_remaining_indexes(
-        self,
-        caplog,
-    ):
-        cm = self._make()
-        cm.client.create_payload_index.side_effect = [
-            RuntimeError("path index already exists"),
-            *([True] * 12),
-        ]
-
-        cm._ensure_payload_indexes("test_coll")
-
-        assert cm.client.create_payload_index.call_count == 13
-        warnings = [
-            record for record in caplog.records
-            if record.levelname == "WARNING"
-        ]
-        assert len(warnings) == 1
-        assert "failed for 1 field(s)" in warnings[0].getMessage()
-
-    def test_payload_index_failures_emit_one_aggregate_warning(self, caplog):
-        cm = self._make()
-        cm.client.create_payload_index.side_effect = RuntimeError("unsupported")
-
-        assert cm._ensure_payload_indexes("test_coll") is False
-
-        assert cm.client.create_payload_index.call_count == 13
-        warnings = [
-            record for record in caplog.records
-            if record.levelname == "WARNING"
-        ]
-        assert len(warnings) == 1
-        assert "failed for 13 field(s)" in warnings[0].getMessage()
-
-    def test_payload_index_repair_defers_when_schema_inspection_times_out(self):
-        cm = self._make()
-        cm.client.get_collection.side_effect = ResponseHandlingException(
-            TimeoutError("timed out")
-        )
-
-        assert cm._ensure_payload_indexes("test_coll") is False
-        cm.client.create_payload_index.assert_not_called()
-
-    def test_payload_index_repair_stops_after_transport_failure(self):
-        cm = self._make()
-        cm.client.create_payload_index.side_effect = (
-            ResponseHandlingException(TimeoutError("timed out"))
-        )
-
-        assert cm._ensure_payload_indexes("test_coll") is False
-        assert cm.client.create_payload_index.call_count == 1
-
-    def test_existing_collection_repairs_payload_indexes_once(self):
-        cm = self._make()
-        collection = MagicMock(name="test_coll")
-        collection.name = "test_coll"
-        cm.client.get_collections.return_value.collections = [collection]
-        cm.alias_exists = MagicMock(return_value=False)
-
-        cm.ensure_collection_exists("test_coll")
-        cm.ensure_collection_exists("test_coll")
-
-        assert cm.client.create_payload_index.call_count == 13
-
-    def test_payload_index_repair_only_creates_missing_schemas(self):
-        from qdrant_client.models import PayloadSchemaType
-
-        cm = self._make()
-        existing = MagicMock()
-        existing.data_type = PayloadSchemaType.KEYWORD
-        cm.client.get_collection.return_value.payload_schema = {
-            "workspace": existing,
-        }
-
-        cm._ensure_payload_indexes("test_coll")
-
-        fields = {
-            call.kwargs["field_name"]
-            for call in cm.client.create_payload_index.call_args_list
-        }
-        assert "workspace" not in fields
-        assert "project" in fields
-
-    def test_pr_payload_indexes_use_filter_compatible_schemas(self):
-        from qdrant_client.models import PayloadSchemaType
-
-        cm = self._make()
-        cm._ensure_payload_indexes("test_coll")
-        schemas = {
-            call.kwargs["field_name"]: call.kwargs["field_schema"]
-            for call in cm.client.create_payload_index.call_args_list
-        }
-
-        assert schemas["workspace"] is PayloadSchemaType.KEYWORD
-        assert schemas["project"] is PayloadSchemaType.KEYWORD
-        assert schemas["pr"] is PayloadSchemaType.BOOL
-        assert schemas["pr_number"] is PayloadSchemaType.INTEGER
-
-    def test_delete_collection(self):
-        cm = self._make()
-        result = cm.delete_collection("test_coll")
-        assert result is True
-        cm.client.delete_collection.assert_called_once_with("test_coll")
-
-    def test_delete_then_recreate_repairs_payload_indexes_again(self):
-        cm = self._make()
-        cm._payload_indexes_ensured.add("test_coll")
-
-        assert cm.delete_collection("test_coll") is True
-
-        collection = MagicMock()
-        collection.name = "test_coll"
-        cm.client.get_collections.return_value.collections = [collection]
-        cm.alias_exists = MagicMock(return_value=False)
-        cm.ensure_collection_exists("test_coll")
-
-        assert cm.client.create_payload_index.call_count == 13
-
-    def test_delete_collection_failure(self):
-        cm = self._make()
-        cm.client.delete_collection.side_effect = Exception("fail")
-        result = cm.delete_collection("test_coll")
-        assert result is False
-
-    def test_collection_exists_true(self):
-        cm = self._make()
-        mock_coll = MagicMock()
-        mock_coll.name = "my_coll"
-        cm.client.get_collections.return_value.collections = [mock_coll]
-        cm.alias_exists = MagicMock(return_value=False)
-        assert cm.collection_exists("my_coll") is True
-
-    def test_collection_exists_via_alias(self):
-        cm = self._make()
-        cm.client.get_collections.return_value.collections = []
-        cm.alias_exists = MagicMock(return_value=True)
-        assert cm.collection_exists("alias_name") is True
-
-    def test_collection_exists_false(self):
-        cm = self._make()
-        cm.client.get_collections.return_value.collections = []
-        cm.alias_exists = MagicMock(return_value=False)
-        assert cm.collection_exists("nonexistent") is False
-
-    def test_get_collection_names(self):
-        cm = self._make()
-        c1, c2 = MagicMock(), MagicMock()
-        c1.name = "coll_a"
-        c2.name = "coll_b"
-        cm.client.get_collections.return_value.collections = [c1, c2]
-        assert cm.get_collection_names() == ["coll_a", "coll_b"]
-
-
-# ─────────────────────────────────────────────────────────────
-# BranchManager
-# ─────────────────────────────────────────────────────────────
-class TestBranchManager:
-
-    def _make(self, client=None):
-        from rag_pipeline.core.index_manager.branch_manager import BranchManager
-        return BranchManager(client or MagicMock())
-
-    def test_init(self):
-        mock_client = MagicMock()
-        bm = self._make(mock_client)
-        assert bm.client is mock_client
-
-    def test_delete_branch_points_success(self):
-        bm = self._make()
-        result = bm.delete_branch_points("coll", "feature/xyz")
-        assert result is True
-        bm.client.delete.assert_called_once()
-
-    def test_delete_branch_points_failure(self):
-        bm = self._make()
-        bm.client.delete.side_effect = Exception("fail")
-        result = bm.delete_branch_points("coll", "feature/xyz")
-        assert result is False
-
-    def test_get_branch_point_count(self):
-        bm = self._make()
-        bm.client.count.return_value.count = 42
-        count = bm.get_branch_point_count("coll", "main")
-        assert count == 42
-
-    def test_get_branch_point_count_error(self):
-        bm = self._make()
-        bm.client.count.side_effect = Exception("fail")
-        count = bm.get_branch_point_count("coll", "main")
-        assert count == 0
-
-
-# ─────────────────────────────────────────────────────────────
-# PointOperations
-# ─────────────────────────────────────────────────────────────
-class TestPointOperations:
-
-    def _make(self, client=None, embed_model=None, batch_size=50):
-        from rag_pipeline.core.index_manager.point_operations import PointOperations
-        return PointOperations(
-            client or MagicMock(),
-            embed_model or MagicMock(),
-            batch_size=batch_size,
-        )
-
-    def test_init(self):
-        mock_client = MagicMock()
-        mock_embed = MagicMock()
-        po = self._make(mock_client, mock_embed, 25)
-        assert po.client is mock_client
-        assert po.embed_model is mock_embed
-        assert po.batch_size == 25
-
-    def test_generate_point_id_deterministic(self):
-        from rag_pipeline.core.index_manager.point_operations import PointOperations
-        id1 = PointOperations.generate_point_id("ws", "proj", "main", "a.py", 0)
-        id2 = PointOperations.generate_point_id("ws", "proj", "main", "a.py", 0)
-        assert id1 == id2
-
-    def test_generate_point_id_different_for_different_input(self):
-        from rag_pipeline.core.index_manager.point_operations import PointOperations
-        id1 = PointOperations.generate_point_id("ws", "proj", "main", "a.py", 0)
-        id2 = PointOperations.generate_point_id("ws", "proj", "main", "b.py", 0)
-        assert id1 != id2
-
-    def test_generate_point_id_is_uuid(self):
-        from rag_pipeline.core.index_manager.point_operations import PointOperations
-        result = PointOperations.generate_point_id("ws", "proj", "main", "a.py", 0)
-        # Should be a valid UUID string
-        uuid.UUID(result)
-
-    def test_prepare_chunks_for_embedding(self):
-        po = self._make()
-
-        mock_chunk = MagicMock()
-        mock_chunk.metadata = {"path": "src/main.py"}
-        mock_chunk.text = "def hello(): pass"
-
-        result = po.prepare_chunks_for_embedding(
-            [mock_chunk], "ws", "proj", "main"
-        )
-        assert len(result) == 1
-        point_id, chunk = result[0]
-        assert isinstance(point_id, str)
-        assert chunk is mock_chunk
-
-    def test_embed_and_create_points_empty(self):
-        po = self._make()
-        result = po.embed_and_create_points([])
-        assert result == []
-
-    def test_embed_and_create_points(self):
-        mock_embed = MagicMock()
-        mock_embed.get_text_embedding_batch.return_value = [[0.1, 0.2, 0.3]]
-        po = self._make(embed_model=mock_embed)
-
-        mock_chunk = MagicMock()
-        mock_chunk.text = "def hello(): pass"
-        mock_chunk.metadata = {"path": "a.py"}
-
-        points = po.embed_and_create_points([("point-id-1", mock_chunk)])
-        assert len(points) == 1
-        assert points[0].id == "point-id-1"
-        assert points[0].vector == pytest.approx([0.1, 0.2, 0.3])
-
-
-# ─────────────────────────────────────────────────────────────
-# StatsManager
-# ─────────────────────────────────────────────────────────────
-class TestStatsManager:
-
-    def _make(self, client=None, prefix="rag"):
-        from rag_pipeline.core.index_manager.stats_manager import StatsManager
-        return StatsManager(client or MagicMock(), prefix)
-
-    def test_init(self):
-        mock_client = MagicMock()
-        sm = self._make(mock_client, "rag")
-        assert sm.client is mock_client
-        assert sm.collection_prefix == "rag"
-
-    def test_get_branch_stats(self):
-        sm = self._make()
-        sm.client.count.return_value.count = 42
-
-        stats = sm.get_branch_stats("ws", "proj", "main", "rag_ws__proj")
-        assert stats.chunk_count == 42
-        assert stats.workspace == "ws"
-        assert stats.project == "proj"
-        assert stats.branch == "main"
-
-    def test_get_branch_stats_error(self):
-        sm = self._make()
-        sm.client.count.side_effect = Exception("fail")
-
-        stats = sm.get_branch_stats("ws", "proj", "main", "rag_ws__proj")
-        assert stats.chunk_count == 0
-
-    def test_get_project_stats(self):
-        sm = self._make()
-        sm.client.get_collection.return_value.points_count = 100
-
-        stats = sm.get_project_stats("ws", "proj", "rag_ws__proj")
-        assert stats.chunk_count == 100
-
-    def test_get_project_stats_error(self):
-        sm = self._make()
-        sm.client.get_collection.side_effect = Exception("fail")
-
-        stats = sm.get_project_stats("ws", "proj", "rag_ws__proj")
-        assert stats.chunk_count == 0
-
-    def test_list_all_indices(self):
-        sm = self._make(prefix="rag")
-
-        c1 = MagicMock()
-        c1.name = "rag_workspace1__project1"
-        sm.client.get_collections.return_value.collections = [c1]
-        sm.client.get_collection.return_value.points_count = 50
-
-        indices = sm.list_all_indices(alias_checker=lambda x: False)
-        assert len(indices) == 1
-        assert indices[0].workspace == "workspace1"
-        assert indices[0].project == "project1"
-
-
-# ─────────────────────────────────────────────────────────────
-# RAGIndexManager
-# ─────────────────────────────────────────────────────────────
-class TestRAGIndexManager:
-
-    @pytest.fixture(autouse=True)
-    def avoid_network_tokenizer_download(self, monkeypatch):
-        # Constructing LlamaIndex's default SentenceSplitter may lazily fetch
-        # the tiktoken vocabulary. These manager unit tests mock embeddings and
-        # Qdrant, so they must remain hermetic as well.
-        from rag_pipeline.core.index_manager.manager import Settings
-
-        monkeypatch.setattr(Settings, "_node_parser", MagicMock(), raising=False)
-
-
-    def _mock_config(self):
-        mock_config = MagicMock()
-        mock_config.qdrant_url = "http://localhost:6333"
-        mock_config.qdrant_api_key = None
-        mock_config.embedding_dim = 768
-        mock_config.qdrant_collection_prefix = "rag"
-        mock_config.chunk_size = 1500
-        mock_config.chunk_overlap = 200
-        return mock_config
-
-    def _make_embed_mock(self):
-        """Create a mock that passes LlamaIndex's isinstance(embed_model, BaseEmbedding) check."""
-        from llama_index.core.base.embeddings.base import BaseEmbedding
-        mock_embed = MagicMock(spec=BaseEmbedding)
-        return mock_embed
-
-    @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
-    @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
-    @patch("rag_pipeline.core.index_manager.manager.QdrantClient")
-    def test_init(self, MockQdrant, mock_info, mock_create):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        mock_info.return_value = {"provider": "ollama", "type": "local", "model": "nomic", "embedding_dim": 768}
-        mock_embed = self._make_embed_mock()
-        mock_create.return_value = mock_embed
-
-        mgr = RAGIndexManager(self._mock_config())
-        assert mgr.qdrant_client is not None
-        assert mgr.embed_model is mock_embed
-        MockQdrant.assert_called_once_with(
-            url="http://localhost:6333",
-            api_key=None,
-            timeout=30,
-        )
-
-    def test_close_releases_coordinator_and_qdrant_client(self):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        manager = object.__new__(RAGIndexManager)
-        manager._mutation_coordinator = MagicMock()
-        manager.qdrant_client = MagicMock()
-
-        manager.close()
-
-        manager._mutation_coordinator.close.assert_called_once_with()
-        manager.qdrant_client.close.assert_called_once_with()
-
-    @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
-    @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
-    @patch("rag_pipeline.core.index_manager.manager.QdrantClient")
-    def test_get_project_collection_name(self, MockQdrant, mock_info, mock_create):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        mock_info.return_value = {"provider": "ollama", "type": "local", "model": "nomic", "embedding_dim": 768}
-        mock_create.return_value = self._make_embed_mock()
-
-        mgr = RAGIndexManager(self._mock_config())
-        name = mgr._get_project_collection_name("workspace", "project")
-        assert name.startswith("rag_")
-        assert "workspace" in name
-
-    def test_branch_operator_alias_is_readable_and_branch_specific(self):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        manager = object.__new__(RAGIndexManager)
-        manager.config = MagicMock(qdrant_collection_prefix="rag")
-        manager.config.qdrant_collection_prefix = "rag"
-
-        assert manager._get_branch_operator_alias(
-            "Workspace", "Project", "develop"
-        ) == "rag_workspace__project__develop"
-        assert manager._get_branch_operator_alias(
-            "Workspace", "Project", "release/1.2"
-        ).startswith("rag_workspace__project__release_1_2_")
-
-    def test_branch_operator_alias_preserves_case_sensitive_identity(self):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        manager = object.__new__(RAGIndexManager)
-        manager.config = MagicMock(qdrant_collection_prefix="rag")
-        manager.config.qdrant_collection_prefix = "rag"
-
-        lowercase = manager._get_branch_operator_alias(
-            "Workspace", "Project", "feature"
-        )
-        uppercase = manager._get_branch_operator_alias(
-            "Workspace", "Project", "Feature"
-        )
-
-        assert lowercase != uppercase
-        assert lowercase == "rag_workspace__project__feature"
-        assert uppercase.startswith("rag_workspace__project__feature_")
-
-    def test_readable_alias_publication_requires_immutable_generation_target(self):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        manager = object.__new__(RAGIndexManager)
+    )
+
+    result = manager.discover_revision_preflights(
+        "ws",
+        "project",
+        "main",
+    )
+
+    assert [item["collection_target"] for item in result] == [
+        "generation-target"
+    ]
+    manager.store.repository_generation_receipts.assert_called_once_with(
+        workspace="ws",
+        project="project",
+        branch="main",
+        revision=None,
+    )
+
+
+def test_close_releases_the_mutation_coordinator():
+    manager = object.__new__(RAGIndexManager)
+    manager._mutation_coordinator = MagicMock()
+
+    manager.close()
+
+    manager._mutation_coordinator.close.assert_called_once_with()
+
+
+def test_representation_identity_includes_catalog_and_implementation():
+    manager = object.__new__(RAGIndexManager)
+    manager.index_representation_fingerprint = "sha256:" + "1" * 64
+    registry = SimpleNamespace(
+        ordered_ids=("java", "spring"),
+        fingerprint="sha256:" + "2" * 64,
+    )
+    catalog = SimpleNamespace(
+        registry=registry,
+        implementation_fingerprint=lambda plugin_ids: "sha256:" + "3" * 64,
+    )
+    manager.plugin_catalog = catalog
+
+    identity = manager.current_representation_identity()
+
+    assert identity["plugin_ids"] == ["java", "spring"]
+    assert identity["plugin_descriptor_fingerprint"] == "sha256:" + "2" * 64
+    assert identity["plugin_implementation_fingerprint"] == "sha256:" + "3" * 64
+    assert identity["representation_identity"].startswith("sha256:")
+    assert len(identity["representation_identity"]) == 71
+
+
+def test_only_syntax_language_selection_changes_are_delta_safe():
+    descriptors = {
+        "bash": SimpleNamespace(kind="language", capabilities=("syntax",)),
+        "magento": SimpleNamespace(
+            kind="framework",
+            capabilities=("graph", "syntax"),
+        ),
+    }
+    registry = SimpleNamespace(descriptor=lambda plugin_id: descriptors[plugin_id])
+
+    assert _unsafe_delta_plugin_selection_changes(
+        registry,
+        ("php", "magento", "bash"),
+        ("php", "magento"),
+    ) == ()
+    assert _unsafe_delta_plugin_selection_changes(
+        registry,
+        ("php", "magento"),
+        ("php",),
+    ) == ("magento",)
+
+
+@pytest.mark.parametrize("change", ("mutate", "delete"))
+def test_generation_is_not_published_when_source_changes_after_scan(
+    tmp_path,
+    change,
+):
+    repository = tmp_path / "repository"
+    source_file = repository / "src" / "example.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("def stable():\n    return True\n", encoding="utf-8")
+    source_tree = attest_repository_source_tree(repository, "a" * 40)
+    collection_target = f"source-change-{change}"
+    manager = RAGIndexManager(RAGConfig(
+        structural_index_root=str(tmp_path / "structural-index"),
+    ))
+    # Keep this regression focused on the host's exact source lifecycle.
+    manager.plugin_catalog = None
+    manager.plugin_runtime = None
+    manager.plugin_selector = None
+    original_scan = manager.loader.iter_repository_files
+
+    def scan_then_change(*args, **kwargs):
+        yield from original_scan(*args, **kwargs)
+        if change == "mutate":
+            source_file.write_text(
+                "def changed():\n    return False\n",
+                encoding="utf-8",
+            )
+        else:
+            source_file.unlink()
 
+    manager.loader.iter_repository_files = scan_then_change
+    try:
         with pytest.raises(
-            ValueError,
-            match="require an immutable collection target",
+            RepositorySourceTreeError,
+            match="acquisition attestation",
         ):
-            manager.index_repository(
-                repo_path="/tmp/repository",
+            manager._build_generation(
+                repo_path=repository,
                 workspace="workspace",
                 project="project",
                 branch="main",
-                commit="abc123",
-                publish_branch_alias=True,
+                commit="a" * 40,
+                include_patterns=None,
+                exclude_patterns=None,
+                source_tree=source_tree,
+                collection_target=collection_target,
+                progress_callback=None,
+                project_type=None,
+                source_root=None,
+                activation_guard=lambda: None,
             )
 
-    @patch(
-        "rag_pipeline.core.index_manager.manager.verify_repository_source_tree"
+        assert manager.store.read_receipt(collection_target) is None
+        assert not manager.store.paths_for_target(
+            collection_target
+        ).directory.exists()
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("cancel_stage,batches", [("indexing", 1), ("building_lookup_indexes", 2)])
+def test_generation_cancellation_at_build_phase_removes_pending_state(
+    tmp_path, cancel_stage, batches,
+):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    source_tree = SimpleNamespace(
+        file_sha256_by_path={},
+        tree_sha256="sha256:" + "1" * 64,
     )
-    def test_exact_snapshot_forwards_resolved_prior_generation_for_vector_reuse(
-        self,
-        verify_source_tree,
-    ):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+    manager = RAGIndexManager(RAGConfig(
+        structural_index_root=str(tmp_path / "structural-index"),
+    ))
+    manager.plugin_catalog = None
+    manager.plugin_runtime = None
+    manager.plugin_selector = None
+    manager.loader.iter_repository_files = MagicMock(
+        return_value=iter(Path(f"src/file_{index}.py") for index in range(51))
+    )
+    manager.loader.load_file_batch = MagicMock(return_value=[])
+    cancellation_event = Event()
+    target = "cancelled-generation"
 
-        manager = object.__new__(RAGIndexManager)
-        manager._collection_manager = MagicMock()
-        manager._collection_manager.resolve_collection_target.return_value = (
-            "prior-generation-physical"
-        )
-        manager._indexer = MagicMock()
-        manager._indexer.index_repository.return_value = MagicMock()
-        manager._full_index_capacity = threading.BoundedSemaphore(1)
-        manager._mutation_coordinator = MagicMock()
-        lease = MagicMock(token="operation-token")
-        lease.assert_owned = MagicMock()
-        manager._mutation_coordinator.acquire.return_value.__enter__.return_value = (
-            lease
-        )
-        manager._publication_aliases = MagicMock(return_value=[])
-        manager._publication_scope = MagicMock(return_value=None)
-        source_tree = MagicMock(tree_sha256="f" * 64)
-        verify_source_tree.return_value = source_tree
+    def cancel_after_first_batch(event):
+        if event["stage"] == cancel_stage:
+            cancellation_event.set()
 
+    try:
+        with pytest.raises(
+            RepositoryIndexCancelled,
+            match="indexing was cancelled",
+        ):
+            manager._build_generation(
+                repo_path=repository,
+                workspace="workspace",
+                project="project",
+                branch="main",
+                commit="a" * 40,
+                include_patterns=None,
+                exclude_patterns=None,
+                source_tree=source_tree,
+                collection_target=target,
+                progress_callback=cancel_after_first_batch,
+                project_type=None,
+                source_root=None,
+                activation_guard=lambda: None,
+                cancellation_event=cancellation_event,
+            )
+
+        assert manager.loader.load_file_batch.call_count == batches
+        assert manager.store.read_receipt(target) is None
+        assert not manager.store.paths_for_target(target).directory.exists()
+        assert tuple(manager.store.pending_root.iterdir()) == ()
+    finally:
+        manager.close()
+
+
+def test_delta_graph_removal_cancellation_removes_pending_state(
+    tmp_path,
+    monkeypatch,
+):
+    repository = tmp_path / "repository"
+    source_file = repository / "src" / "example.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("value = 1\n", encoding="utf-8")
+    base_revision = "a" * 40
+    proposed_revision = "b" * 40
+    base_source = attest_repository_source_tree(repository, base_revision)
+    manager = RAGIndexManager(RAGConfig(
+        structural_index_root=str(tmp_path / "structural-index"),
+    ))
+    manager.plugin_catalog = None
+    manager.plugin_runtime = None
+    manager.plugin_selector = None
+    manager._mutation_coordinator.enabled = False
+    base_target = "delta-cancellation-base"
+    target = "delta-cancellation-target"
+    cancellation_event = Event()
+
+    try:
         manager.index_repository(
-            repo_path="/tmp/repository",
+            repo_path=str(repository),
+            workspace="workspace",
+            project="project",
+            branch="main",
+            commit=base_revision,
+            source_tree_sha256=base_source.tree_sha256,
+            collection_target=base_target,
+        )
+        base_receipt = manager.store.read_receipt(base_target)
+        assert base_receipt is not None
+
+        source_file.write_text("value = 2\n", encoding="utf-8")
+        proposed_source = attest_repository_source_tree(
+            repository,
+            proposed_revision,
+        )
+
+        def cancel_graph_removal(
+            _writer,
+            _paths,
+            *,
+            cancellation_check=None,
+        ):
+            assert cancellation_check is not None
+            cancellation_event.set()
+            cancellation_check()
+            raise AssertionError("cancellation check did not stop delta removal")
+
+        monkeypatch.setattr(
+            StructuralGraphWriter,
+            "remove_paths",
+            cancel_graph_removal,
+        )
+
+        with pytest.raises(
+            RepositoryIndexCancelled,
+            match="indexing was cancelled",
+        ):
+            manager.index_repository_delta(
+                repo_path=str(repository),
+                workspace="workspace",
+                project="project",
+                branch="main",
+                base_revision=base_revision,
+                commit=proposed_revision,
+                changed_paths=("src/example.py",),
+                deleted_paths=(),
+                source_tree_sha256=proposed_source.tree_sha256,
+                collection_target=target,
+                base_collection_target=base_target,
+                base_generation_manifest_sha256=(
+                    base_receipt["generation_manifest_sha256"]
+                ),
+                cancellation_event=cancellation_event,
+            )
+
+        assert manager.store.read_receipt(target) is None
+        assert not manager.store.paths_for_target(target).directory.exists()
+        assert tuple(manager.store.pending_root.iterdir()) == ()
+    finally:
+        manager.close()
+
+
+def test_generation_indexes_explicit_file_to_ast_hierarchy(tmp_path):
+    repository = tmp_path / "repository"
+    source_file = repository / "src" / "example.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text(
+        "class Service:\n    def run(self):\n        return True\n",
+        encoding="utf-8",
+    )
+    source_tree = attest_repository_source_tree(repository, "a" * 40)
+    manager = RAGIndexManager(RAGConfig(
+        structural_index_root=str(tmp_path / "structural-index"),
+    ))
+    manager.plugin_catalog = None
+    manager.plugin_runtime = None
+    manager.plugin_selector = None
+    target = "file-hierarchy"
+    try:
+        manager._build_generation(
+            repo_path=repository,
             workspace="workspace",
             project="project",
             branch="main",
             commit="a" * 40,
-            source_tree_sha256="f" * 64,
-            collection_target="new-generation",
-            reuse_collection_target="prior-generation",
+            include_patterns=None,
+            exclude_patterns=None,
+            source_tree=source_tree,
+            collection_target=target,
+            progress_callback=None,
+            project_type=None,
+            source_root=None,
+            activation_guard=lambda: None,
         )
+        receipt = manager.store.read_receipt(target)
+        assert receipt is not None
+        with manager.open_reader(
+            workspace="workspace",
+            project="project",
+            branch="main",
+            revision="a" * 40,
+            generation_manifest_sha256=receipt["generation_manifest_sha256"],
+            collection_target=target,
+        ) as reader:
+            file_row = reader.connection.execute(
+                "SELECT unit_id FROM units WHERE record_type = 'structural_file' "
+                "AND path = 'src/example.py'"
+            ).fetchone()
+            assert file_row is not None
+            children = reader.connection.execute(
+                "SELECT target_unit_id FROM relations "
+                "WHERE source_unit_id = ? AND kind = 'CONTAINS' "
+                "AND origin = 'structural-index'",
+                (file_row["unit_id"],),
+            ).fetchall()
+            assert children
+            assert all(row["target_unit_id"] for row in children)
+            relation_count = reader.connection.execute(
+                "SELECT count(*) FROM relations"
+            ).fetchone()[0]
+            assert relation_count > 0
+            assert reader.connection.execute(
+                "SELECT count(*) FROM relation_scopes WHERE scope = 'file'"
+            ).fetchone()[0] == relation_count
+            assert reader.connection.execute(
+                "SELECT count(*) FROM relations AS relation "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM relation_scopes AS ownership "
+                "WHERE ownership.relation_id = relation.relation_id "
+                "AND ownership.scope = 'file')"
+            ).fetchone()[0] == 0
+    finally:
+        manager.close()
 
-        manager._collection_manager.resolve_collection_target.assert_called_once_with(
-            "prior-generation"
+
+def test_revision_preflight_rejects_a_database_seal_mismatch(tmp_path):
+    repository = tmp_path / "repository"
+    source_file = repository / "src" / "example.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("def stable():\n    return True\n", encoding="utf-8")
+    source_tree = attest_repository_source_tree(repository, "a" * 40)
+    manager = RAGIndexManager(RAGConfig(
+        structural_index_root=str(tmp_path / "structural-index"),
+    ))
+    manager.plugin_catalog = None
+    manager.plugin_runtime = None
+    manager.plugin_selector = None
+    target = "preflight-seal-mismatch"
+    try:
+        manager._build_generation(
+            repo_path=repository,
+            workspace="workspace",
+            project="project",
+            branch="main",
+            commit="a" * 40,
+            include_patterns=None,
+            exclude_patterns=None,
+            source_tree=source_tree,
+            collection_target=target,
+            progress_callback=None,
+            project_type=None,
+            source_root=None,
+            activation_guard=lambda: None,
         )
-        assert manager._indexer.index_repository.call_args.kwargs[
-            "reuse_collection_name"
-        ] == "prior-generation-physical"
+        receipt = manager.store.read_receipt(target)
+        assert receipt is not None
+        assert manager.get_revision_preflight(
+            "workspace",
+            "project",
+            "main",
+            "a" * 40,
+            collection_target=target,
+        ) is not None
 
-    def test_full_index_capacity_serializes_heavy_builds(self):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
+        connection = manager.store.connect(
+            manager.store.paths_for_target(target).database
+        )
+        connection.execute(
+            "UPDATE generation SET receipt_json = ? WHERE singleton = 1",
+            ('{"tampered":true}',),
+        )
+        connection.commit()
+        connection.close()
 
-        manager = object.__new__(RAGIndexManager)
-        manager._full_index_capacity = threading.BoundedSemaphore(1)
-        first_entered = threading.Event()
-        release_first = threading.Event()
-        second_waiting = threading.Event()
-        second_entered = threading.Event()
-
-        def first_build():
-            with manager._admit_full_index("ws", "one", "main", None):
-                first_entered.set()
-                release_first.wait(timeout=2)
-
-        def second_build():
-            def progress(event):
-                if event["stage"] == "waiting_capacity":
-                    second_waiting.set()
-
-            with manager._admit_full_index("ws", "two", "main", progress):
-                second_entered.set()
-
-        first = threading.Thread(target=first_build)
-        second = threading.Thread(target=second_build)
-        first.start()
-        assert first_entered.wait(timeout=1)
-        second.start()
-        assert second_waiting.wait(timeout=1)
-        assert not second_entered.is_set()
-
-        release_first.set()
-        first.join(timeout=1)
-        second.join(timeout=1)
-
-        assert not first.is_alive()
-        assert not second.is_alive()
-        assert second_entered.is_set()
-
-    @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
-    @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
-    @patch("rag_pipeline.core.index_manager.manager.QdrantClient")
-    def test_delete_branch_delegates(self, MockQdrant, mock_info, mock_create):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        mock_info.return_value = {"provider": "ollama", "type": "local", "model": "nomic", "embedding_dim": 768}
-        mock_create.return_value = self._make_embed_mock()
-
-        mgr = RAGIndexManager(self._mock_config())
-        mgr._mutation_coordinator.enabled = False
-        mgr._collection_manager = MagicMock()
-        mgr._collection_manager.collection_exists.return_value = True
-        mgr._branch_manager = MagicMock()
-        mgr._branch_manager.delete_branch_points.return_value = True
-
-        result = mgr.delete_branch("workspace", "project", "feature/xyz")
-        assert result is True
-
-    @patch("rag_pipeline.core.index_manager.manager.create_embedding_model")
-    @patch("rag_pipeline.core.index_manager.manager.get_embedding_model_info")
-    @patch("rag_pipeline.core.index_manager.manager.QdrantClient")
-    def test_get_branch_point_count(self, MockQdrant, mock_info, mock_create):
-        from rag_pipeline.core.index_manager.manager import RAGIndexManager
-
-        mock_info.return_value = {"provider": "ollama", "type": "local", "model": "nomic", "embedding_dim": 768}
-        mock_create.return_value = self._make_embed_mock()
-
-        mgr = RAGIndexManager(self._mock_config())
-        mgr._collection_manager = MagicMock()
-        mgr._collection_manager.collection_exists.return_value = True
-        mgr._collection_manager.alias_exists.return_value = False
-        mgr._branch_manager = MagicMock()
-        mgr._branch_manager.get_branch_point_count.return_value = 42
-
-        count = mgr.get_branch_point_count("workspace", "project", "main")
-        assert count == 42
+        with pytest.raises(
+            ExactIndexPreconditionError,
+            match="receipt does not match its database seal",
+        ):
+            manager.get_revision_preflight(
+                "workspace",
+                "project",
+                "main",
+                "a" * 40,
+                collection_target=target,
+            )
+    finally:
+        manager.close()

@@ -6,6 +6,7 @@ falling back to built-in TAGS_QUERY only when custom query is unavailable.
 """
 
 import logging
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional
 
@@ -247,15 +248,16 @@ class QueryRunner:
         
         results: List[QueryMatch] = []
 
+        # Captures often overlap (class, methods, names, calls). Index newline
+        # positions once instead of rescanning the file prefix for every endpoint.
+        # Coordinates remain byte-derived to avoid native binding point errors.
+        line_starts = [0]
+        line_starts.extend(index + 1 for index, value in enumerate(source_bytes) if value == 10)
+
         def point_for_byte(byte_offset: int) -> tuple[int, int]:
-            """Return a zero-based (line, column) point derived from source bytes."""
-            line = source_bytes.count(b'\n', 0, byte_offset)
-            previous_newline = source_bytes.rfind(b'\n', 0, byte_offset)
-            if previous_newline < 0:
-                column = byte_offset
-            else:
-                column = byte_offset - previous_newline - 1
-            return line, column
+            """Return the same zero-based UTF-8 byte point for every capture."""
+            line = bisect_right(line_starts, byte_offset) - 1
+            return line, byte_offset - line_starts[line]
 
         def captured_node(capture_name: str, node: Any) -> CapturedNode:
             """Build a captured node using byte-derived points for binding safety."""

@@ -341,6 +341,18 @@ public class AnalysisLockService {
         return lease;
     }
 
+    /** Fences a short database mutation in the same transaction as its ownership proof. */
+    public <T> T withOwnedLocks(java.util.Collection<String> lockKeys, java.util.function.Supplier<T> mutation) {
+        return requiresNewTransactionTemplate.execute(status -> {
+            for (String key : lockKeys) {
+                AnalysisLock lock = lockRepository.findOwnedLockForUpdate(key)
+                        .orElseThrow(() -> new IllegalStateException("Operation lease was replaced before persistence"));
+                if (lock.isExpired()) throw new IllegalStateException("Operation lease expired before persistence");
+            }
+            return mutation.get();
+        });
+    }
+
     public interface LockLease extends AutoCloseable {
         boolean isOwnershipLost();
 

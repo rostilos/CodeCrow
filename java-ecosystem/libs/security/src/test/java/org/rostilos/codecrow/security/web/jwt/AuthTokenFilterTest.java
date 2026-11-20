@@ -32,6 +32,9 @@ class AuthTokenFilterTest {
     private UserDetailsServiceImpl userDetailsService;
 
     @Mock
+    private org.rostilos.codecrow.core.service.PersonalAccessTokenService personalTokens;
+
+    @Mock
     private HttpServletRequest request;
 
     @Mock
@@ -46,6 +49,29 @@ class AuthTokenFilterTest {
     @BeforeEach
     void setUp() {
         SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void personalTokenAuthenticatesAsItsOwnerAndCarriesScopeToTheHandler() throws Exception {
+        var token = new org.rostilos.codecrow.core.model.user.PersonalAccessToken();
+        var user = new org.rostilos.codecrow.core.model.user.User();
+        user.setUsername("developer"); token.setUser(user);
+        when(request.getHeader("Authorization")).thenReturn("Bearer ccpat_secret");
+        when(personalTokens.authenticate("ccpat_secret")).thenReturn(java.util.Optional.of(token));
+        authTokenFilter.doFilterInternal(request, response, filterChain);
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getName()).isEqualTo("developer");
+        verify(request).setAttribute("personalAccessToken", token);
+        verify(filterChain, times(1)).doFilter(request, response);
+        verifyNoInteractions(jwtUtils);
+    }
+
+    @Test
+    void revokedTokenCannotReachControllers() throws Exception {
+        when(request.getHeader("Authorization")).thenReturn("Bearer ccpat_revoked");
+        when(personalTokens.authenticate("ccpat_revoked")).thenReturn(java.util.Optional.empty());
+        authTokenFilter.doFilterInternal(request, response, filterChain);
+        verify(response).sendError(eq(401), anyString());
+        verifyNoInteractions(filterChain, jwtUtils);
     }
 
     @Test

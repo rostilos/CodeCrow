@@ -1,0 +1,23 @@
+{
+  "id": "pnpm",
+  "kind": "framework",
+  "requires": [
+    "javascript"
+  ],
+  "capabilities": [
+    "graph",
+    "index"
+  ],
+  "detection": {
+    "extensions": [],
+    "filesAll": [
+      "pnpm-workspace.yaml"
+    ],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "python": "codecrow_plugin_pnpm:create_plugin"
+  }
+}

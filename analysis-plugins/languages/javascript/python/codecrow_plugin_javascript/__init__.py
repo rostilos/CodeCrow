@@ -14,6 +14,7 @@ from .repository import (
     JavascriptRepositorySession,
     analyze_javascript_artifact,
 )
+from .package_manifest import package_dependency_facts
 
 _RELATION_KINDS = {
     "javascript-call",
@@ -90,13 +91,17 @@ class JavascriptPlugin:
         )
 
     def index_file(self, artifact: FileArtifact):
+        is_package = artifact.path.rsplit("/", 1)[-1] == "package.json"
         if (
-            not artifact.path.casefold().endswith(JAVASCRIPT_EXTENSIONS)
+            not is_package and not artifact.path.casefold().endswith(JAVASCRIPT_EXTENSIONS)
             or artifact.deleted
         ):
             return PluginOutcome.abstained()
         try:
-            facts, _ = analyze_javascript_artifact(artifact)
+            if is_package:
+                facts = package_dependency_facts(artifact)
+            else:
+                facts, _ = analyze_javascript_artifact(artifact)
         except Exception as exception:
             return PluginOutcome.failed(PluginDiagnostic(
                 "javascript-parse-failed", f"{type(exception).__name__}: {exception}", self.descriptor.id,

@@ -7,7 +7,7 @@ import java.util.Optional;
 public class RawDiffParser {
     public List<FileDiff> execute(String rawDiff) {
         List<FileDiff> fileDiffs = new ArrayList<>();
-        String[] lines = rawDiff.split("\n");
+        String[] lines = org.rostilos.codecrow.plugins.RepositoryFileScope.filterDiff(rawDiff).split("\n");
         FileDiff currentFile = null;
         StringBuilder patchBuilder = new StringBuilder();
         for (String line : lines) {

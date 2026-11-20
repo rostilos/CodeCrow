@@ -27,9 +27,7 @@ _TYPE_NODES = {
 }
 _LOCAL_TYPE_NODES = _TYPE_NODES | {"annotation_type_declaration"}
 _ANNOTATION_NODES = {"annotation", "marker_annotation"}
-_MAX_FACTS_PER_FILE = 160
 _MAX_CONFIG_KEYS = 128
-_MAX_REVIEW_PATHS = 64
 _PROPERTY = re.compile(
     r"^[ \t]*(?P<key>%?[A-Za-z0-9_][A-Za-z0-9_.%-]*)"
     r"[ \t]*(?:=|:)[ \t]*"
@@ -377,28 +375,6 @@ def _first_type_argument(document: TreeSitterDocument, parent) -> str:
     if arguments is None or not arguments.named_child_count:
         return ""
     return document.text(arguments.named_child(0)).strip()
-
-
-def _bounded_facts(facts: set[GraphFact]) -> tuple[GraphFact, ...]:
-    by_kind: dict[str, list[GraphFact]] = {}
-    for fact in sorted(facts):
-        by_kind.setdefault(fact.kind, []).append(fact)
-    selected = []
-    offset = 0
-    kinds = tuple(sorted(by_kind))
-    while len(selected) < _MAX_FACTS_PER_FILE:
-        added = False
-        for kind in kinds:
-            values = by_kind[kind]
-            if offset < len(values):
-                selected.append(values[offset])
-                added = True
-                if len(selected) == _MAX_FACTS_PER_FILE:
-                    break
-        if not added:
-            break
-        offset += 1
-    return tuple(sorted(selected))
 
 
 def _config_key_facts(artifact: FileArtifact) -> tuple[GraphFact, ...]:
@@ -868,7 +844,7 @@ class QuarkusPlugin:
 
         if not facts:
             return PluginOutcome.abstained()
-        return PluginOutcome.handled(_bounded_facts(facts))
+        return PluginOutcome.handled(tuple(sorted(facts)))
 
     def review(self, paths: tuple[str, ...]):
         selected = tuple(sorted(
@@ -876,7 +852,7 @@ class QuarkusPlugin:
             for path in paths
             if path.casefold().endswith(".java")
             or _is_application_properties(path)
-        ))[:_MAX_REVIEW_PATHS]
+        ))
         if not selected:
             return PluginOutcome.abstained()
         return PluginOutcome.handled(ReviewContribution(

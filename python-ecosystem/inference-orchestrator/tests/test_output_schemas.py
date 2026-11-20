@@ -9,7 +9,7 @@ from model.output_schemas import (
     SummarizeOutput,
     DeduplicatedIssueList,
     AskOutput,
-    ReconciliationResolvedIssue,
+    ReconciliationIssueDecision,
     ReconciliationOutput,
 )
 
@@ -222,7 +222,7 @@ class TestAskOutput:
 class TestReconciliationOutput:
 
     def test_basic(self):
-        resolved = ReconciliationResolvedIssue(
+        resolved = ReconciliationIssueDecision(
             issueId="42", isResolved=True,
             resolutionReason="Null check added on line 45",
         )

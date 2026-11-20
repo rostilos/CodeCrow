@@ -16,7 +16,7 @@ import org.rostilos.codecrow.plugins.PluginDescriptor;
 import org.rostilos.codecrow.plugins.PluginKind;
 import org.rostilos.codecrow.plugins.PluginOutcome;
 import org.rostilos.codecrow.plugins.PluginRuntime;
-import org.rostilos.codecrow.vcsclient.VcsClient;
+import org.rostilos.codecrow.vcsclient.RepositorySource;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -44,12 +44,7 @@ class ProjectCapabilitySelectionServiceTest {
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("src/Thing.fixture", "generated/code/Proxy.fixture"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("src/Thing.fixture", "generated/code/Proxy.fixture"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("fixture-policy");
@@ -60,15 +55,9 @@ class ProjectCapabilitySelectionServiceTest {
     void manual_project_type_is_authoritative_and_reads_no_markers() {
         var runtime = new PluginRuntime(List.of(new FixturePolicyPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
+        var vcsClient = mock(RepositorySource.class);
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("magento/src/etc/src/Thing.fixture"),
-                new AnalysisProfileConfig(
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("magento/src/etc/src/Thing.fixture"), new AnalysisProfileConfig(
                         "fixture-policy",
                         "magento/src/etc"));
 
@@ -88,31 +77,17 @@ class ProjectCapabilitySelectionServiceTest {
         var runtime = new PluginRuntime(List.of(new RootedMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        when(vcsClient.getFileContent(
-                "workspace",
-                "repository",
-                "magento/src/etc/framework.marker",
-                "0123456789abcdef"))
+        when(vcsClient.readFile("magento/src/etc/framework.marker", 262_144))
                 .thenReturn("framework=true");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("magento/src/etc/src/Thing.fixture"),
-                new AnalysisProfileConfig(null, "magento/src/etc"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("magento/src/etc/src/Thing.fixture"), new AnalysisProfileConfig(null, "magento/src/etc"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("rooted-marker");
         assertThat(plan.preliminaryCapabilities().detectionEvidence()
                 .get("rooted-marker"))
                 .contains("root:magento/src/etc");
-        verify(vcsClient).getFileContent(
-                "workspace",
-                "repository",
-                "magento/src/etc/framework.marker",
-                "0123456789abcdef");
+        verify(vcsClient).readFile("magento/src/etc/framework.marker", 262_144);
     }
 
     @Test
@@ -121,19 +96,10 @@ class ProjectCapabilitySelectionServiceTest {
         var runtime = new PluginRuntime(List.of(new RootedMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        when(vcsClient.getFileContent(
-                "workspace",
-                "repository",
-                "magento/src/framework.marker",
-                "0123456789abcdef"))
+        when(vcsClient.readFile("magento/src/framework.marker", 262_144))
                 .thenReturn("framework=true");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of(
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of(
                         "magento/src/framework.marker",
                         "magento/src/src/Thing.fixture"));
 
@@ -142,11 +108,7 @@ class ProjectCapabilitySelectionServiceTest {
         assertThat(plan.preliminaryCapabilities().detectionEvidence()
                 .get("rooted-marker"))
                 .contains("root:magento/src");
-        verify(vcsClient).getFileContent(
-                "workspace",
-                "repository",
-                "magento/src/framework.marker",
-                "0123456789abcdef");
+        verify(vcsClient).readFile("magento/src/framework.marker", 262_144);
     }
 
     @Test
@@ -156,9 +118,8 @@ class ProjectCapabilitySelectionServiceTest {
                 languagePlugin("python", ".py"),
                 djangoPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
-        when(vcsClient.listRepositoryFiles(
-                "workspace", "repository", "0123456789abcdef", 500_000))
+        var vcsClient = mock(RepositorySource.class);
+        when(vcsClient.paths())
                 .thenReturn(List.of(
                         "services/store/manage.py",
                         "services/store/store/settings.py",
@@ -166,12 +127,7 @@ class ProjectCapabilitySelectionServiceTest {
                         "services/store/catalog/views.py",
                         "unrelated/tool.py"));
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("services/store/catalog/views.py"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("services/store/catalog/views.py"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("python", "django");
@@ -193,17 +149,11 @@ class ProjectCapabilitySelectionServiceTest {
             throws Exception {
         var runtime = new PluginRuntime(List.of(new RootedMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
-        when(vcsClient.listRepositoryFiles(
-                "workspace", "repository", "0123456789abcdef", 500_000))
+        var vcsClient = mock(RepositorySource.class);
+        when(vcsClient.paths())
                 .thenReturn(List.of("src/Thing.fixture"));
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("framework.marker", "src/Thing.fixture"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("framework.marker", "src/Thing.fixture"));
         var enrichment = new PrEnrichmentDataDto(
                 List.of(FileContentDto.skipped("framework.marker", "deleted")),
                 List.of(),
@@ -213,11 +163,7 @@ class ProjectCapabilitySelectionServiceTest {
         assertThat(plan.repositoryPaths()).containsExactly("src/Thing.fixture");
         assertThat(plan.preliminaryCapabilities().repositoryPlugins()).isEmpty();
         assertThat(service.complete(plan, enrichment).repositoryPlugins()).isEmpty();
-        verify(vcsClient, org.mockito.Mockito.never()).getFileContent(
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString());
+        verify(vcsClient, org.mockito.Mockito.never()).readFile(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(262_144));
     }
 
     @Test
@@ -227,26 +173,18 @@ class ProjectCapabilitySelectionServiceTest {
                 languagePlugin("java", ".java"),
                 quarkusPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
-        when(vcsClient.listRepositoryFiles(
-                "workspace", "repository", "0123456789abcdef", 500_000))
+        var vcsClient = mock(RepositorySource.class);
+        when(vcsClient.paths())
                 .thenReturn(List.of(
                         "services/orders/pom.xml",
                         "services/orders/src/main/java/example/OrderResource.java",
                         "services/legacy/pom.xml"));
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "services/orders/pom.xml", "0123456789abcdef"))
+        when(vcsClient.readFile("services/orders/pom.xml", 262_144))
                 .thenReturn("<groupId>io.quarkus</groupId>");
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "services/legacy/pom.xml", "0123456789abcdef"))
+        when(vcsClient.readFile("services/legacy/pom.xml", 262_144))
                 .thenReturn("<groupId>example</groupId>");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("services/orders/src/main/java/example/OrderResource.java"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("services/orders/src/main/java/example/OrderResource.java"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("java", "quarkus");
@@ -263,38 +201,26 @@ class ProjectCapabilitySelectionServiceTest {
                 languagePlugin("java", ".java"),
                 quarkusPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
+        var vcsClient = mock(RepositorySource.class);
         var repositoryFiles = new ArrayList<String>();
         IntStream.range(0, 100)
                 .mapToObj(index -> "service-%03d/pom.xml".formatted(index))
                 .forEach(repositoryFiles::add);
         repositoryFiles.add("zz-target/pom.xml");
         repositoryFiles.add("zz-target/src/main/java/example/OrderResource.java");
-        when(vcsClient.listRepositoryFiles(
-                "workspace", "repository", "0123456789abcdef", 500_000))
+        when(vcsClient.paths())
                 .thenReturn(repositoryFiles);
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "zz-target/pom.xml", "0123456789abcdef"))
+        when(vcsClient.readFile("zz-target/pom.xml", 262_144))
                 .thenReturn("<groupId>io.quarkus</groupId>");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("zz-target/src/main/java/example/OrderResource.java"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("zz-target/src/main/java/example/OrderResource.java"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("java", "quarkus");
         assertThat(plan.markerContents())
                 .containsEntry("zz-target/pom.xml", "<groupId>io.quarkus</groupId>");
-        verify(vcsClient).getFileContent(
-                "workspace", "repository", "zz-target/pom.xml", "0123456789abcdef");
-        verify(vcsClient, times(64)).getFileContent(
-                org.mockito.ArgumentMatchers.eq("workspace"),
-                org.mockito.ArgumentMatchers.eq("repository"),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.eq("0123456789abcdef"));
+        verify(vcsClient).readFile("zz-target/pom.xml", 262_144);
+        verify(vcsClient, times(64)).readFile(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(262_144));
     }
 
     @Test
@@ -304,23 +230,16 @@ class ProjectCapabilitySelectionServiceTest {
                 languagePlugin("ruby", ".rb"),
                 railsPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
-        when(vcsClient.listRepositoryFiles(
-                "workspace", "repository", "0123456789abcdef", 500_000))
+        var vcsClient = mock(RepositorySource.class);
+        when(vcsClient.paths())
                 .thenReturn(List.of(
                         "apps/billing/Gemfile",
                         "apps/billing/config/routes.rb",
                         "apps/billing/app/models/invoice.rb"));
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "apps/billing/Gemfile", "0123456789abcdef"))
+        when(vcsClient.readFile("apps/billing/Gemfile", 262_144))
                 .thenReturn("gem \"rails\"");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("apps/billing/app/models/invoice.rb"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("apps/billing/app/models/invoice.rb"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("ruby", "rails");
@@ -337,17 +256,11 @@ class ProjectCapabilitySelectionServiceTest {
                 languagePlugin("python", ".py"),
                 djangoPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
-        var vcsClient = mock(VcsClient.class);
-        when(vcsClient.listRepositoryFiles(
-                "workspace", "repository", "0123456789abcdef", 500_000))
-                .thenThrow(new IOException("tree temporarily unavailable"));
+        var vcsClient = mock(RepositorySource.class);
+        when(vcsClient.paths())
+                .thenThrow(new IllegalStateException("archive inventory temporarily unavailable"));
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("services/store/catalog/views.py"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("services/store/catalog/views.py"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("python");
@@ -365,8 +278,7 @@ class ProjectCapabilitySelectionServiceTest {
                 quarkusPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "pom.xml", "0123456789abcdef"))
+        when(vcsClient.readFile("pom.xml", 262_144))
                 .thenReturn("<groupId>io.quarkus</groupId>");
         String deeplyNestedJava = String.join(
                 "/",
@@ -374,19 +286,13 @@ class ProjectCapabilitySelectionServiceTest {
                         .mapToObj(index -> "directory-%02d".formatted(index))
                         .toList()) + "/OrderResource.java";
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of(deeplyNestedJava));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of(deeplyNestedJava));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("java", "quarkus");
         assertThat(plan.preliminaryCapabilities().detectionEvidence().get("quarkus"))
                 .contains("root:.");
-        verify(vcsClient).getFileContent(
-                "workspace", "repository", "pom.xml", "0123456789abcdef");
+        verify(vcsClient).readFile("pom.xml", 262_144);
     }
 
     @Test
@@ -404,12 +310,7 @@ class ProjectCapabilitySelectionServiceTest {
                 "engines/billing/config/routes.rb",
                 "engines/billing/billing.gemspec",
                 "engines/billing/lib/billing/engine.rb");
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                changedFiles);
+        var plan = service.plan(vcsClient, "0123456789abcdef", changedFiles);
         var enrichment = new PrEnrichmentDataDto(
                 List.of(
                         FileContentDto.of(
@@ -441,20 +342,11 @@ class ProjectCapabilitySelectionServiceTest {
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("src/Thing.fixture"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("src/Thing.fixture"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins()).isEmpty();
         assertThat(plan.markerContents()).isEmpty();
-        verify(vcsClient, times(64)).getFileContent(
-                org.mockito.ArgumentMatchers.eq("workspace"),
-                org.mockito.ArgumentMatchers.eq("repository"),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.eq("0123456789abcdef"));
+        verify(vcsClient, times(64)).readFile(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(262_144));
     }
 
     @Test
@@ -463,19 +355,10 @@ class ProjectCapabilitySelectionServiceTest {
         var runtime = new PluginRuntime(List.of(new ManyMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        when(vcsClient.getFileContent(
-                "workspace",
-                "repository",
-                "marker-69.file",
-                "0123456789abcdef"))
+        when(vcsClient.readFile("marker-69.file", 262_144))
                 .thenReturn("present");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("marker-69.file", "src/Thing.fixture"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("marker-69.file", "src/Thing.fixture"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins())
                 .containsExactly("many-markers");
@@ -488,19 +371,12 @@ class ProjectCapabilitySelectionServiceTest {
         var runtime = new PluginRuntime(List.of(new TwoMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "a.marker", "0123456789abcdef"))
+        when(vcsClient.readFile("a.marker", 262_144))
                 .thenReturn("framework=true" + "x".repeat(300_000));
-        when(vcsClient.getFileContent(
-                "workspace", "repository", "b.marker", "0123456789abcdef"))
+        when(vcsClient.readFile("b.marker", 262_144))
                 .thenReturn("framework=true");
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("src/Thing.fixture"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("src/Thing.fixture"));
 
         assertThat(plan.markerContents())
                 .containsOnlyKeys("b.marker")
@@ -516,19 +392,10 @@ class ProjectCapabilitySelectionServiceTest {
         var runtime = new PluginRuntime(List.of(new RootedMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        when(vcsClient.getFileContent(
-                "workspace",
-                "repository",
-                "framework.marker",
-                "0123456789abcdef"))
+        when(vcsClient.readFile("framework.marker", 262_144))
                 .thenThrow(new IOException("temporary marker read failure"));
 
-        var plan = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("src/Thing.fixture"));
+        var plan = service.plan(vcsClient, "0123456789abcdef", List.of("src/Thing.fixture"));
 
         assertThat(plan.preliminaryCapabilities().repositoryPlugins()).isEmpty();
         assertThat(plan.markerContents()).isEmpty();
@@ -540,12 +407,7 @@ class ProjectCapabilitySelectionServiceTest {
         var runtime = new PluginRuntime(List.of(new PatternMarkerPlugin()));
         var service = new ProjectCapabilitySelectionService(runtime);
         var vcsClient = unavailableInventoryClient();
-        var preliminary = service.plan(
-                vcsClient,
-                "workspace",
-                "repository",
-                "0123456789abcdef",
-                List.of("src/Thing.fixture"));
+        var preliminary = service.plan(vcsClient, "0123456789abcdef", List.of("src/Thing.fixture"));
         var marker = new ContentPatternMarker("**/*.fixture", "framework=true");
         var nearlyFull = new ProjectCapabilitySelectionService.SelectionPlan(
                 preliminary.commit(),
@@ -557,7 +419,7 @@ class ProjectCapabilitySelectionServiceTest {
                 preliminary.enrichmentPaths(),
                 preliminary.projectType(),
                 preliminary.sourceRoot(),
-                preliminary.completeRepositoryInventory());
+                preliminary.repositoryInventoryAvailable());
         var enrichment = new PrEnrichmentDataDto(
                 List.of(FileContentDto.of("src/Thing.fixture", "framework=true")),
                 List.of(),
@@ -569,13 +431,9 @@ class ProjectCapabilitySelectionServiceTest {
         assertThat(capabilities.repositoryPlugins()).isEmpty();
     }
 
-    private static VcsClient unavailableInventoryClient() throws IOException {
-        var vcsClient = mock(VcsClient.class);
-        when(vcsClient.listRepositoryFiles(
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyInt()))
+    private static RepositorySource unavailableInventoryClient() throws IOException {
+        var vcsClient = mock(RepositorySource.class);
+        when(vcsClient.paths())
                 .thenThrow(new UnsupportedOperationException(
                         "repository inventory unavailable"));
         return vcsClient;
